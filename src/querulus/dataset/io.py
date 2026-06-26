@@ -81,7 +81,7 @@ def checkpoint_local(
     *,
     save: bool = True,
 ) -> T:
-    """Checkpoint в локальную папку notebook/data (без legacy-поиска)."""
+    """Checkpoint в локальный путь (без legacy-поиска артефактов)."""
     path = Path(path)
     if save:
         path.parent.mkdir(parents=True, exist_ok=True)
