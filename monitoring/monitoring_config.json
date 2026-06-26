@@ -1,0 +1,9 @@
+{
+  "group_name": "UU",
+   "prod_path": "prod_models",
+    "pickle_name": "/home/jovyan/old_home/Litigant/integration/results/querulus_ansamble_2026_22_04_v1.pickle",
+    "dashboard_name": "querulus",
+    "grafana_table_name": "querulus_DataDrift",
+    "extrapolation_period": 4,
+    "target_column": "TARGET_3_SEV"
+}

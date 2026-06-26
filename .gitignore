@@ -1,0 +1,54 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+.ipynb_checkpoints/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# --- Secrets & local env ---
+.env
+.env.*
+!.env.example
+**/env.local
+*.pem
+*.key
+*credentials*
+secrets/
+
+# Шаблоны env коммитим явно (env_template)
+!**/env_template
+
+# --- Data: не пушим датасеты и артефакты ---
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+# Форматы данных (на случай файлов вне data/)
+*.parquet
+*.pickle
+*.pkl
+*.feather
+*.h5
+*.hdf5
+*.csv
+*.xlsx
+*.xls
+*.tsv
+
+# Обучение / инференс
+catboost_info/
+**/catboost_info/**
+*.tfevents
+results/
+**/prod_models/
+
+# Архивы и временные файлы
+*.zip
+*.tmp
+*.bak
+*~
