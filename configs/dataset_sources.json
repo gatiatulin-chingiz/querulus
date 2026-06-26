@@ -1,0 +1,23 @@
+{
+  "_comment": "Явные пути к parquet (пустая строка = авто-поиск). Ключи совпадают с именами артефактов пайплайна.",
+  "artifact_paths": {
+    "victim": "",
+    "df_pretensions.parquet": "",
+    "df_payments.parquet": "",
+    "df_claims_persons.parquet": "",
+    "df_claims.parquet": "",
+    "df_claims_.parquet": "",
+    "df_claims_payments.parquet": "",
+    "df_pretensions_3.parquet": "",
+    "df_pretensions_enriched.parquet": "",
+    "df_pre_final.parquet": "",
+    "df_claims_pre_final.parquet": "",
+    "df_pretensions_pre_final.parquet": "",
+    "pre_final.parquet": "",
+    "target_2.parquet": "",
+    "target_3_pretensions.parquet": "",
+    "target_3_pretensions_all.parquet": "",
+    "target_3_claims.parquet": "",
+    "df_final_3.parquet": ""
+  }
+}

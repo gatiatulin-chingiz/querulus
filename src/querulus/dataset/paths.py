@@ -1,10 +1,13 @@
 """Пути к данным и версионирование parquet-артефактов."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from querulus.dataset import config
+
+_VERSIONED_NAME_RE = re.compile(r"^(.+)_v(.+)(\.\w+)$")
 
 
 @dataclass
@@ -18,6 +21,7 @@ class DataPaths:
     local_data_dir: Path
     artifact_version: str
     legacy_data_root: Path | None
+    artifact_overrides: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_config(cls) -> DataPaths:
@@ -35,15 +39,28 @@ class DataPaths:
             root = project_data
 
         legacy = (config.litigant_legacy_data_root or "").strip()
+        victim = (
+            config.artifact_overrides.get("victim", "")
+            or (config.victim_parquet_path or "").strip()
+        )
         return cls(
             data_root=root,
             raw_dir=raw_dir,
             processed_dir=processed_dir,
-            victim_path=Path(config.victim_parquet_path),
+            victim_path=Path(victim) if victim else Path(),
             local_data_dir=processed_dir,
             artifact_version=config.litigant_artifact_version,
             legacy_data_root=Path(legacy) if legacy else None,
+            artifact_overrides=dict(config.artifact_overrides),
         )
+
+    def get_override(self, name: str) -> Path | None:
+        """Явный путь из configs/dataset_sources.json."""
+        stem = Path(name).stem
+        raw = self.artifact_overrides.get(name) or self.artifact_overrides.get(stem)
+        if raw:
+            return Path(raw)
+        return None
 
     def _data_roots(self) -> list[Path]:
         """Legacy-корень первым — при чтении старые артефакты находятся раньше."""
@@ -58,6 +75,13 @@ class DataPaths:
 
     def _normalized_version(self) -> str:
         return self.artifact_version.strip().lstrip("_")
+
+    @staticmethod
+    def _version_sort_key(version_str: str) -> tuple:
+        try:
+            return (0, int(version_str), version_str)
+        except ValueError:
+            return (1, 0, version_str)
 
     def _rel_subdir(self, directory: Path) -> Path | None:
         for root in self._data_roots():
@@ -107,13 +131,56 @@ class DataPaths:
                 unique.append(item)
         return unique
 
+    def _collect_matches(
+        self, lookup_dir: Path, stem: str, suffix: str, *, fixed_version: str
+    ) -> list[tuple[tuple, Path]]:
+        """Собрать совпадения: при fixed_version — только эта версия, иначе все _v*."""
+        if not lookup_dir.is_dir():
+            return []
+
+        matches: list[tuple[tuple, Path]] = []
+        unversioned = lookup_dir / f"{stem}{suffix}"
+        if unversioned.exists():
+            matches.append(((-1,), unversioned))
+
+        if fixed_version:
+            versioned = lookup_dir / f"{stem}_v{fixed_version}{suffix}"
+            if versioned.exists():
+                return [(self._version_sort_key(fixed_version), versioned)]
+            return matches
+
+        for path in lookup_dir.iterdir():
+            if not path.is_file():
+                continue
+            matched = _VERSIONED_NAME_RE.match(path.name)
+            if matched and matched.group(1) == stem and matched.group(3) == suffix:
+                ver = matched.group(2)
+                matches.append((self._version_sort_key(ver), path))
+        return matches
+
     def artifact_candidates(self, directory: Path, name: str) -> list[Path]:
-        """Все пути, по которым ищется артефакт при чтении."""
-        return [
-            lookup_dir / fname
-            for lookup_dir in self._search_dirs(directory)
-            for fname in self._filename_variants(name)
-        ]
+        """Все пути, по которым ищется артефакт при чтении (для логов ошибок)."""
+        override = self.get_override(name)
+        if override is not None:
+            return [override]
+
+        fixed = self._normalized_version()
+        stem = Path(name).stem
+        suffix = Path(name).suffix or ".parquet"
+        candidates: list[Path] = []
+
+        if fixed:
+            for lookup_dir in self._search_dirs(directory):
+                for fname in self._filename_variants(name):
+                    candidates.append(lookup_dir / fname)
+            return candidates
+
+        for lookup_dir in self._search_dirs(directory):
+            for _, path in self._collect_matches(
+                lookup_dir, stem, suffix, fixed_version=""
+            ):
+                candidates.append(path)
+        return candidates
 
     def artifact(self, directory: Path, name: str) -> Path:
         """Путь для записи parquet (основной каталог + версия)."""
@@ -126,8 +193,23 @@ class DataPaths:
         return directory / name
 
     def resolve_artifact(self, directory: Path, name: str) -> Path | None:
-        """Первый существующий файл или None."""
-        for path in self.artifact_candidates(directory, name):
-            if path.exists():
-                return path
-        return None
+        """Найти parquet: override → зафиксированная версия → последняя _v* → без суффикса."""
+        override = self.get_override(name)
+        if override is not None:
+            return override if override.exists() else None
+
+        fixed = self._normalized_version()
+        stem = Path(name).stem
+        suffix = Path(name).suffix or ".parquet"
+        best: tuple[tuple, Path] | None = None
+
+        for lookup_dir in self._search_dirs(directory):
+            for sort_key, path in self._collect_matches(
+                lookup_dir, stem, suffix, fixed_version=fixed
+            ):
+                if fixed:
+                    return path
+                if best is None or sort_key > best[0]:
+                    best = (sort_key, path)
+
+        return best[1] if best else None

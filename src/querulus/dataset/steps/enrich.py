@@ -6,7 +6,7 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
-from querulus.dataset.io import checkpoint, checkpoint_local
+from querulus.dataset.io import checkpoint
 from querulus.dataset.paths import DataPaths
 from querulus.dataset.utils import my_mode
 
@@ -19,19 +19,25 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
     'and LOSS_PROCESS in ["Прямое ОСАГО (с 1 марта 2009)","Традиционное ОСАГО"]'
     'and RISK=="Ущерб имуществу третьих лиц"'
             )
-    df = checkpoint_local(
+    df = checkpoint(
         df,
-        paths.local_data_dir / "df_pre_final.parquet",
+        paths,
+        paths.local_data_dir,
+        "df_pre_final.parquet",
         save=save_checkpoint,
     )
-    df_claims_payments = checkpoint_local(
+    df_claims_payments = checkpoint(
         df_claims_payments,
-        paths.local_data_dir / "df_claims_pre_final.parquet",
+        paths,
+        paths.local_data_dir,
+        "df_claims_pre_final.parquet",
         save=save_checkpoint,
     )
-    df_pretensions = checkpoint_local(
+    df_pretensions = checkpoint(
         df_pretensions,
-        paths.local_data_dir / "df_pretensions_pre_final.parquet",
+        paths,
+        paths.local_data_dir,
+        "df_pretensions_pre_final.parquet",
         save=save_checkpoint,
     )
     # df_claims_pre_final.parquet хранит payments (legacy-имя из тетрадки)

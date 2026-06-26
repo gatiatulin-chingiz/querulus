@@ -49,7 +49,8 @@ def read_artifact(paths: DataPaths, directory: Path, name: str) -> pd.DataFrame:
         write_path = paths.artifact(directory, name)
         raise FileNotFoundError(
             f"Артефакт {name!r} не найден. "
-            f"Задайте USE_SQL=True для загрузки из БД или положите файл в legacy "
+            f"Задайте USE_SQL=True для загрузки из БД, путь в configs/dataset_sources.json "
+            f"или положите файл в legacy "
             f"({config.litigant_legacy_data_root}/data/raw|processed|parquet). "
             f"Путь записи при save_checkpoint: {write_path}"
         )
@@ -73,22 +74,6 @@ def checkpoint(
         _log_parquet("SAVE", path, df, name)
         return df
     return read_artifact(paths, directory, name)
-
-
-def checkpoint_local(
-    df: T,
-    path: Path,
-    *,
-    save: bool = True,
-) -> T:
-    """Checkpoint в локальный путь (без legacy-поиска артефактов)."""
-    path = Path(path)
-    if save:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(str(path))
-        _log_parquet("SAVE", path, df, path.name)
-        return df
-    return read_parquet_path(path, artifact=path.name)
 
 
 def connect_oisuu() -> pymssql.Connection:
