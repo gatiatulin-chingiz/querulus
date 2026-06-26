@@ -1,0 +1,29 @@
+# Скопируйте в .env и заполните значения. Файл .env в git не коммитится.
+
+# --- Dataset (пайплайн src/querulus/dataset) ---
+LITIGANT_DATA_ROOT=
+LITIGANT_LEGACY_DATA_ROOT=
+VICTIM_PARQUET=
+LITIGANT_ARTIFACT_VERSION=
+
+# OISUU (pymssql)
+OISUU_DB_SERVER=
+OISUU_DB_USER=
+OISUU_DB_PASSWORD=
+OISUU_DB_DATABASE=
+OISUU_DB_PORT=1433
+
+# --- Integration (сервис и тесты src/querulus/integration) ---
+OUTBOXML_TRAIN_DF_PATH=
+OUTBOXML_MODEL_GROUP=querulus_ansamble_2026_04_09_v1
+SERVICE_GIT_COMMIT=
+
+# --- Monitoring (src/querulus/monitoring) ---
+EMAIL_LOGIN=
+GRAFANA_SQLALCHEMY_URL=
+
+# --- Обучение (configs/config.py, outboxml) ---
+EMAIL_SERVER=
+EMAIL_PORT=
+EMAIL_SENDER=
+EMAIL_PASSWORD=

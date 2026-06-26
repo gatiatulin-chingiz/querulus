@@ -19,8 +19,8 @@ venv/
 *credentials*
 secrets/
 
-# Шаблоны env коммитим явно (env_template)
-!**/env_template
+# Шаблон env в корне проекта (коммитим явно)
+!env_template
 
 # --- Data: не пушим датасеты и артефакты ---
 data/raw/*
