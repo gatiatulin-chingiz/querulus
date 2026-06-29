@@ -43,11 +43,14 @@ class DataPaths:
             config.artifact_overrides.get("victim", "")
             or (config.victim_parquet_path or "").strip()
         )
+        victim_path = Path(victim) if victim else Path()
+        if victim_path and not victim_path.is_absolute():
+            victim_path = project_root / victim_path
         return cls(
             data_root=root,
             raw_dir=raw_dir,
             processed_dir=processed_dir,
-            victim_path=Path(victim) if victim else Path(),
+            victim_path=victim_path,
             local_data_dir=processed_dir,
             artifact_version=config.litigant_artifact_version,
             legacy_data_root=Path(legacy) if legacy else None,

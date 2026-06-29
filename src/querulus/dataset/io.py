@@ -53,6 +53,17 @@ def _log_parquet(action: str, path: Path, df: pd.DataFrame, artifact: str = "") 
 
 def read_parquet_path(path: Path, *, artifact: str = "") -> pd.DataFrame:
     """Загрузить parquet по точному пути."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Parquet для {artifact or path.name!r} не найден: {path}. "
+            "Проверьте путь в VICTIM_PARQUET или configs/dataset_sources.json."
+        )
+    if path.is_file() and path.suffix.lower() != ".parquet":
+        raise ValueError(
+            f"Ожидался parquet для {artifact or path.name!r}, но указан файл: {path}. "
+            "Укажите путь к .parquet в VICTIM_PARQUET или artifact_paths.victim."
+        )
     df = pd.read_parquet(str(path))
     _log_parquet("LOAD", path, df, artifact)
     return df
