@@ -15,7 +15,10 @@ logger = logging.getLogger("querulus.dataset")
 
 def load_claims_payments(paths: DataPaths, conn, df_claims: pd.DataFrame, *, use_sql: bool = False, save_checkpoint: bool = True):
     df_payments_q = ("""
-        SELECT *
+        SELECT
+            ITL.IncidentNumber,
+            p.PaymentDateTime,
+            p.PaymentValue
         FROM [OISUU_report].[dbo].[oisuu81_t_IncidentToLoss] as ITL
         LEFT JOIN [OISUU_report].[dbo].oisuu81_t_payments AS p on p.LOSSID = ITL.LOSSID
     """)
@@ -28,82 +31,73 @@ def load_claims_payments(paths: DataPaths, conn, df_claims: pd.DataFrame, *, use
         df_payments_q,
         use_sql=use_sql,
         save_checkpoint=save_checkpoint,
+        columns=["IncidentNumber", "PaymentDateTime", "PaymentValue"],
     )
 
     df_payments = df_payments.loc[:, ~df_payments.columns.duplicated()].copy()
-
-
-    column_mapping = {
-        'LossID': 'LOSSID',
-        'LossNumber': 'LOSSNUMBER',
-        'IncidentID': 'INCIDENTID',
-        'IncidentNumber': 'INCIDENTNUMBER',
-        'PaymentDateTime': 'PAYMENTDATETIME',
-        'PaymentNumber': 'PAYMENTNUMBER',
-        'PaymentID': 'PAYMENTID',
-        'PaymentValue': 'PAYMENTVALUE',
-        'DocumentNumber': 'DOCUMENTNUMBER',
-        'ValueRub': 'VALUERUB',
-        'Comment': 'COL_COMMENT',
-        'DocumentOperation': 'DOCUMENTOPERATION',
-        'CurrencyCode': 'CURRENCYCODE',
-        'Currency': 'CURRENCY',
-        'PaymentRecipientPersonName': 'PAYMENTRECIPIENTPERSONNAME',
-        'PaymentRecipientPersonCode': 'PAYMENTRECIPIENTPERSONCODE',
-        'PaymentRecipientPersonID': 'PAYMENTRECIPIENTPERSONID',
-        'IsReasonForPaymentExternalOrder': 'ISREASONFORPAYMENTEXTERNALORDER',
-        'IsReasonForPaymentVPRS': 'ISREASONFORPAYMENTVPRS',
-        'IsReasonForPaymentInsuranceAct': 'ISREASONFORPAYMENTINSURANCEACT',
-        'IsReasonForPaymentCompletedWorkGetAct': 'ISREASONFORPAYMENTCOMPLETEDWORKGETACT',
-        'ReasonForPayment': 'REASONFORPAYMENT'
-    }
-
-    df_payments.rename(columns=column_mapping, inplace=True)
-
-
-    df_payments = df_payments.rename(columns=RENAME_DICT)
-    df_payments = df_payments.sort_values('PAYMENT_DATETIME')
-
-
-    df_payments['PAYMENT_VALUE_CUMSUM'] = df_payments.groupby(['INCIDENT_NUMBER'])['PAYMENT_VALUE'].cumsum()
-
-
-    df_claims_payments = df_claims.merge(df_payments[['INCIDENT_NUMBER',
-                                                      'PAYMENT_DATETIME',
-                                                      'PAYMENT_VALUE_CUMSUM']],
-                                         left_on='INCIDENT_NUMBER',
-                                         right_on='INCIDENT_NUMBER',
-                                         how='left')
-    df_claims_payments
-
-    df_claims_payments = checkpoint(
-        df_claims_payments,
-        paths,
-        paths.processed_dir,
-        "df_claims_payments.parquet",
-        save=save_checkpoint,
+    df_payments = df_payments.rename(
+        columns={
+            "IncidentNumber": "INCIDENTNUMBER",
+            "PaymentDateTime": "PAYMENTDATETIME",
+            "PaymentValue": "PAYMENTVALUE",
+        }
     )
+    df_payments = df_payments.rename(columns=RENAME_DICT)
+    df_payments = df_payments[
+        ["INCIDENT_NUMBER", "PAYMENT_DATETIME", "PAYMENT_VALUE"]
+    ].copy()
+    df_payments["PAYMENT_DATETIME"] = pd.to_datetime(df_payments["PAYMENT_DATETIME"])
+    df_payments = df_payments.sort_values(["INCIDENT_NUMBER", "PAYMENT_DATETIME"])
+    df_payments["PAYMENT_VALUE_CUMSUM"] = df_payments.groupby(
+        ["INCIDENT_NUMBER"], sort=False
+    )["PAYMENT_VALUE"].cumsum()
+    payment_features = df_payments[
+        ["INCIDENT_NUMBER", "PAYMENT_DATETIME", "PAYMENT_VALUE_CUMSUM"]
+    ].copy()
+    del df_payments
+    gc.collect()
+
+    claim_keys = df_claims[
+        ["INCOMING_CLAIM_NUMBER", "INCIDENT_NUMBER", "RECOVEREDVALUEPERIOD_1"]
+    ].copy()
+    claim_keys["RECOVEREDVALUEPERIOD_1"] = pd.to_datetime(
+        claim_keys["RECOVEREDVALUEPERIOD_1"]
+    )
+    # Мержим только ключи, чтобы широкий df_claims не размножался на все платежи.
+    df_claims_payment_keys = claim_keys.merge(
+        payment_features,
+        on="INCIDENT_NUMBER",
+        how="left",
+    )
+    del claim_keys, payment_features
+    gc.collect()
 
     # --- фильтрация и дедупликация ---
-    mask = (df_claims_payments['PAYMENT_DATETIME'] <= df_claims_payments['RECOVEREDVALUEPERIOD_1']) | \
-           df_claims_payments['PAYMENT_DATETIME'].isnull()
+    mask = (
+        df_claims_payment_keys["PAYMENT_DATETIME"]
+        <= df_claims_payment_keys["RECOVEREDVALUEPERIOD_1"]
+    ) | df_claims_payment_keys["PAYMENT_DATETIME"].isnull()
 
-    # Применяем маску и сразу освобождаем исходный df, если он больше не нужен
-    df_claims_payments = df_claims_payments[mask]
-
-    # Шаг 2: Сортировка — делаем только по необходимым столбцам
-    # Убедитесь, что столбцы datetime имеют правильный тип (datetime64)
-    df_claims_payments['RECOVEREDVALUEPERIOD_1'] = pd.to_datetime(df_claims_payments['RECOVEREDVALUEPERIOD_1'])
-    df_claims_payments['PAYMENT_DATETIME'] = pd.to_datetime(df_claims_payments['PAYMENT_DATETIME'])
-
-    df_claims_payments = df_claims_payments.sort_values(
-        ['RECOVEREDVALUEPERIOD_1', 'PAYMENT_DATETIME'],
+    df_claims_payment_keys = df_claims_payment_keys.loc[mask]
+    df_claims_payment_keys = df_claims_payment_keys.sort_values(
+        ["RECOVEREDVALUEPERIOD_1", "PAYMENT_DATETIME"],
         na_position='first',
     #    kind='mergesort'  # стабильная сортировка, иногда эффективнее по памяти
     )
 
     # Шаг 3: Удаление дубликатов — используем keep='last'
-    df_claims_payments = df_claims_payments.drop_duplicates('INCOMING_CLAIM_NUMBER', keep='last')
+    df_claims_payment_keys = df_claims_payment_keys.drop_duplicates(
+        "INCOMING_CLAIM_NUMBER", keep="last"
+    )
+    df_claims_payments = df_claims.merge(
+        df_claims_payment_keys[
+            ["INCOMING_CLAIM_NUMBER", "PAYMENT_DATETIME", "PAYMENT_VALUE_CUMSUM"]
+        ],
+        on="INCOMING_CLAIM_NUMBER",
+        how="left",
+    )
+    del df_claims_payment_keys
+    gc.collect()
 
     df_claims_payments = checkpoint(
         df_claims_payments,

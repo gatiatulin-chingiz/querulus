@@ -1,6 +1,7 @@
 """Оркестратор пайплайна сборки датасета."""
 from __future__ import annotations
 
+import gc
 import logging
 
 import pandas as pd
@@ -43,13 +44,15 @@ def run_pipeline(
         df_claims_payments = load_claims_payments(
             paths, conn, df_claims, use_sql=use_sql, save_checkpoint=save_checkpoint
         )
+        del df_claims
+        gc.collect()
         df_pretensions, pretension_fio_id = load_pretensions(
             paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint
         )
         df = enrich_dataset(
             paths,
             df_victim,
-            df_claims,
+            None,
             df_claims_,
             df_claims_payments,
             df_pretensions,
@@ -57,6 +60,9 @@ def run_pipeline(
             pretension_fio_id,
             save_checkpoint=save_checkpoint,
         )
+        del df_victim, df_claims_payments, df_pretensions, df_claims_persons
+        del pretension_fio_id
+        gc.collect()
         df = build_targets(
             paths, conn, df, df_claims_, save_checkpoint=save_checkpoint, use_sql=use_sql
         )

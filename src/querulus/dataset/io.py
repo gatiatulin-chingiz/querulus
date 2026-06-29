@@ -51,7 +51,12 @@ def _log_parquet(action: str, path: Path, df: pd.DataFrame, artifact: str = "") 
     logger.info("%s: %s  shape=%s%s", action, path, df.shape, suffix)
 
 
-def read_parquet_path(path: Path, *, artifact: str = "") -> pd.DataFrame:
+def read_parquet_path(
+    path: Path,
+    *,
+    artifact: str = "",
+    columns: list[str] | None = None,
+) -> pd.DataFrame:
     """Загрузить parquet по точному пути."""
     path = Path(path)
     if not path.exists():
@@ -64,12 +69,18 @@ def read_parquet_path(path: Path, *, artifact: str = "") -> pd.DataFrame:
             f"Ожидался parquet для {artifact or path.name!r}, но указан файл: {path}. "
             "Укажите путь к .parquet в VICTIM_PARQUET или artifact_paths.victim."
         )
-    df = pd.read_parquet(str(path))
+    df = pd.read_parquet(str(path), columns=columns)
     _log_parquet("LOAD", path, df, artifact)
     return df
 
 
-def read_artifact(paths: DataPaths, directory: Path, name: str) -> pd.DataFrame:
+def read_artifact(
+    paths: DataPaths,
+    directory: Path,
+    name: str,
+    *,
+    columns: list[str] | None = None,
+) -> pd.DataFrame:
     """Загрузить parquet с учётом legacy-путей и вариантов имени."""
     path = paths.resolve_artifact(directory, name)
     if path is None:
@@ -84,7 +95,7 @@ def read_artifact(paths: DataPaths, directory: Path, name: str) -> pd.DataFrame:
             f"({config.litigant_legacy_data_root}/data/raw|processed|parquet). "
             f"Путь записи при save_checkpoint: {write_path}"
         )
-    df = pd.read_parquet(str(path))
+    df = pd.read_parquet(str(path), columns=columns)
     _log_parquet("LOAD", path, df, name)
     return df
 
@@ -116,6 +127,7 @@ def load_sql_artifact(
     use_sql: bool = False,
     save_checkpoint: bool = True,
     sql_reader: Callable | None = None,
+    columns: list[str] | None = None,
 ) -> pd.DataFrame:
     """Сырой SQL-дамп: parquet из directory или выгрузка в SQL с сохранением в raw."""
     label = Path(name).stem
@@ -124,7 +136,7 @@ def load_sql_artifact(
         path = paths.resolve_artifact(directory, name)
         if path is not None:
             logger.info("LOAD parquet: %s (use_sql=False)", path)
-            return read_parquet_path(path, artifact=label)
+            return read_parquet_path(path, artifact=label, columns=columns)
         logger.info("Parquet %r не найден — выгрузка из SQL", name)
 
     reader = sql_reader or (lambda q, c: pd.read_sql(q, c))
