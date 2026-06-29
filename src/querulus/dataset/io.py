@@ -59,7 +59,7 @@ def read_parquet_path(path: Path, *, artifact: str = "") -> pd.DataFrame:
             f"Parquet для {artifact or path.name!r} не найден: {path}. "
             "Проверьте путь в VICTIM_PARQUET или configs/dataset_sources.json."
         )
-    if path.is_file() and path.suffix.lower() != ".parquet":
+    if path.suffix and path.suffix.lower() != ".parquet":
         raise ValueError(
             f"Ожидался parquet для {artifact or path.name!r}, но указан файл: {path}. "
             "Укажите путь к .parquet в VICTIM_PARQUET или artifact_paths.victim."
