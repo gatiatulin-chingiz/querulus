@@ -5,11 +5,19 @@ import numpy as np
 import pandas as pd
 
 from querulus.dataset.constants import RENAME_DICT
-from querulus.dataset.io import checkpoint
+from querulus.dataset.io import checkpoint, load_sql_artifact
 from querulus.dataset.paths import DataPaths
 
 
-def build_targets(paths: DataPaths, conn, df: pd.DataFrame, df_claims_: pd.DataFrame, *, save_checkpoint: bool = True):
+def build_targets(
+    paths: DataPaths,
+    conn,
+    df: pd.DataFrame,
+    df_claims_: pd.DataFrame,
+    *,
+    save_checkpoint: bool = True,
+    use_sql: bool = False,
+):
     df_claims_inc_agg = df_claims_.groupby('INCIDENT_NUMBER')['INCOMING_CLAIM_NUMBER'].count().reset_index()
     df_claims_inc_agg[:2]
 
@@ -62,8 +70,15 @@ def build_targets(paths: DataPaths, conn, df: pd.DataFrame, df_claims_: pd.DataF
     FROM tmp
     WHERE rn = 1
     """
-    df_calc = pd.read_sql(query_calc_agg,conn)
-    df_calc
+    df_calc = load_sql_artifact(
+        paths,
+        conn,
+        paths.raw_dir,
+        "df_calc_agg.parquet",
+        query_calc_agg,
+        use_sql=use_sql,
+        save_checkpoint=save_checkpoint,
+    )
 
 
     df_calc.loc[df_calc['ПроцентИзноса'] > 50, 'ПроцентИзноса'] = 50
@@ -115,18 +130,14 @@ def build_targets(paths: DataPaths, conn, df: pd.DataFrame, df_claims_: pd.DataF
       LEFT JOIN [OISUU_report].[dbo].[oisuu81_t_Losses] as l on l.LossNumber=psr.Номер_убытка
       group by [Номер_инциндента]
     """
-    target_2 = pd.read_sql(target_2_, conn)
-    target_2.shape
-
-
-
-
-    target_2 = checkpoint(
-        target_2,
+    target_2 = load_sql_artifact(
         paths,
+        conn,
         paths.raw_dir,
         "target_2.parquet",
-        save=save_checkpoint,
+        target_2_,
+        use_sql=use_sql,
+        save_checkpoint=save_checkpoint,
     )
 
 
@@ -154,17 +165,14 @@ def build_targets(paths: DataPaths, conn, df: pd.DataFrame, df_claims_: pd.DataF
     --  and LossNumber = 1304948
     --  order by PretensionGetDate
     """
-    target_3_pretensions = pd.read_sql(target_3_pretensions, conn)
-    target_3_pretensions.shape
-
-
-
-    target_3_pretensions = checkpoint(
-        target_3_pretensions,
+    target_3_pretensions = load_sql_artifact(
         paths,
+        conn,
         paths.raw_dir,
         "target_3_pretensions.parquet",
-        save=save_checkpoint,
+        target_3_pretensions,
+        use_sql=use_sql,
+        save_checkpoint=save_checkpoint,
     )
     target_3_pretensions = target_3_pretensions.rename(columns=RENAME_DICT)
     target_3_pretensions
@@ -180,17 +188,14 @@ def build_targets(paths: DataPaths, conn, df: pd.DataFrame, df_claims_: pd.DataF
       WHERE InsuranceTypeGroups = 'ОСАГО'
       group by IncidentNumber
     """
-    target_3_pretensions_all = pd.read_sql(target_3_pretensions_all, conn)
-    target_3_pretensions_all.shape
-
-
-
-    target_3_pretensions_all = checkpoint(
-        target_3_pretensions_all,
+    target_3_pretensions_all = load_sql_artifact(
         paths,
+        conn,
         paths.raw_dir,
         "target_3_pretensions_all.parquet",
-        save=save_checkpoint,
+        target_3_pretensions_all,
+        use_sql=use_sql,
+        save_checkpoint=save_checkpoint,
     )
     target_3_pretensions_all = target_3_pretensions_all.rename(columns=RENAME_DICT)
     target_3_pretensions_all
@@ -261,19 +266,16 @@ def build_targets(paths: DataPaths, conn, df: pd.DataFrame, df_claims_: pd.DataF
       AND (ClaimItem != 'ВСК - 3 лицо' or ClaimItem is null)
       AND l.LossProcess IN ('Прямое ОСАГО (с 1 марта 2009)', 'Традиционное ОСАГО')
     """
-    target_3_claims = pd.read_sql(target_3_claims, conn)
-    target_3_claims.shape
-
-
-    target_3_claims = checkpoint(
-        target_3_claims,
+    target_3_claims = load_sql_artifact(
         paths,
+        conn,
         paths.raw_dir,
         "target_3_claims.parquet",
-        save=save_checkpoint,
+        target_3_claims,
+        use_sql=use_sql,
+        save_checkpoint=save_checkpoint,
     )
     target_3_claims = target_3_claims.rename(columns=RENAME_DICT)
-    target_3_claims
 
 
     target_3_claims.columns = target_3_claims.columns.str.upper()

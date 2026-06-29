@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
@@ -14,6 +15,24 @@ from querulus.dataset.paths import DataPaths
 T = TypeVar("T", bound=pd.DataFrame)
 
 logger = logging.getLogger("querulus.dataset")
+
+
+class LazyOisuuConnection:
+    """Подключение к OISUU по требованию (без кредов, если SQL не нужен)."""
+
+    def __init__(self) -> None:
+        self._conn: pymssql.Connection | None = None
+
+    def get(self) -> pymssql.Connection:
+        if self._conn is None:
+            logger.info("Подключение к OISUU (%s)...", config.oisuu_db_server or "?")
+            self._conn = connect_oisuu()
+        return self._conn
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
 
 
 def setup_notebook_logging(level: int = logging.INFO) -> None:
@@ -74,6 +93,40 @@ def checkpoint(
         _log_parquet("SAVE", path, df, name)
         return df
     return read_artifact(paths, directory, name)
+
+
+def load_sql_artifact(
+    paths: DataPaths,
+    conn: LazyOisuuConnection,
+    directory: Path,
+    name: str,
+    query: str,
+    *,
+    use_sql: bool = False,
+    save_checkpoint: bool = True,
+    sql_reader: Callable | None = None,
+) -> pd.DataFrame:
+    """Сырой SQL-дамп: parquet из directory или выгрузка в SQL с сохранением в raw."""
+    label = Path(name).stem
+
+    if not use_sql:
+        path = paths.resolve_artifact(directory, name)
+        if path is not None:
+            logger.info("LOAD parquet: %s (use_sql=False)", path)
+            return read_parquet_path(path, artifact=label)
+        logger.info("Parquet %r не найден — выгрузка из SQL", name)
+
+    reader = sql_reader or (lambda q, c: pd.read_sql(q, c))
+    logger.info("LOAD sql: %s", label)
+    df = reader(query, conn.get())
+
+    if save_checkpoint:
+        out = paths.artifact(directory, name)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(str(out))
+        logger.info("SAVE raw: %s  shape=%s", out, df.shape)
+
+    return df
 
 
 def connect_oisuu() -> pymssql.Connection:

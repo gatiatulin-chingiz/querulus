@@ -9,7 +9,7 @@ import pandas as pd
 from sklearn.preprocessing import OneHotEncoder
 
 from querulus.dataset.constants import RENAME_DICT
-from querulus.dataset.io import checkpoint, read_artifact
+from querulus.dataset.io import checkpoint, load_sql_artifact
 from querulus.dataset.paths import DataPaths
 from querulus.dataset.utils import convert_to_binary
 
@@ -31,15 +31,16 @@ def load_claims(paths: DataPaths, conn, *, use_sql: bool = False, save_checkpoin
     FROM [OISUU_report].[Datamart].[oisuu81_t_Истцы]
     WHERE ПометкаУдаленияИск=0x00
     """
-    #df_claims_persons = pd.read_sql_query(query, conn)
-    if use_sql:
-        logger.info("LOAD sql: df_claims_persons")
-        df_claims_persons = pd.read_sql_query(query, conn)
-    else:
-        df_claims_persons = read_artifact(
-            paths, paths.processed_dir, "df_claims_persons.parquet"
-        )
-    df_claims_persons
+    df_claims_persons = load_sql_artifact(
+        paths,
+        conn,
+        paths.raw_dir,
+        "df_claims_persons.parquet",
+        query,
+        use_sql=use_sql,
+        save_checkpoint=save_checkpoint,
+        sql_reader=pd.read_sql_query,
+    )
 
 
 
@@ -75,8 +76,16 @@ def load_claims(paths: DataPaths, conn, *, use_sql: bool = False, save_checkpoin
         and icnl.RecoveredValuePeriod is not null
     """
 
-    df_claims_pay = pd.read_sql_query(query_pay, conn)
-    df_claims_pay
+    df_claims_pay = load_sql_artifact(
+        paths,
+        conn,
+        paths.raw_dir,
+        "df_claims_pay.parquet",
+        query_pay,
+        use_sql=use_sql,
+        save_checkpoint=save_checkpoint,
+        sql_reader=pd.read_sql_query,
+    )
 
 
     # Группируем все взыскания по инциденты 
@@ -181,13 +190,15 @@ def load_claims(paths: DataPaths, conn, *, use_sql: bool = False, save_checkpoin
     """
 
 
-    df_claims = pd.read_sql_query(query, conn)
-    df_claims = checkpoint(
-        df_claims,
+    df_claims = load_sql_artifact(
         paths,
-        paths.processed_dir,
-        "df_claims.parquet",
-        save=save_checkpoint,
+        conn,
+        paths.raw_dir,
+        "df_claims_incoming.parquet",
+        query,
+        use_sql=use_sql,
+        save_checkpoint=save_checkpoint,
+        sql_reader=pd.read_sql_query,
     )
 
     df_claims.columns = df_claims.columns.str.upper()

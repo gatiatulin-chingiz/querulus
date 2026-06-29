@@ -7,7 +7,7 @@ import pandas as pd
 from sklearn.preprocessing import OneHotEncoder
 
 from querulus.dataset.constants import RENAME_DICT
-from querulus.dataset.io import checkpoint, read_artifact
+from querulus.dataset.io import checkpoint, load_sql_artifact
 from querulus.dataset.paths import DataPaths
 from querulus.dataset.utils import convert_to_binary, hex_upper
 
@@ -20,11 +20,15 @@ def load_pretensions(paths: DataPaths, conn, *, use_sql: bool = False, save_chec
       FROM [OISUU_report].[dbo].[oisuu81_t_Pretensions] AS P
       LEFT JOIN [OISUU_report].[dbo].[oisuu81_t_IncidentToLoss] AS ITL ON ITL.LossID=P.LossID
     """)
-    if use_sql:
-        logger.info("LOAD sql: df_pretensions")
-        df_pretensions = pd.read_sql(df_pretensions_, conn)
-    else:
-        df_pretensions = read_artifact(paths, paths.raw_dir, "df_pretensions.parquet")
+    df_pretensions = load_sql_artifact(
+        paths,
+        conn,
+        paths.raw_dir,
+        "df_pretensions.parquet",
+        df_pretensions_,
+        use_sql=use_sql,
+        save_checkpoint=save_checkpoint,
+    )
 
     df_pretensions = df_pretensions.loc[:, ~df_pretensions.columns.duplicated()].copy()
 
@@ -42,8 +46,15 @@ def load_pretensions(paths: DataPaths, conn, *, use_sql: bool = False, save_chec
 
     """)
 
-    pretension_fio_id = pd.read_sql(sql_pret_id,conn)
-    pretension_fio_id.shape
+    pretension_fio_id = load_sql_artifact(
+        paths,
+        conn,
+        paths.raw_dir,
+        "pretension_fio_id.parquet",
+        sql_pret_id,
+        use_sql=use_sql,
+        save_checkpoint=save_checkpoint,
+    )
 
     pretension_fio_id['POLICYHOLDER_PERSON_ID'] = pretension_fio_id['POLICYHOLDER_PERSON_ID'].apply(hex_upper)
     pretension_fio_id['VICTIM_PERSON_ID'] = pretension_fio_id['VICTIM_PERSON_ID'].apply(hex_upper)
@@ -181,14 +192,15 @@ def load_pretensions(paths: DataPaths, conn, *, use_sql: bool = False, save_chec
      WHERE rn = 1
      union select * from penalty where rn = 1
     """
-    df_pretensions_3 = pd.read_sql_query(query, conn)
-
-    df_pretensions_3 = checkpoint(
-        df_pretensions_3,
+    df_pretensions_3 = load_sql_artifact(
         paths,
+        conn,
         paths.raw_dir,
         "df_pretensions_3.parquet",
-        save=save_checkpoint,
+        query,
+        use_sql=use_sql,
+        save_checkpoint=save_checkpoint,
+        sql_reader=pd.read_sql_query,
     )
 
     df_pretensions_3.columns = df_pretensions_3.columns.str.upper()

@@ -6,7 +6,7 @@ import logging
 import pandas as pd
 
 from querulus.dataset import config
-from querulus.dataset.io import connect_oisuu, setup_notebook_logging
+from querulus.dataset.io import LazyOisuuConnection, setup_notebook_logging
 from querulus.dataset.paths import DataPaths
 from querulus.dataset.steps.claims import load_claims
 from querulus.dataset.steps.enrich import enrich_dataset
@@ -33,7 +33,7 @@ def run_pipeline(
     )
 
     paths = DataPaths.from_config()
-    conn = connect_oisuu()
+    conn = LazyOisuuConnection()
 
     try:
         df_victim = load_victim(paths)
@@ -58,7 +58,7 @@ def run_pipeline(
             save_checkpoint=save_checkpoint,
         )
         df = build_targets(
-            paths, conn, df, df_claims_, save_checkpoint=save_checkpoint
+            paths, conn, df, df_claims_, save_checkpoint=save_checkpoint, use_sql=use_sql
         )
     finally:
         conn.close()
