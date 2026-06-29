@@ -238,7 +238,7 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
     #агрегируем для заявителя инфо по претензиям где он был страхователем, исключая те случаи где в претензии страховтель = заявителю, чтобы не учесть дважды
     df_applicant_agg_2 = df.sort_values(['INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME'])[['VICTIM_POLICYHOLDER_PERSON_ID','INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME']]\
                         .drop_duplicates(subset=['INCIDENT_NUMBER'],keep='first')\
-                        .merge(df_claims[df_claims['VICTIM_POLICYHOLDER_PERSON_ID']!='00000000000000000000000000000000']\
+                        .merge(df_pretensions[df_pretensions['VICTIM_POLICYHOLDER_PERSON_ID']!='00000000000000000000000000000000']\
                                .drop(columns=['INCIDENT_NUMBER'],axis=1),how='left',on='VICTIM_POLICYHOLDER_PERSON_ID')
 
     df_applicant_agg_2 = df_applicant_agg_2[df_applicant_agg_2['VICTIM_POLICYHOLDER_PERSON_ID']!=df_applicant_agg_2['APPLICANT_PERSON_ID']]
