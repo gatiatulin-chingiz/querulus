@@ -182,7 +182,7 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
     df_applicant_agg = df.sort_values(['INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME'])[['VICTIM_POLICYHOLDER_PERSON_ID','INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME']]\
                         .drop_duplicates(subset=['INCIDENT_NUMBER'],keep='first')\
                         .merge(df_pretensions[df_pretensions['APPLICANT_PERSON_ID']!='00000000000000000000000000000000']\
-                               .drop(columns=['INCIDENT_NUMBER'],axis=1),how='left',left_on='VICTIM_POLICYHOLDER_PERSON_ID',right_on='APPLICANT_PERSON_ID')
+                               .drop(columns=['INCIDENT_NUMBER', 'VICTIM_POLICYHOLDER_PERSON_ID'],axis=1),how='left',left_on='VICTIM_POLICYHOLDER_PERSON_ID',right_on='APPLICANT_PERSON_ID')
 
     df_applicant_agg = df_applicant_agg[df_applicant_agg['PAYMENT_ORDER_DATE_TIME']>=df_applicant_agg['PRETENSION_GET_DATE']]
 
@@ -239,7 +239,7 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
     df_applicant_agg_2 = df.sort_values(['INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME'])[['VICTIM_POLICYHOLDER_PERSON_ID','INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME']]\
                         .drop_duplicates(subset=['INCIDENT_NUMBER'],keep='first')\
                         .merge(df_claims[df_claims['VICTIM_POLICYHOLDER_PERSON_ID']!='00000000000000000000000000000000']\
-                               .drop(columns=['INCIDENT_NUMBER'],axis=1),how='left',left_on='VIctimPolicyholderPersonID',right_on='VICTIM_POLICYHOLDER_PERSON_ID')
+                               .drop(columns=['INCIDENT_NUMBER'],axis=1),how='left',on='VICTIM_POLICYHOLDER_PERSON_ID')
 
     df_applicant_agg_2 = df_applicant_agg_2[df_applicant_agg_2['VICTIM_POLICYHOLDER_PERSON_ID']!=df_applicant_agg_2['APPLICANT_PERSON_ID']]
     df_applicant_agg_2 = df_applicant_agg_2[df_applicant_agg_2['PAYMENT_ORDER_DATE_TIME']>=df_applicant_agg_2['PRETENSION_GET_DATE']]
@@ -285,10 +285,10 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
 
     # добавляем инфо по претензиям заявителя первичного убытка в основной датасет
     print(df.shape)
-    df = df.merge(df_applicant_agg_,how='left',on=['INCIDENT_NUMBER','VIctimPolicyholderPersonID'])
+    df = df.merge(df_applicant_agg_,how='left',on=['INCIDENT_NUMBER','VICTIM_POLICYHOLDER_PERSON_ID'])
     df.shape
 
-    list_for_fillna = list(df_applicant_agg_.drop(columns=['VIctimPolicyholderPersonID','INCIDENT_NUMBER']).columns)
+    list_for_fillna = list(df_applicant_agg_.drop(columns=['VICTIM_POLICYHOLDER_PERSON_ID','INCIDENT_NUMBER']).columns)
     df[list_for_fillna] = df[list_for_fillna].fillna(0)
 
     df_claims_persons['Лицо'] = df_claims_persons['Лицо'].apply(lambda x: x.hex().upper() if x is not None  else np.nan)
