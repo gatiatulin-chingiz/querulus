@@ -135,7 +135,6 @@ def load_sql_artifact(
     if not use_sql:
         path = paths.resolve_artifact(directory, name)
         if path is not None:
-            logger.info("LOAD parquet: %s (use_sql=False)", path)
             return read_parquet_path(path, artifact=label, columns=columns)
         logger.info("Parquet %r не найден — выгрузка из SQL", name)
 

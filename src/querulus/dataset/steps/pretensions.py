@@ -68,10 +68,8 @@ def load_pretensions(paths: DataPaths, conn, *, use_sql: bool = False, save_chec
     df_pretensions.columns = df_pretensions.columns.str.upper()
     df_pretensions = df_pretensions.rename(columns=RENAME_DICT)
 
-    #Добавим id в основной датасет по претензиям
-    print(df_pretensions.shape)
+    # Добавим id в основной датасет по претензиям.
     df_pretensions = df_pretensions.merge(pretension_fio_id[['PRETENSION_NUMBER','VICTIM_POLICYHOLDER_PERSON_ID','VICTIM_OBJECT_OWNER_PERSON_ID']],how='left',on='PRETENSION_NUMBER')
-    print(df_pretensions.shape)
 
     query = \
     """
@@ -268,10 +266,10 @@ def load_pretensions(paths: DataPaths, conn, *, use_sql: bool = False, save_chec
 
     df_pretensions['UTS_SURCHARGE_VALUE_CUMSUM'] = df_pretensions.groupby(['INCIDENT_NUMBER'])['UTS_SURCHARGE_VALUE'].cumsum()
 
-    df_pretensions['HAVE_REQUISITES_OF_APPLICANT_MAX'] = df_pretensions.groupby(['INCIDENT_NUMBER'])['HAVE_REQUISITES_OF_APPLICANT'].transform(max)
-    df_pretensions['REQUIRED_REVIEWS_NEO_MAX'] = df_pretensions.groupby(['INCIDENT_NUMBER'])['REQUIRED_REVIEWS_NEO'].transform(max)
-    df_pretensions['IS_FULL_PRETENSION_AMOUNTS_WITH_BREAK_DOWN_MAX'] = df_pretensions.groupby(['INCIDENT_NUMBER'])['IS_FULL_PRETENSION_AMOUNTS_WITH_BREAK_DOWN'].transform(max)
-    df_pretensions['CESSION_MAX'] = df_pretensions.groupby(['INCIDENT_NUMBER'])['CESSION'].transform(max)
+    df_pretensions['HAVE_REQUISITES_OF_APPLICANT_MAX'] = df_pretensions.groupby(['INCIDENT_NUMBER'])['HAVE_REQUISITES_OF_APPLICANT'].transform('max')
+    df_pretensions['REQUIRED_REVIEWS_NEO_MAX'] = df_pretensions.groupby(['INCIDENT_NUMBER'])['REQUIRED_REVIEWS_NEO'].transform('max')
+    df_pretensions['IS_FULL_PRETENSION_AMOUNTS_WITH_BREAK_DOWN_MAX'] = df_pretensions.groupby(['INCIDENT_NUMBER'])['IS_FULL_PRETENSION_AMOUNTS_WITH_BREAK_DOWN'].transform('max')
+    df_pretensions['CESSION_MAX'] = df_pretensions.groupby(['INCIDENT_NUMBER'])['CESSION'].transform('max')
 
     df_pretensions = pd.concat([df_pretensions.reset_index(drop=True), enc.reset_index(drop=True)], axis=1)
 

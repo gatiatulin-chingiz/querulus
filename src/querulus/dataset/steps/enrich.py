@@ -141,7 +141,6 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
         if col in nunique_col:
             df_applicant_agg_[f'APPLICANT_FTRS_PRET_{col}_nunique'] =  df_applicant_agg_[f'{col}_nunique_x'].fillna(0) + df_applicant_agg_[f'{col}_nunique_y'].fillna(0)
             df_applicant_agg_ = df_applicant_agg_.drop(columns=[f'{col}_nunique_x',f'{col}_nunique_y'],axis=1)
-    print(len(df_applicant_agg_[df_applicant_agg_['INCIDENT_NUMBER'].duplicated()]))
     # агрегируем моду
     mode_cols_result = {}
 
@@ -168,7 +167,6 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
 
 
     # добавляем инфо по претензиям заявителя первичного убытка в основной датасет
-    print(df.shape)
     df = df.merge(df_applicant_agg_,how='left',on=['INCIDENT_NUMBER','APPLICANT_ID'])
     df.shape
 
@@ -258,7 +256,6 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
         if col in nunique_col:
             df_applicant_agg_[f'VICTIM_PH_FTRS_PRET_{col}_nunique'] =  df_applicant_agg_[f'{col}_nunique_x'].fillna(0) + df_applicant_agg_[f'{col}_nunique_y'].fillna(0)
             df_applicant_agg_ = df_applicant_agg_.drop(columns=[f'{col}_nunique_x',f'{col}_nunique_y'],axis=1)
-    print(len(df_applicant_agg_[df_applicant_agg_['INCIDENT_NUMBER'].duplicated()]))
     # агрегируем моду
     mode_cols_result = {}
 
@@ -284,7 +281,6 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
     df_applicant_agg_[:2]
 
     # добавляем инфо по претензиям заявителя первичного убытка в основной датасет
-    print(df.shape)
     df = df.merge(df_applicant_agg_,how='left',on=['INCIDENT_NUMBER','VICTIM_POLICYHOLDER_PERSON_ID'])
     df.shape
 
@@ -296,7 +292,6 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
     df_claims_persons[:2]
 
     #удаляем дубликаты
-    print(len(df_claims_persons))
     df_claims_persons = df_claims_persons.drop_duplicates()
     df_claims_persons = df_claims_persons.sort_values(by=['Представитель','Цессионарий']).drop_duplicates(subset=['ПолноеФИОЛица','НомерИск'],keep='first')
     len(df_claims_persons)
@@ -314,11 +309,6 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
     df_applicant_agg = df_applicant_agg[df_applicant_agg['PAYMENT_ORDER_DATE_TIME']>=df_applicant_agg['INCOMING_CLAIM_GET_DATE_1']]
 
     df_applicant_agg.columns = df_applicant_agg.columns.str.replace(r'[\s\-]+', '_', regex=True)
-
-    start_col = 'CLAIM_ITEM_3_Е_ЛИЦО'
-    start_idx = df_applicant_agg.columns.get_loc(start_col)
-    print(list(df_applicant_agg.columns[start_idx:]))
-
 
     sum_cols = [
         'Представитель',
@@ -389,7 +379,6 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
     df_applicant_agg = df_applicant_agg.groupby(['APPLICANT_ID','INCIDENT_NUMBER']).agg(**agg_dict).reset_index()
 
     # добавляем инфо по судам заявителя первичного убытка в основной датасет
-    print(df.shape)
     df = df.merge(df_applicant_agg,how='left',on=['INCIDENT_NUMBER','APPLICANT_ID'])
     df.shape
 
@@ -407,11 +396,6 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
 
 
     df_applicant_agg.columns = df_applicant_agg.columns.str.replace(r'[\s\-]+', '_', regex=True)
-
-    start_col = 'CLAIM_ITEM_3_Е_ЛИЦО'
-    start_idx = df_applicant_agg.columns.get_loc(start_col)
-    print(list(df_applicant_agg.columns[start_idx:]))
-
 
     sum_cols = [
         'Представитель',
@@ -482,7 +466,6 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
 
 
     # добавляем инфо по судам заявителя первичного убытка в основной датасет
-    print(df.shape)
     df = df.merge(df_applicant_agg,how='left',on=['INCIDENT_NUMBER','VICTIM_POLICYHOLDER_PERSON_ID'])
     df.shape
 
