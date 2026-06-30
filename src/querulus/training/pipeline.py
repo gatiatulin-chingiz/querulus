@@ -36,6 +36,10 @@ class TrainingArtifacts:
     severity_diagnostics: object
     feature_names: list[str]
     categorical_features: list[str]
+    frequency_features: list[str]
+    severity_features: list[str]
+    frequency_categorical_features: list[str]
+    severity_categorical_features: list[str]
     frequency_importance: pd.DataFrame
     severity_importance: pd.DataFrame
 
@@ -105,6 +109,26 @@ def _prepare_catboost_frame(df: pd.DataFrame, cat_features: list[str]) -> pd.Dat
     return result
 
 
+def _select_model_features(
+    available_features: list[str],
+    available_cat_features: list[str],
+    requested_features: tuple[str, ...] | None,
+    model_name: str,
+) -> tuple[list[str], list[str]]:
+    """Выбрать признаки для конкретной модели или использовать все MVP-признаки."""
+    if requested_features is None:
+        features = available_features
+    else:
+        missing = [column for column in requested_features if column not in available_features]
+        if missing:
+            raise ValueError(
+                f"Для модели {model_name!r} указаны неизвестные признаки: {missing}"
+            )
+        features = list(requested_features)
+    cat_features = [column for column in available_cat_features if column in features]
+    return features, cat_features
+
+
 def _split_by_date(
     df: pd.DataFrame,
     target: str,
@@ -170,16 +194,26 @@ def _metrics_table(metrics: dict[str, dict[str, dict[str, float]]]) -> pd.DataFr
     """Вернуть метрики ModelDiagnostics в табличном виде для ноутбука."""
     rows = [
         {
-            "model": model_name,
-            "sample": sample,
             "metric": metric,
-            "value": value,
+            f"{model_name}_{sample}": value,
         }
         for model_name, model_metrics in metrics.items()
         for sample, sample_metrics in model_metrics.items()
         for metric, value in sample_metrics.items()
     ]
-    return pd.DataFrame(rows)
+    if not rows:
+        return pd.DataFrame()
+    table = pd.DataFrame(rows).groupby("metric", as_index=False).first()
+    ordered_columns = [
+        "metric",
+        "frequency_train",
+        "frequency_test",
+        "severity_train",
+        "severity_test",
+    ]
+    existing_columns = [column for column in ordered_columns if column in table.columns]
+    extra_columns = [column for column in table.columns if column not in existing_columns]
+    return table[existing_columns + extra_columns].sort_values("metric").reset_index(drop=True)
 
 
 def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> TrainingArtifacts:
@@ -187,23 +221,40 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
     config = config or TrainingConfig()
     features, cat_features = _mvp_features(df, config)
     data = _prepare_catboost_frame(df, cat_features)
+    frequency_features, frequency_cat_features = _select_model_features(
+        features,
+        cat_features,
+        config.frequency_features,
+        "frequency",
+    )
+    severity_features, severity_cat_features = _select_model_features(
+        features,
+        cat_features,
+        config.severity_features,
+        "severity",
+    )
 
     CatBoostClassifier, CatBoostRegressor, Pool = _require_catboost()
     ModelDiagnostics = _require_model_diagnostics(config)
-    cat_feature_indices = [features.index(column) for column in cat_features]
+    frequency_cat_feature_indices = [
+        frequency_features.index(column) for column in frequency_cat_features
+    ]
+    severity_cat_feature_indices = [
+        severity_features.index(column) for column in severity_cat_features
+    ]
 
-    frequency_split = _split_by_date(data, config.frequency_target, features, config)
+    frequency_split = _split_by_date(data, config.frequency_target, frequency_features, config)
     frequency_pool = Pool(
         frequency_split.x_train,
         frequency_split.y_train.astype(int),
-        cat_features=cat_feature_indices,
-        feature_names=features,
+        cat_features=frequency_cat_feature_indices,
+        feature_names=frequency_features,
     )
     frequency_eval_pool = Pool(
         frequency_split.x_test,
         frequency_split.y_test.astype(int),
-        cat_features=cat_feature_indices,
-        feature_names=features,
+        cat_features=frequency_cat_feature_indices,
+        feature_names=frequency_features,
     )
     frequency_model = CatBoostClassifier(
         iterations=config.iterations,
@@ -220,21 +271,21 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
     severity_split = _split_by_date(
         data,
         config.severity_target,
-        features,
+        severity_features,
         config,
         target_range=config.severity_range,
     )
     severity_pool = Pool(
         severity_split.x_train,
         severity_split.y_train,
-        cat_features=cat_feature_indices,
-        feature_names=features,
+        cat_features=severity_cat_feature_indices,
+        feature_names=severity_features,
     )
     severity_eval_pool = Pool(
         severity_split.x_test,
         severity_split.y_test,
-        cat_features=cat_feature_indices,
-        feature_names=features,
+        cat_features=severity_cat_feature_indices,
+        feature_names=severity_features,
     )
     severity_model = CatBoostRegressor(
         iterations=config.iterations,
@@ -251,16 +302,16 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         ModelDiagnostics,
         frequency_split,
         frequency_model,
-        features,
-        cat_features,
+        frequency_features,
+        frequency_cat_features,
         "classification",
     )
     severity_diagnostics, severity_metrics = _diagnostics_metrics(
         ModelDiagnostics,
         severity_split,
         severity_model,
-        features,
-        cat_features,
+        severity_features,
+        severity_cat_features,
         "regression",
     )
     metrics = {"frequency": frequency_metrics, "severity": severity_metrics}
@@ -274,6 +325,10 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         severity_diagnostics=severity_diagnostics,
         feature_names=features,
         categorical_features=cat_features,
-        frequency_importance=_importance_frame(frequency_model, features),
-        severity_importance=_importance_frame(severity_model, features),
+        frequency_features=frequency_features,
+        severity_features=severity_features,
+        frequency_categorical_features=frequency_cat_features,
+        severity_categorical_features=severity_cat_features,
+        frequency_importance=_importance_frame(frequency_model, frequency_features),
+        severity_importance=_importance_frame(severity_model, severity_features),
     )

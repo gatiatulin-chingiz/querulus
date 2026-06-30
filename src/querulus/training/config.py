@@ -18,6 +18,8 @@ class TrainingConfig:
     random_state: int = 2026
     iterations: int = 100
     modeldiagnostics_root: Path | str | None = "/home/jovyan/old_home"
+    frequency_features: tuple[str, ...] | None = None
+    severity_features: tuple[str, ...] | None = None
     mvp_input_types: dict[str, tuple[str, ...]] = field(
         default_factory=lambda: {
             "NUMERIC": ("LONGITUDE", "LATITUDE"),
