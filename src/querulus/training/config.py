@@ -4,10 +4,28 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from querulus.training.mvp_types import DEFAULT_MVP_INPUT_TYPES, DEFAULT_OTHER_COLS
+
+
+def _default_mvp_input_types() -> dict[str, tuple[str, ...]]:
+    """Словарь типов признаков MVP из Litigant/model_learn.py."""
+    return {key: tuple(value) for key, value in DEFAULT_MVP_INPUT_TYPES.items()}
+
 
 @dataclass(frozen=True)
 class TrainingConfig:
-    """Параметры разбиения, целей и обучения CatBoost."""
+    """Параметры разбиения, целей и обучения CatBoost.
+
+    Гиперпараметры CatBoost:
+    - ``iterations``, ``random_state`` — общие для обеих моделей;
+    - ``frequency_classifier_params`` — доп. аргументы ``CatBoostClassifier``
+      (как в model_learn.py: ``auto_class_weights='Balanced'``, ``verbose=250``);
+    - ``severity_regressor_params`` — доп. аргументы ``CatBoostRegressor``.
+
+    Категориальные признаки определяются автоматически через AutoMVP:
+    ``types_dict['CATEGORIAL'] + types_dict['BINARY']`` после ``correct_types``.
+    Явный список в конфиге не задаётся — как в Litigant.
+    """
 
     date_column: str = "LOSS_DATE_TIME"
     train_period: tuple[str, str] = ("2022-01-01", "2024-05-31")
@@ -18,46 +36,25 @@ class TrainingConfig:
     random_state: int = 2026
     iterations: int = 100
     modeldiagnostics_root: Path | str | None = "/home/jovyan/old_home"
+    best_threshold_metric: str = "f1_score"
     frequency_features: tuple[str, ...] | None = None
     severity_features: tuple[str, ...] | None = None
-    mvp_input_types: dict[str, tuple[str, ...]] = field(
+    mvp_input_types: dict[str, tuple[str, ...]] = field(default_factory=_default_mvp_input_types)
+    base_drop_columns: tuple[str, ...] = DEFAULT_OTHER_COLS
+    extra_drop_columns: tuple[str, ...] = field(default_factory=tuple)
+    frequency_classifier_params: dict[str, object] = field(
         default_factory=lambda: {
-            "NUMERIC": ("LONGITUDE", "LATITUDE"),
-            "CATEGORIAL": (),
-            "BINARY": ("VICTIM_VEHICLE_IS_JAPAN",),
+            "auto_class_weights": "Balanced",
+            "verbose": 250,
         }
     )
-    base_drop_columns: tuple[str, ...] = (
-        "TARGET",
-        "TARGET_2",
-        "TARGET_3",
-        "TARGET_3_FREQ",
-        "TARGET_3_SEV",
-        "LOSS_NUMBER",
-        "INCIDENT_NUMBER",
-        "Номер_инциндента",
-        "PAYMENT_VALUE",
-        "PAYMENTS_SUM_RUR",
-        "LOSS_AMOUNT",
-        "FIX",
-        "FIN",
-        "REFUND_FORM_INCIDENT",
-        "VICTIM_LOSS_SUM_FUTURE",
-        "VICTIM_LOSS_COUNT_FUTURE",
-        "GUILTY_LOSS_SUM_FUTURE",
-        "GUILTY_LOSS_COUNT_FUTURE",
-        "PREMIUM_SUM_FUTURE_ALL",
-        "PREMIUM_COUNT_FUTURE_ALL",
-        "Сумма_выплат_по_претензиям",
-        "Сумма_взыскано_по_ФУ",
-        "Суммы_взыскано_по_иску",
-        "Общая_сумма_заявленных_требований_ФУ",
-        "Общая_сумма_заявленных_требований_ИСК",
-        "Доп_расходы_инцидент",
+    severity_regressor_params: dict[str, object] = field(
+        default_factory=lambda: {
+            "verbose": 250,
+        }
     )
-    extra_drop_columns: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def drop_columns(self) -> tuple[str, ...]:
-        """Колонки, исключаемые из признаков."""
+        """Колонки other_cols из Litigant (таргеты и ID), исключаемые из признаков."""
         return self.base_drop_columns + self.extra_drop_columns

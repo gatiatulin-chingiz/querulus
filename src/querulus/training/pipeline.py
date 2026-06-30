@@ -90,7 +90,7 @@ def _mvp_features(df: pd.DataFrame, config: TrainingConfig) -> tuple[list[str], 
     types = mvp.types_dict
     features = [
         column
-        for column in types["NUMERIC"] + types["CATEGORIAL"] + types["BINARY"]
+        for column in types["BINARY"] + types["CATEGORIAL"] + types["NUMERIC"]
         if column in df.columns and column not in config.drop_columns
     ]
     categorical = [
@@ -101,12 +101,16 @@ def _mvp_features(df: pd.DataFrame, config: TrainingConfig) -> tuple[list[str], 
     return features, categorical
 
 
-def _prepare_catboost_frame(df: pd.DataFrame, cat_features: list[str]) -> pd.DataFrame:
-    """Привести категориальные признаки к строкам, чтобы CatBoost принял данные."""
+def _prepare_categorical_columns(df: pd.DataFrame, cat_features: list[str]) -> pd.DataFrame:
+    """Привести категориальные признаки к строкам, как в model_learn.py."""
     result = df.copy()
     for column in cat_features:
-        if column in result.columns:
-            result[column] = result[column].fillna("__missing__").astype(str)
+        if column not in result.columns:
+            continue
+        try:
+            result[column] = result[column].apply(lambda value: int(float(value))).astype(str)
+        except (ValueError, TypeError):
+            result[column] = result[column].astype(str)
     return result
 
 
@@ -175,6 +179,7 @@ def _diagnostics_metrics(
     features: list[str],
     cat_features: list[str],
     task_type: str,
+    config: TrainingConfig,
 ) -> tuple[object, dict[str, dict[str, float]]]:
     """Получить метрики через ModelDiagnostics."""
     diagnostics = ModelDiagnostics(
@@ -187,7 +192,10 @@ def _diagnostics_metrics(
         cat_features=cat_features,
         task_type=task_type,
     )
-    train_metrics, test_metrics = diagnostics.compute_metrics(print_metrics=False)
+    train_metrics, test_metrics = diagnostics.compute_metrics(
+        print_metrics=False,
+        best_threshold_metric=config.best_threshold_metric,
+    )
     return diagnostics, {"train": train_metrics, "test": test_metrics}
 
 
@@ -236,7 +244,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
     """Обучить модели частоты (`TARGET_2`) и тяжести (`TARGET_3_SEV`)."""
     config = config or TrainingConfig()
     features, cat_features = _mvp_features(df, config)
-    data = _prepare_catboost_frame(df, cat_features)
+    data = _prepare_categorical_columns(df, cat_features)
     frequency_features, frequency_cat_features = _select_model_features(
         features,
         cat_features,
@@ -252,35 +260,22 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
 
     CatBoostClassifier, CatBoostRegressor, Pool = _require_catboost()
     ModelDiagnostics = _require_model_diagnostics(config)
-    frequency_cat_feature_indices = [
-        frequency_features.index(column) for column in frequency_cat_features
-    ]
-    severity_cat_feature_indices = [
-        severity_features.index(column) for column in severity_cat_features
-    ]
 
     frequency_split = _split_by_date(data, config.frequency_target, frequency_features, config)
     frequency_pool = Pool(
         frequency_split.x_train,
         frequency_split.y_train.astype(int),
-        cat_features=frequency_cat_feature_indices,
-        feature_names=frequency_features,
-    )
-    frequency_eval_pool = Pool(
-        frequency_split.x_test,
-        frequency_split.y_test.astype(int),
-        cat_features=frequency_cat_feature_indices,
+        cat_features=frequency_cat_features,
         feature_names=frequency_features,
     )
     frequency_model = CatBoostClassifier(
         iterations=config.iterations,
         random_state=config.random_state,
-        auto_class_weights="Balanced",
-        verbose=250,
+        **config.frequency_classifier_params,
     )
     frequency_model.fit(
         frequency_pool,
-        eval_set=frequency_eval_pool,
+        eval_set=(frequency_split.x_test, frequency_split.y_test.astype(int)),
         plot=False,
     )
 
@@ -294,23 +289,17 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
     severity_pool = Pool(
         severity_split.x_train,
         severity_split.y_train,
-        cat_features=severity_cat_feature_indices,
-        feature_names=severity_features,
-    )
-    severity_eval_pool = Pool(
-        severity_split.x_test,
-        severity_split.y_test,
-        cat_features=severity_cat_feature_indices,
+        cat_features=severity_cat_features,
         feature_names=severity_features,
     )
     severity_model = CatBoostRegressor(
         iterations=config.iterations,
         random_state=config.random_state,
-        verbose=250,
+        **config.severity_regressor_params,
     )
     severity_model.fit(
         severity_pool,
-        eval_set=severity_eval_pool,
+        eval_set=(severity_split.x_test, severity_split.y_test),
         plot=False,
     )
 
@@ -321,6 +310,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         frequency_features,
         frequency_cat_features,
         "classification",
+        config,
     )
     severity_diagnostics, severity_metrics = _diagnostics_metrics(
         ModelDiagnostics,
@@ -329,6 +319,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         severity_features,
         severity_cat_features,
         "regression",
+        config,
     )
     metrics = {"frequency": frequency_metrics, "severity": severity_metrics}
 

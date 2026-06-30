@@ -2,7 +2,7 @@
 
 Единый журнал изменений проекта: датасет, обучение, HTTP‑сервис, мониторинг, инфраструктура репозитория.
 
-Формат по [Keep a Changelog](https://keepachangelog.com/). Версии HTTP API сервиса совпадают с `oisuu_responce["version"]` в `src/querulus/integration/main.py` и `GET /api/health`.
+Формат по [Keep a Changelog](https://keepachangelog.com/). Версии HTTP API сервиса совпадают с `oisuu_responce["version"]` в `integration/main.py` и `GET /api/health`.
 
 ---
 

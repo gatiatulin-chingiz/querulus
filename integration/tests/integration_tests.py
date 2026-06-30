@@ -7,7 +7,7 @@
     - Предобработка входного вектора ("" -> NaN, UPPER для строк, derived-поля дат).
 
 Примечания по окружению
-    Пути к датасетам и имена колонок предсказаний берутся из `src/querulus/integration/config.py`.
+    Пути к датасетам и имена колонок предсказаний берутся из `integration/config.py`.
     Эти тесты ориентированы на запуск в окружении, где доступны:
         - файл обучающего датафрейма (train_df),
         - pickle-группа моделей, с которой работает `main_predict`.
@@ -23,8 +23,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from querulus.integration import config
-from querulus.integration.main import (
+from integration import config
+from integration.main import (
     CLASSIFICATION_FEATURES,
     REGRESSION_FEATURES,
     main_predict,

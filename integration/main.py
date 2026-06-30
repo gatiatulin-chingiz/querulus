@@ -4,7 +4,7 @@
 Назначение
     Принять общий вектор признаков, посчитать бинарную классификацию с порогом,
     регрессию суммы, вернуть итог «классификация × регрессия»
-    (если класс 0 — итог 0, если 1 — сумма регрессии; при IS_LAWYER=1 — всегда регрессия).
+    Маска по классу и IS_LAWYER; регрессия неотрицательна (см. ``_masked_predictions``).
 
 Точки входа HTTP
     GET  /api/health  — проверка живости, ``health``, ``version``; опционально ``git_commit``.
@@ -57,7 +57,7 @@ from mldataworker.core.utils import ResultPickle
 
 import uvicorn
 
-from querulus.integration import config
+from integration import config
 
 # HTTP-приложение FastAPI
 app = FastAPI()
@@ -286,17 +286,26 @@ def get_threshold_from_vector(df_common: pd.DataFrame) -> Optional[float]:
     return float(value)
 
 # reviewed
+def _non_negative_regression(value: float) -> float:
+    """Ограничивает предсказание регрессии снизу нулём."""
+    return max(0.0, float(value))
+
+
+# reviewed
 def _masked_predictions(
     labels: List[float],
     raw_reg: List[float],
     df_common: pd.DataFrame,
 ) -> List[float]:
     """
-    Итоговое предсказание с учётом классификации и флага IS_LAWYER.
+    Маскированные значения регрессии и итога (одинаковые по контракту).
 
-    Правила:
-        - IS_LAWYER == 1: всегда значение регрессии;
-        - иначе: регрессия при классе 1, 0 при классе 0.
+    Правила (после clip регрессии к ``>= 0``):
+        - класс 1: ``regression_predictions`` и ``predictions`` = регрессия;
+        - класс 0 и IS_LAWYER 0: оба поля = 0;
+        - класс 0 и IS_LAWYER 1: оба поля = регрессия.
+
+    ``classification_predictions`` маской не меняется.
 
     Вход:
         labels: бинарные метки классификации;
@@ -304,7 +313,7 @@ def _masked_predictions(
         df_common: общий вектор (колонка IS_LAWYER опциональна, по умолчанию 0).
 
     Возвращает:
-        list[float]: итог по строкам для predictions / prediction.
+        list[float]: значения для ``regression_predictions`` и ``predictions``.
     """
     if "IS_LAWYER" in df_common.columns:
         is_lawyer = (
@@ -316,19 +325,16 @@ def _masked_predictions(
     else:
         is_lawyer = [False] * len(labels)
 
-    # Список для финальных предсказаний (маскируем по правилам задачи)
-    final_pred: List[float] = []
-    # Проходим по каждому примеру: c - метка классификации, r - результат регрессии, lawyer - признак IS_LAWYER
+    masked: List[float] = []
     for c, r, lawyer in zip(labels, raw_reg, is_lawyer):
-        # Если заявка от юриста (lawyer=True) или класс равен 1 (c=True),
-        # то итоговое предсказание равно результату регрессии (r)
-        if lawyer or c:
-            final_pred.append(float(r))
+        reg_nonneg = _non_negative_regression(r)
+        if c:
+            masked.append(reg_nonneg)
+        elif lawyer:
+            masked.append(reg_nonneg)
         else:
-            # Иначе, если не юрист и класс 0 — результат 0
-            final_pred.append(0.0)
-    # Возвращаем получившийся список итоговых предсказаний
-    return final_pred
+            masked.append(0.0)
+    return masked
 
 # reviewed
 def prepare_common_vector_dataframe(features_values: List[Dict]) -> pd.DataFrame:
@@ -833,7 +839,7 @@ def run_regression_model(
     df: pd.DataFrame,
 ) -> Dict[str, Any]:
     """
-    Регрессия: матрица признаков → ``model.predict`` (сырые суммы до маски по классу).
+    Регрессия: матрица признаков → ``model.predict`` (маска и clip — в ``main_predict``).
 
     Вход:
         model_result: элемент[1] из pickle (регрессия);
@@ -848,8 +854,7 @@ def run_regression_model(
         # Подготовка матрицы признаков аналогична классификации.
         model, t = _prepare_matrix(model_result, df)
         try:
-            # В регрессии используем сырые значения `predict` без пост-обработки —
-            # "маску" по классу накладываем позже в `main_predict`.
+            # Сырые значения `predict`; маска, clip >= 0 — в `main_predict`.
             pred = model.predict(t)
             raw = list(pred)
         except Exception:
@@ -890,14 +895,14 @@ def main_predict(
 
     Возвращает:
         dict с ключами:
-            - "oisuu_responce": версия, порог, proba/метки классификации, сырые regression_predictions,
-              строка predictions (регрессия при IS_LAWYER=1 или классе 1, иначе 0);
+            - "oisuu_responce": версия, порог, proba/метки классификации,
+              regression_predictions и predictions (маска + clip >= 0, см. ``_masked_predictions``);
             - "main_response": ``usage_model``, ``result``, ``df`` — те же метрики, что в oisuu.
             # В `result` выводятся следующие ключи (в указанном порядке):
             #   - classification_proba: вероятности положительного класса для каждой записи
             #   - classification_predictions: предсказанные бинарные метки (0 или 1) для каждой записи
-            #   - regression_predictions: сырые значения регрессии для каждой записи
-            #   - prediction: регрессия при IS_LAWYER=1 или классе 1, иначе 0 (аналог oisuu predictions)
+            #   - regression_predictions: маскированная регрессия (>= 0)
+            #   - prediction: то же, что oisuu predictions
             - "second_response": всегда {}.
 
     Выбрасывает:
@@ -983,26 +988,25 @@ def main_predict(
             len(raw_reg),
         )
 
-    final_pred = _masked_predictions(labels, raw_reg, df_common)
+    masked_reg = _masked_predictions(labels, raw_reg, df_common)
 
     rounded_proba = _round_numbers(proba)
     rounded_labels = _round_numbers(labels)
-    rounded_raw_reg = _round_numbers(raw_reg)
-    rounded_final_pred = _round_numbers(final_pred)
+    rounded_masked_reg = _round_numbers(masked_reg)
 
     # Общие метрики для oisuu_responce и main_response["result"]; порядок ключей — эталон.
     prediction_metrics: Dict[str, Any] = {
         "classification_proba": rounded_proba,
         "classification_predictions": rounded_labels,
-        "regression_predictions": rounded_raw_reg,
+        "regression_predictions": rounded_masked_reg,
     }
     oisuu.update(prediction_metrics)
-    oisuu["predictions"] = json.dumps(rounded_final_pred, ensure_ascii=False)
+    oisuu["predictions"] = json.dumps(rounded_masked_reg, ensure_ascii=False)
 
     # prediction — тот же итог, что oisuu predictions, но списком (не JSON-строка).
     result_body: Dict[str, Any] = {
         **prediction_metrics,
-        "prediction": rounded_final_pred,
+        "prediction": rounded_masked_reg,
     }
 
     # Отладочная таблица "что реально подали в модели": объединяем матрицы признаков

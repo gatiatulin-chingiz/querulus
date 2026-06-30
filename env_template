@@ -17,7 +17,7 @@ OISUU_DB_PASSWORD=
 OISUU_DB_DATABASE=
 OISUU_DB_PORT=1433
 
-# --- Integration (сервис и тесты src/querulus/integration) ---
+# --- Integration (сервис и тесты integration/) ---
 OUTBOXML_TRAIN_DF_PATH=
 OUTBOXML_MODEL_GROUP=querulus_ansamble_2026_04_09_v1
 SERVICE_GIT_COMMIT=

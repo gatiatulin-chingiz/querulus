@@ -20,7 +20,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from querulus.integration.main import (
+from integration.main import (
     enrich_common_vector_dataframe,
     prepare_common_vector_dataframe,
     validate_derived_dates_strict,
