@@ -30,8 +30,9 @@ class TrainingArtifacts:
 
     frequency_model: object
     severity_model: object
-    metrics: dict[str, dict[str, float]]
-    metrics_table: pd.DataFrame
+    metrics: dict[str, dict[str, dict[str, float]]]
+    frequency_metrics_table: pd.DataFrame
+    severity_metrics_table: pd.DataFrame
     frequency_diagnostics: object
     severity_diagnostics: object
     feature_names: list[str]
@@ -190,30 +191,45 @@ def _diagnostics_metrics(
     return diagnostics, {"train": train_metrics, "test": test_metrics}
 
 
-def _metrics_table(metrics: dict[str, dict[str, dict[str, float]]]) -> pd.DataFrame:
-    """Вернуть метрики ModelDiagnostics в табличном виде для ноутбука."""
-    rows = [
+def _model_metrics_table(model_metrics: dict[str, dict[str, float]]) -> pd.DataFrame:
+    """Собрать train/test метрики одной модели в отдельную таблицу."""
+    train_metrics = model_metrics.get("train", {})
+    test_metrics = model_metrics.get("test", {})
+    metric_names = sorted(set(train_metrics) | set(test_metrics))
+    if not metric_names:
+        return pd.DataFrame(columns=["metric", "train", "test"])
+    return pd.DataFrame(
         {
-            "metric": metric,
-            f"{model_name}_{sample}": value,
+            "metric": metric_names,
+            "train": [train_metrics.get(metric) for metric in metric_names],
+            "test": [test_metrics.get(metric) for metric in metric_names],
         }
-        for model_name, model_metrics in metrics.items()
-        for sample, sample_metrics in model_metrics.items()
-        for metric, value in sample_metrics.items()
-    ]
-    if not rows:
-        return pd.DataFrame()
-    table = pd.DataFrame(rows).groupby("metric", as_index=False).first()
-    ordered_columns = [
-        "metric",
-        "frequency_train",
-        "frequency_test",
-        "severity_train",
-        "severity_test",
-    ]
-    existing_columns = [column for column in ordered_columns if column in table.columns]
-    extra_columns = [column for column in table.columns if column not in existing_columns]
-    return table[existing_columns + extra_columns].sort_values("metric").reset_index(drop=True)
+    )
+
+
+def _format_metric_value(value: float | int | None) -> str:
+    """Форматировать одно значение метрики для читаемого вывода."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "—"
+    if isinstance(value, (int, bool)) or float(value).is_integer():
+        return f"{int(value)}"
+    numeric = float(value)
+    if abs(numeric) >= 100:
+        return f"{numeric:,.2f}"
+    if abs(numeric) >= 1:
+        return f"{numeric:.4f}"
+    return f"{numeric:.6f}"
+
+
+def format_metrics_table(table: pd.DataFrame) -> pd.DataFrame:
+    """Вернуть копию таблицы метрик с форматированными train/test колонками."""
+    if table.empty:
+        return table.copy()
+    formatted = table.copy()
+    for column in ("train", "test"):
+        if column in formatted.columns:
+            formatted[column] = formatted[column].map(_format_metric_value)
+    return formatted
 
 
 def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> TrainingArtifacts:
@@ -320,7 +336,8 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         frequency_model=frequency_model,
         severity_model=severity_model,
         metrics=metrics,
-        metrics_table=_metrics_table(metrics),
+        frequency_metrics_table=_model_metrics_table(frequency_metrics),
+        severity_metrics_table=_model_metrics_table(severity_metrics),
         frequency_diagnostics=frequency_diagnostics,
         severity_diagnostics=severity_diagnostics,
         feature_names=features,
