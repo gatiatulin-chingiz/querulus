@@ -249,10 +249,10 @@ def apply_model_predictions(
     frame["pred_freq"] = pred_freq
     frame["pred_sev"] = y_pred_sev_arr
     frame["fin_effect_model"] = fin_effect_model
+    # negate — только для отчёта; net_effect считаем до инверсии (как в Litigant)
+    net_effect = float(frame["fin_effect_model"].sum() - (-frame["fin_effect_fact"].sum()))
     if config.negate_fact_for_report:
         frame["fin_effect_fact"] = -frame["fin_effect_fact"]
-
-    net_effect = float(frame["fin_effect_model"].sum() - (-frame["fin_effect_fact"].sum()))
     return FinEffectResult(
         frame=frame,
         best_threshold=best_threshold,
@@ -283,16 +283,6 @@ def run_fin_effect_pipeline(
     )
 
 
-def _slice_by_split(df: pd.DataFrame, config: FinEffectConfig, split: SplitName) -> pd.DataFrame:
-    """Train/test срез по дате."""
-    if split == "all":
-        return df
-    data = df.copy()
-    data[config.date_column] = pd.to_datetime(data[config.date_column])
-    period = config.train_period if split == "train" else config.test_period
-    return data.loc[data[config.date_column].between(*period)]
-
-
 def run_fin_effect_from_training(
     df: pd.DataFrame,
     training: object,
@@ -302,46 +292,52 @@ def run_fin_effect_from_training(
     threshold: float | None = None,
     config: FinEffectConfig | None = None,
 ) -> FinEffectResult:
-    """Расчёт на сплите из TrainingArtifacts (модели frequency + severity)."""
+    """Расчёт на сплите из TrainingArtifacts (модели frequency + severity).
+
+    Как в Litigant: база — все строки frequency test (``X_test_freq``),
+    severity предсказывается на тех же строках, а не на severity_split.
+    """
     config = config or FinEffectConfig()
     frequency_split = getattr(training, "frequency_split", None)
-    severity_split = getattr(training, "severity_split", None)
-    if frequency_split is None or severity_split is None:
-        raise ValueError("training.frequency_split и training.severity_split должны быть заполнены")
+    if frequency_split is None:
+        raise ValueError("training.frequency_split должен быть заполнен")
 
     freq_features = training.frequency_features
     sev_features = training.severity_features
 
     if split == "train":
+        effect_index = frequency_split.x_train.index
         freq_x = frequency_split.x_train[freq_features]
-        sev_x = severity_split.x_train[sev_features]
         y_true_freq = frequency_split.y_train
     elif split == "test":
+        effect_index = frequency_split.x_test.index
         freq_x = frequency_split.x_test[freq_features]
-        sev_x = severity_split.x_test[sev_features]
         y_true_freq = frequency_split.y_test
     else:
+        effect_index = frequency_split.x_train.index.union(frequency_split.x_test.index)
         freq_x = pd.concat([frequency_split.x_train[freq_features], frequency_split.x_test[freq_features]])
-        sev_x = pd.concat([severity_split.x_train[sev_features], severity_split.x_test[sev_features]])
         y_true_freq = pd.concat([frequency_split.y_train, frequency_split.y_test])
 
+    effect_frame = df.loc[effect_index]
     freq_proba = pd.Series(
         training.frequency_model.predict_proba(freq_x)[:, 1],
-        index=freq_x.index,
+        index=effect_index,
     )
-    sev_pred = pd.Series(training.severity_model.predict(sev_x), index=sev_x.index)
+    # severity — на всех строках frequency-сплита (не severity_split с фильтром TARGET_3_SEV)
+    sev_pred = pd.Series(
+        training.severity_model.predict(effect_frame[sev_features]),
+        index=effect_index,
+    )
 
-    subset = _slice_by_split(df, config, split)
-    aligned_index = subset.index.intersection(freq_proba.index).intersection(sev_pred.index)
     if frequency_target_column:
-        y_true = subset.loc[aligned_index, frequency_target_column]
+        y_true = effect_frame[frequency_target_column]
     else:
-        y_true = y_true_freq.loc[aligned_index]
+        y_true = y_true_freq
 
     return run_fin_effect_pipeline(
-        subset.loc[aligned_index],
-        freq_proba.loc[aligned_index],
-        sev_pred.loc[aligned_index],
+        effect_frame,
+        freq_proba,
+        sev_pred,
         y_true,
         threshold=threshold,
         config=config,
@@ -350,13 +346,11 @@ def run_fin_effect_from_training(
 
 def print_best_threshold_report(result: FinEffectResult) -> None:
     """Вывод оптимального порога и чистого эффекта (как в Litigant fin_effect.py)."""
-    best = result.threshold_metrics[round(float(result.best_threshold), 2)]
     print("\n" + "=" * 70)
     print("ОПТИМАЛЬНЫЙ ПОРОГ КЛАССИФИКАЦИИ")
     print("=" * 70)
     print(f"Порог вероятности       : {result.best_threshold:.2f}")
-    print(f"Чистый финансовый эффект: {best.net_effect:,.2f} ₽")
-    print(f"\nИтоговый чистый эффект: {result.net_effect:,.2f} ₽")
+    print(f"Чистый финансовый эффект: {result.net_effect:,.2f} ₽")
 
 
 def prepare_analytics_export(
