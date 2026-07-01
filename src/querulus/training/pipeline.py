@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextlib
 from dataclasses import dataclass
 import importlib
+import inspect
 import io
 from pathlib import Path
 import sys
@@ -192,10 +193,10 @@ def _diagnostics_metrics(
         cat_features=cat_features,
         task_type=task_type,
     )
-    train_metrics, test_metrics = diagnostics.compute_metrics(
-        print_metrics=False,
-        best_threshold_metric=config.best_threshold_metric,
-    )
+    metrics_kwargs: dict[str, object] = {"print_metrics": False}
+    if "best_threshold_metric" in inspect.signature(diagnostics.compute_metrics).parameters:
+        metrics_kwargs["best_threshold_metric"] = config.best_threshold_metric
+    train_metrics, test_metrics = diagnostics.compute_metrics(**metrics_kwargs)
     return diagnostics, {"train": train_metrics, "test": test_metrics}
 
 
