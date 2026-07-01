@@ -1,0 +1,376 @@
+"""Расчёт финансового эффекта по факту и модели (Litigant fin_effect.py)."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+import numpy as np
+import pandas as pd
+
+from querulus.fin_effect.config import FinEffectConfig
+
+SplitName = Literal["train", "test", "all"]
+
+
+@dataclass
+class ThresholdMetrics:
+    """Метрики одного порога классификации."""
+
+    threshold: float
+    net_effect: float
+    total_model: float
+    total_fact: float
+    n_positive_preds: int
+    n_actual_positive: int
+    precision: float
+    recall: float
+
+
+@dataclass
+class FinEffectResult:
+    """Результат полного расчёта фин. эффекта."""
+
+    frame: pd.DataFrame
+    best_threshold: float
+    threshold_metrics: dict[float, ThresholdMetrics]
+    net_effect: float
+
+
+def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
+    """Числовая колонка или нули."""
+    if column not in df.columns:
+        return pd.Series(0.0, index=df.index, dtype=float)
+    return pd.to_numeric(df[column], errors="coerce").fillna(0.0)
+
+
+def payments_fee(row: pd.Series, config: FinEffectConfig) -> float:
+    """Судебные взносы по строке (как payments_fee в Litigant)."""
+    payments = 0.0
+    if row.get(config.fu_recovery_column, 0) > 0:
+        payments += config.fu_fee_amount
+    if config.apply_court_fee and row.get(config.court_recovery_column, 0) > 0:
+        payments += config.court_fee_amount
+    return payments
+
+
+def add_premiums_column(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.Series:
+    """Рассчитать колонку Взносы."""
+    config = config or FinEffectConfig()
+    return df.apply(lambda row: payments_fee(row, config), axis=1)
+
+
+def compute_fin_effect_fact(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.Series:
+    """Фактический фин. эффект до финального negate."""
+    config = config or FinEffectConfig()
+    total = (
+        _numeric_series(df, config.pretension_payments_column)
+        + _numeric_series(df, config.fu_recovery_column)
+        + _numeric_series(df, config.court_recovery_column)
+        + _numeric_series(df, config.premiums_column)
+    )
+    if config.include_surcharge_in_fact:
+        total = total + _numeric_series(df, config.surcharge_column) + _numeric_series(
+            df, config.uts_surcharge_column
+        )
+    return total
+
+
+def fix_target_on_pretension(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.DataFrame:
+    """TARGET='1', если были выплаты по претензиям при TARGET='0'."""
+    config = config or FinEffectConfig()
+    if not config.fix_target_on_pretension or config.target_column not in df.columns:
+        return df
+    result = df.copy()
+    pretensions = _numeric_series(result, config.pretension_payments_column)
+    mask = (result[config.target_column].astype(str) == "0") & (pretensions > 0)
+    result.loc[mask, config.target_column] = "1"
+    return result
+
+
+def prepare_effect_frame(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.DataFrame:
+    """Подготовить _df_effect: fillna, взносы, fin_effect_fact, правка TARGET."""
+    config = config or FinEffectConfig()
+    result = df.copy()
+
+    for column in (
+        config.pretension_payments_column,
+        config.fu_recovery_column,
+        config.court_recovery_column,
+        config.surcharge_column,
+        config.uts_surcharge_column,
+    ):
+        if column in result.columns:
+            result[column] = _numeric_series(result, column)
+
+    result[config.premiums_column] = add_premiums_column(result, config)
+    result["fin_effect_fact"] = compute_fin_effect_fact(result, config)
+    result = fix_target_on_pretension(result, config)
+    return result
+
+
+def compute_fin_effect_model(
+    pred_freq: np.ndarray,
+    y_true_freq: np.ndarray,
+    y_pred_sev: np.ndarray,
+    y_true_sev: np.ndarray,
+    base_sum: np.ndarray,
+) -> np.ndarray:
+    """Модельный фин. эффект по квадрантам confusion matrix."""
+    pred_freq = np.asarray(pred_freq, dtype=int)
+    y_true_freq = np.asarray(y_true_freq, dtype=int)
+    y_pred_sev = np.asarray(y_pred_sev, dtype=float)
+    y_true_sev = np.asarray(y_true_sev, dtype=float)
+    base_sum = np.asarray(base_sum, dtype=float)
+
+    fin_effect_model = np.zeros(len(base_sum), dtype=float)
+
+    mask_00 = (pred_freq == 0) & (y_true_freq == 0)
+    mask_01 = (pred_freq == 0) & (y_true_freq == 1)
+    mask_10 = (pred_freq == 1) & (y_true_freq == 0)
+    mask_11 = (pred_freq == 1) & (y_true_freq == 1)
+
+    fin_effect_model[mask_00] = -base_sum[mask_00]
+    fin_effect_model[mask_01] = -base_sum[mask_01]
+    fin_effect_model[mask_10] = -y_pred_sev[mask_10] - base_sum[mask_10]
+
+    mask_11_over = mask_11 & (y_pred_sev >= y_true_sev)
+    mask_11_under = mask_11 & (y_pred_sev < y_true_sev)
+    fin_effect_model[mask_11_over] = -y_pred_sev[mask_11_over]
+    fin_effect_model[mask_11_under] = -base_sum[mask_11_under]
+    return fin_effect_model
+
+
+def _threshold_grid(config: FinEffectConfig) -> np.ndarray:
+    """Сетка порогов для подбора."""
+    return np.arange(config.threshold_start, config.threshold_stop, config.threshold_step)
+
+
+def evaluate_threshold(
+    threshold: float,
+    y_proba_freq: np.ndarray,
+    y_true_freq: np.ndarray,
+    y_pred_sev: np.ndarray,
+    y_true_sev: np.ndarray,
+    base_sum: np.ndarray,
+) -> ThresholdMetrics:
+    """Метрики фин. эффекта для одного порога."""
+    pred_freq = (np.asarray(y_proba_freq) >= threshold).astype(int)
+    y_true_freq = np.asarray(y_true_freq, dtype=int)
+    fin_effect_model = compute_fin_effect_model(
+        pred_freq, y_true_freq, y_pred_sev, y_true_sev, base_sum
+    )
+    total_effect_model = float(fin_effect_model.sum())
+    total_effect_fact = float(np.asarray(base_sum, dtype=float).sum())
+    net_effect = total_effect_model - (-total_effect_fact)
+
+    tp = int(np.sum((pred_freq == 1) & (y_true_freq == 1)))
+    n_pred = int(pred_freq.sum())
+    n_actual = int(y_true_freq.sum())
+    precision = tp / max(n_pred, 1)
+    recall = tp / max(n_actual, 1)
+
+    return ThresholdMetrics(
+        threshold=round(float(threshold), 2),
+        net_effect=net_effect,
+        total_model=total_effect_model,
+        total_fact=total_effect_fact,
+        n_positive_preds=n_pred,
+        n_actual_positive=n_actual,
+        precision=precision,
+        recall=recall,
+    )
+
+
+def search_best_threshold(
+    y_proba_freq: np.ndarray,
+    y_true_freq: np.ndarray,
+    y_pred_sev: np.ndarray,
+    y_true_sev: np.ndarray,
+    base_sum: np.ndarray,
+    config: FinEffectConfig | None = None,
+) -> tuple[float, dict[float, ThresholdMetrics]]:
+    """Подбор порога по максимальному чистому фин. эффекту."""
+    config = config or FinEffectConfig()
+    results: dict[float, ThresholdMetrics] = {}
+    for threshold in _threshold_grid(config):
+        metrics = evaluate_threshold(
+            threshold, y_proba_freq, y_true_freq, y_pred_sev, y_true_sev, base_sum
+        )
+        results[metrics.threshold] = metrics
+    best_threshold = max(results, key=lambda key: results[key].net_effect)
+    return best_threshold, results
+
+
+def apply_model_predictions(
+    effect_df: pd.DataFrame,
+    y_proba_freq: np.ndarray | pd.Series,
+    y_pred_sev: np.ndarray | pd.Series,
+    y_true_freq: np.ndarray | pd.Series,
+    *,
+    threshold: float | None = None,
+    config: FinEffectConfig | None = None,
+) -> FinEffectResult:
+    """Добавить pred_freq, pred_sev, fin_effect_model; подобрать порог при необходимости."""
+    config = config or FinEffectConfig()
+    frame = effect_df.copy()
+    y_true_sev = _numeric_series(frame, config.severity_target_column).to_numpy()
+    base_sum = frame["fin_effect_fact"].to_numpy()
+    y_true_freq_arr = np.asarray(y_true_freq, dtype=int)
+    y_proba_arr = np.asarray(y_proba_freq, dtype=float)
+    y_pred_sev_arr = np.asarray(y_pred_sev, dtype=float)
+
+    if threshold is None:
+        best_threshold, threshold_metrics = search_best_threshold(
+            y_proba_arr,
+            y_true_freq_arr,
+            y_pred_sev_arr,
+            y_true_sev,
+            base_sum,
+            config,
+        )
+    else:
+        best_threshold = float(threshold)
+        threshold_metrics = {
+            round(best_threshold, 2): evaluate_threshold(
+                best_threshold,
+                y_proba_arr,
+                y_true_freq_arr,
+                y_pred_sev_arr,
+                y_true_sev,
+                base_sum,
+            )
+        }
+
+    pred_freq = (y_proba_arr >= best_threshold).astype(int)
+    fin_effect_model = compute_fin_effect_model(
+        pred_freq, y_true_freq_arr, y_pred_sev_arr, y_true_sev, base_sum
+    )
+
+    frame["pred_freq"] = pred_freq
+    frame["pred_sev"] = y_pred_sev_arr
+    frame["fin_effect_model"] = fin_effect_model
+    if config.negate_fact_for_report:
+        frame["fin_effect_fact"] = -frame["fin_effect_fact"]
+
+    net_effect = float(frame["fin_effect_model"].sum() - (-frame["fin_effect_fact"].sum()))
+    return FinEffectResult(
+        frame=frame,
+        best_threshold=best_threshold,
+        threshold_metrics=threshold_metrics,
+        net_effect=net_effect,
+    )
+
+
+def run_fin_effect_pipeline(
+    df: pd.DataFrame,
+    frequency_proba: np.ndarray | pd.Series,
+    severity_prediction: np.ndarray | pd.Series,
+    y_true_freq: np.ndarray | pd.Series,
+    *,
+    threshold: float | None = None,
+    config: FinEffectConfig | None = None,
+) -> FinEffectResult:
+    """Полный пайплайн: prepare_effect_frame → подбор порога → fin_effect_model."""
+    config = config or FinEffectConfig()
+    prepared = prepare_effect_frame(df, config)
+    return apply_model_predictions(
+        prepared,
+        frequency_proba,
+        severity_prediction,
+        y_true_freq,
+        threshold=threshold,
+        config=config,
+    )
+
+
+def _slice_by_split(df: pd.DataFrame, config: FinEffectConfig, split: SplitName) -> pd.DataFrame:
+    """Train/test срез по дате."""
+    if split == "all":
+        return df
+    data = df.copy()
+    data[config.date_column] = pd.to_datetime(data[config.date_column])
+    period = config.train_period if split == "train" else config.test_period
+    return data.loc[data[config.date_column].between(*period)]
+
+
+def run_fin_effect_from_training(
+    df: pd.DataFrame,
+    training: object,
+    *,
+    split: SplitName = "test",
+    frequency_target_column: str | None = None,
+    threshold: float | None = None,
+    config: FinEffectConfig | None = None,
+) -> FinEffectResult:
+    """Расчёт на сплите из TrainingArtifacts (модели frequency + severity)."""
+    config = config or FinEffectConfig()
+    frequency_split = getattr(training, "frequency_split", None)
+    severity_split = getattr(training, "severity_split", None)
+    if frequency_split is None or severity_split is None:
+        raise ValueError("training.frequency_split и training.severity_split должны быть заполнены")
+
+    freq_features = training.frequency_features
+    sev_features = training.severity_features
+
+    if split == "train":
+        freq_x = frequency_split.x_train[freq_features]
+        sev_x = severity_split.x_train[sev_features]
+        y_true_freq = frequency_split.y_train
+    elif split == "test":
+        freq_x = frequency_split.x_test[freq_features]
+        sev_x = severity_split.x_test[sev_features]
+        y_true_freq = frequency_split.y_test
+    else:
+        freq_x = pd.concat([frequency_split.x_train[freq_features], frequency_split.x_test[freq_features]])
+        sev_x = pd.concat([severity_split.x_train[sev_features], severity_split.x_test[sev_features]])
+        y_true_freq = pd.concat([frequency_split.y_train, frequency_split.y_test])
+
+    freq_proba = pd.Series(
+        training.frequency_model.predict_proba(freq_x)[:, 1],
+        index=freq_x.index,
+    )
+    sev_pred = pd.Series(training.severity_model.predict(sev_x), index=sev_x.index)
+
+    subset = _slice_by_split(df, config, split)
+    aligned_index = subset.index.intersection(freq_proba.index).intersection(sev_pred.index)
+    if frequency_target_column:
+        y_true = subset.loc[aligned_index, frequency_target_column]
+    else:
+        y_true = y_true_freq.loc[aligned_index]
+
+    return run_fin_effect_pipeline(
+        subset.loc[aligned_index],
+        freq_proba.loc[aligned_index],
+        sev_pred.loc[aligned_index],
+        y_true,
+        threshold=threshold,
+        config=config,
+    )
+
+
+def print_best_threshold_report(result: FinEffectResult) -> None:
+    """Вывод оптимального порога и чистого эффекта (как в Litigant fin_effect.py)."""
+    best = result.threshold_metrics[round(float(result.best_threshold), 2)]
+    print("\n" + "=" * 70)
+    print("ОПТИМАЛЬНЫЙ ПОРОГ КЛАССИФИКАЦИИ")
+    print("=" * 70)
+    print(f"Порог вероятности       : {result.best_threshold:.2f}")
+    print(f"Чистый финансовый эффект: {best.net_effect:,.2f} ₽")
+    print(f"\nИтоговый чистый эффект: {result.net_effect:,.2f} ₽")
+
+
+def prepare_analytics_export(
+    df: pd.DataFrame,
+    config: FinEffectConfig | None = None,
+    *,
+    rename: bool = True,
+) -> pd.DataFrame:
+    """Таблица для Excel с человекочитаемыми заголовками."""
+    from querulus.fin_effect.config import ANALYTICS_RENAME_DICT
+
+    config = config or FinEffectConfig()
+    columns = [column for column in config.export_columns if column in df.columns]
+    export_df = df[columns].copy()
+    if rename:
+        export_df = export_df.rename(columns=ANALYTICS_RENAME_DICT)
+    return export_df
