@@ -64,8 +64,6 @@ class TrainingArtifacts:
     severity_metrics_table: pd.DataFrame
     frequency_diagnostics: object
     severity_diagnostics: object
-    frequency_split: DatasetSplit | None = None
-    severity_split: DatasetSplit | None = None
     summary: TrainingSummary
     feature_names: list[str]
     categorical_features: list[str]
@@ -75,6 +73,8 @@ class TrainingArtifacts:
     severity_categorical_features: list[str]
     frequency_importance: pd.DataFrame
     severity_importance: pd.DataFrame
+    frequency_split: DatasetSplit | None = None
+    severity_split: DatasetSplit | None = None
 
 
 def _require_catboost():
