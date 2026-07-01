@@ -9,7 +9,11 @@ from querulus.training.pipeline import (
     log_training_summary,
     train_models,
 )
-from querulus.training.plots import run_training_visualizations
+from querulus.training.plots import (
+    run_model_diagnostics_visualizations,
+    run_mvp_frequency_eda,
+    run_training_visualizations,
+)
 
 __all__ = [
     "TrainingArtifacts",
@@ -18,6 +22,8 @@ __all__ = [
     "format_metrics_table",
     "format_training_summary",
     "log_training_summary",
+    "run_model_diagnostics_visualizations",
+    "run_mvp_frequency_eda",
     "run_training_visualizations",
     "train_models",
 ]

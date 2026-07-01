@@ -10,7 +10,7 @@ from mldataworker.datadrift import DataDrift as BaseDataDrift
 from mldataworker.metrics.metrics import BaseMetric
 from mldataworker.target_extrapolation import TargetModel
 
-from querulus.monitoring.extractors import DataExtractor, UULogExtractor
+from monitoring.extractors import DataExtractor, UULogExtractor
 from sqlalchemy import create_engine
 
 

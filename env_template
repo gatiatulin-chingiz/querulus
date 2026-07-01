@@ -22,7 +22,7 @@ OUTBOXML_TRAIN_DF_PATH=
 OUTBOXML_MODEL_GROUP=querulus_ansamble_2026_04_09_v1
 SERVICE_GIT_COMMIT=
 
-# --- Monitoring (src/querulus/monitoring) ---
+# --- Monitoring (monitoring/) ---
 EMAIL_LOGIN=
 GRAFANA_SQLALCHEMY_URL=
 

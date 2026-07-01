@@ -16,12 +16,9 @@ from sklearn.metrics import (
 
 from querulus.training.config import TrainingConfig
 from querulus.training.pipeline import TrainingArtifacts
+from querulus.training.research_eda import research_continous, research_feature
 
 ModelType = Literal["frequency", "severity"]
-
-
-def _target_column(model_type: ModelType, config: TrainingConfig) -> str:
-    return config.frequency_target if model_type == "frequency" else config.severity_target
 
 
 def _ensure_exposure(df: pd.DataFrame, exposure_col: str = "expos") -> pd.DataFrame:
@@ -30,113 +27,6 @@ def _ensure_exposure(df: pd.DataFrame, exposure_col: str = "expos") -> pd.DataFr
     if exposure_col not in result.columns:
         result[exposure_col] = 1
     return result
-
-
-def research_continuous(
-    df: pd.DataFrame,
-    column: str,
-    bins: int = 10,
-    *,
-    model_type: ModelType = "frequency",
-    config: TrainingConfig | None = None,
-    exposure_col: str = "expos",
-    figsize: tuple[float, float] = (25, 10),
-    rotation: int = 90,
-) -> None:
-    """График числового признака по бинам: частота или средняя severity."""
-    config = config or TrainingConfig()
-    target = _target_column(model_type, config)
-    plot_df = _ensure_exposure(df, exposure_col)
-    if column not in plot_df.columns or target not in plot_df.columns:
-        return
-
-    subset = plot_df[[column, target, exposure_col]].dropna()
-    if subset.empty:
-        return
-
-    try:
-        subset = subset.assign(bin=pd.qcut(subset[column], q=bins, duplicates="drop"))
-    except ValueError:
-        subset = subset.assign(bin=pd.cut(subset[column], bins=bins))
-
-    if model_type == "frequency":
-        grouped = (
-            subset.groupby("bin", observed=True)
-            .apply(
-                lambda frame: (frame[target] * frame[exposure_col]).sum() / frame[exposure_col].sum(),
-                include_groups=False,
-            )
-            .reset_index(name="value")
-        )
-        ylabel = f"Event rate ({target})"
-        title = f"Frequency EDA: {column}"
-    else:
-        grouped = subset.groupby("bin", observed=True)[target].mean().reset_index(name="value")
-        ylabel = f"Mean {target}"
-        title = f"Severity EDA: {column}"
-
-    plt.figure(figsize=figsize)
-    sns.barplot(data=grouped, x="bin", y="value", color="steelblue")
-    plt.xticks(rotation=rotation)
-    plt.xlabel(column)
-    plt.ylabel(ylabel)
-    plt.title(title)
-    plt.tight_layout()
-    plt.show()
-
-
-# Совместимость с опечаткой из Litigant.
-research_continous = research_continuous
-
-
-def research_feature(
-    df: pd.DataFrame,
-    column: str,
-    *,
-    model_type: ModelType = "frequency",
-    config: TrainingConfig | None = None,
-    exposure_col: str = "expos",
-    max_categories: int = 2000,
-    figsize: tuple[float, float] = (25, 10),
-    rotation: int = 90,
-) -> None:
-    """График категориального признака: частота или средняя severity по категориям."""
-    config = config or TrainingConfig()
-    target = _target_column(model_type, config)
-    plot_df = _ensure_exposure(df, exposure_col)
-    if column not in plot_df.columns or target not in plot_df.columns:
-        return
-    if plot_df[column].nunique(dropna=False) >= max_categories:
-        return
-
-    subset = plot_df[[column, target, exposure_col]].dropna()
-    if subset.empty:
-        return
-
-    if model_type == "frequency":
-        grouped = (
-            subset.groupby(column, observed=False)
-            .apply(
-                lambda frame: (frame[target] * frame[exposure_col]).sum() / frame[exposure_col].sum(),
-                include_groups=False,
-            )
-            .reset_index(name="value")
-        )
-        ylabel = f"Event rate ({target})"
-        title = f"Frequency EDA: {column}"
-    else:
-        grouped = subset.groupby(column, observed=False)[target].mean().reset_index(name="value")
-        ylabel = f"Mean {target}"
-        title = f"Severity EDA: {column}"
-
-    grouped = grouped.sort_values("value", ascending=False).head(50)
-    plt.figure(figsize=figsize)
-    sns.barplot(data=grouped, x=column, y="value", color="steelblue")
-    plt.xticks(rotation=rotation)
-    plt.ylabel(ylabel)
-    plt.title(title)
-    plt.tight_layout()
-    plt.show()
 
 
 def plot_frequency_probability_diagnostics(
@@ -270,27 +160,113 @@ def _plot_features_eda(
     cat_features: list[str],
     *,
     model_type: ModelType,
-    config: TrainingConfig,
     numeric_bins: int = 10,
+    figsize: tuple[float, float] = (25, 10),
+    rotation: int = 90,
+    max_categories: int = 2000,
     skip_geo: bool = True,
 ) -> None:
-    """Построить research_* графики по списку признаков модели."""
+    """Построить research_* графики по списку признаков (оригинальный API Litigant)."""
     cat_set = set(cat_features)
     geo_columns = {"LONGITUDE", "LATITUDE"}
     for column in features:
         if skip_geo and column in geo_columns:
             continue
+        if column not in df.columns:
+            continue
         if column in cat_set:
             print(column, "nulls:", df[column].isnull().mean() * 100, "%")
             print(column, "nunique:", df[column].nunique())
-            research_feature(df, column, model_type=model_type, config=config)
+            if df[column].nunique(dropna=False) >= max_categories:
+                continue
+            research_feature(
+                df.copy(),
+                column,
+                model_type=model_type,
+                figsize=figsize,
+                rotation=rotation,
+            )
         else:
             print(column, "nulls:", df[column].isnull().mean() * 100, "%")
             try:
-                research_continuous(df, column, numeric_bins, model_type=model_type, config=config)
+                research_continous(
+                    df.copy(),
+                    column,
+                    numeric_bins,
+                    model_type=model_type,
+                    figsize=figsize,
+                    rotation=rotation,
+                )
             except (ValueError, TypeError):
+                df = df.copy()
                 df[column] = pd.to_numeric(df[column], errors="coerce")
-                research_continuous(df, column, numeric_bins, model_type=model_type, config=config)
+                research_continous(
+                    df,
+                    column,
+                    numeric_bins,
+                    model_type=model_type,
+                    figsize=figsize,
+                    rotation=rotation,
+                )
+
+
+def run_mvp_frequency_eda(
+    df: pd.DataFrame,
+    config: TrainingConfig | None = None,
+    *,
+    numeric_bins: int = 10,
+    figsize: tuple[float, float] = (25, 10),
+    rotation: int = 90,
+    max_categories: int = 2000,
+) -> None:
+    """EDA по MVP-признакам до обучения (как model_learn.py:406-427)."""
+    config = config or TrainingConfig()
+    plot_df = _ensure_exposure(df)
+    types = config.mvp_input_types
+    geo_columns = {"LONGITUDE", "LATITUDE"}
+
+    numeric_cols = [col for col in types["NUMERIC"] if col not in geo_columns and col in plot_df.columns]
+    binary_cols = [col for col in types["BINARY"] if col in plot_df.columns]
+    categorical_cols = [col for col in types["CATEGORIAL"] if col in plot_df.columns]
+
+    print("\n=== Frequency MVP EDA (numeric) ===")
+    _plot_features_eda(
+        plot_df,
+        numeric_cols,
+        [],
+        model_type="frequency",
+        numeric_bins=numeric_bins,
+        figsize=figsize,
+        rotation=rotation,
+        max_categories=max_categories,
+        skip_geo=False,
+    )
+
+    print("\n=== Frequency MVP EDA (binary) ===")
+    _plot_features_eda(
+        plot_df,
+        binary_cols,
+        binary_cols,
+        model_type="frequency",
+        numeric_bins=numeric_bins,
+        figsize=figsize,
+        rotation=rotation,
+        max_categories=max_categories,
+        skip_geo=False,
+    )
+
+    print("\n=== Frequency MVP EDA (categorical) ===")
+    _plot_features_eda(
+        plot_df,
+        categorical_cols,
+        categorical_cols,
+        model_type="frequency",
+        numeric_bins=numeric_bins,
+        figsize=figsize,
+        rotation=rotation,
+        max_categories=max_categories,
+        skip_geo=False,
+    )
 
 
 def _severity_plot_frame(df: pd.DataFrame, config: TrainingConfig) -> pd.DataFrame:
@@ -300,30 +276,19 @@ def _severity_plot_frame(df: pd.DataFrame, config: TrainingConfig) -> pd.DataFra
     return data[data[config.severity_target].between(*config.severity_range)]
 
 
-def run_training_visualizations(
+def run_model_diagnostics_visualizations(
     df: pd.DataFrame,
     training: TrainingArtifacts,
     config: TrainingConfig | None = None,
     *,
-    plot_frequency_eda: bool = True,
     plot_frequency_probabilities: bool = True,
-    plot_severity_eda: bool = True,
     plot_model_diagnostics: bool = True,
+    plot_severity_eda: bool = True,
     severity_eda_features: list[str] | None = None,
 ) -> None:
-    """Запустить EDA и диагностические графики после train_models."""
+    """Графики после обучения: вероятности, ModelDiagnostics, severity EDA по importance."""
     config = config or TrainingConfig()
     plot_df = _ensure_exposure(df)
-
-    if plot_frequency_eda:
-        print("\n=== Frequency feature EDA ===")
-        _plot_features_eda(
-            plot_df,
-            training.frequency_features,
-            training.frequency_categorical_features,
-            model_type="frequency",
-            config=config,
-        )
 
     if plot_frequency_probabilities and training.frequency_split is not None:
         print("\n=== Frequency probability diagnostics ===")
@@ -365,17 +330,36 @@ def run_training_visualizations(
             )
 
     if plot_severity_eda:
-        print("\n=== Severity feature EDA ===")
+        print("\n=== Severity feature EDA (importance) ===")
         severity_df = _severity_plot_frame(plot_df, config)
         if severity_eda_features is None:
             severity_eda_features = training.severity_importance["feature"].tolist()
         severity_eda_features = [
             column for column in severity_eda_features if column in severity_df.columns
         ]
-        _plot_features_eda(
-            severity_df,
-            severity_eda_features,
-            training.severity_categorical_features,
-            model_type="severity",
-            config=config,
-        )
+        severity_cat = set(training.severity_categorical_features)
+        for column in severity_eda_features:
+            if column in severity_cat:
+                _plot_features_eda(
+                    severity_df,
+                    [column],
+                    [column],
+                    model_type="severity",
+                )
+            else:
+                _plot_features_eda(
+                    severity_df,
+                    [column],
+                    [],
+                    model_type="severity",
+                )
+
+
+def run_training_visualizations(
+    df: pd.DataFrame,
+    training: TrainingArtifacts,
+    config: TrainingConfig | None = None,
+    **kwargs,
+) -> None:
+    """Совместимость: только post-training графики (EDA — через run_mvp_frequency_eda)."""
+    run_model_diagnostics_visualizations(df, training, config, **kwargs)

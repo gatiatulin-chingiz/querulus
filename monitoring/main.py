@@ -1,8 +1,7 @@
 import pandas as pd
 
-from querulus.monitoring import config
-from querulus.monitoring.monitoring import monitoring
-
+from monitoring import config
+from monitoring.monitoring import monitoring
 
 
 def main(pickle_name: str,
