@@ -4,7 +4,7 @@
 Назначение
     Принять общий вектор признаков, посчитать бинарную классификацию с порогом,
     регрессию суммы, вернуть итог «классификация × регрессия»
-    Маска по классу и IS_LAWYER; регрессия неотрицательна (см. ``_masked_predictions``).
+    Маска по классу и IS_LAWYER (см. ``_masked_predictions``).
 
 Точки входа HTTP
     GET  /api/health  — проверка живости, ``health``, ``version``; опционально ``git_commit``.
@@ -286,12 +286,6 @@ def get_threshold_from_vector(df_common: pd.DataFrame) -> Optional[float]:
     return float(value)
 
 # reviewed
-def _non_negative_regression(value: float) -> float:
-    """Ограничивает предсказание регрессии снизу нулём."""
-    return max(0.0, float(value))
-
-
-# reviewed
 def _masked_predictions(
     labels: List[float],
     raw_reg: List[float],
@@ -300,7 +294,7 @@ def _masked_predictions(
     """
     Маскированные значения регрессии и итога (одинаковые по контракту).
 
-    Правила (после clip регрессии к ``>= 0``):
+    Правила:
         - класс 1: ``regression_predictions`` и ``predictions`` = регрессия;
         - класс 0 и IS_LAWYER 0: оба поля = 0;
         - класс 0 и IS_LAWYER 1: оба поля = регрессия.
@@ -327,11 +321,11 @@ def _masked_predictions(
 
     masked: List[float] = []
     for c, r, lawyer in zip(labels, raw_reg, is_lawyer):
-        reg_nonneg = _non_negative_regression(r)
+        reg = float(r)
         if c:
-            masked.append(reg_nonneg)
+            masked.append(reg)
         elif lawyer:
-            masked.append(reg_nonneg)
+            masked.append(reg)
         else:
             masked.append(0.0)
     return masked
@@ -839,7 +833,7 @@ def run_regression_model(
     df: pd.DataFrame,
 ) -> Dict[str, Any]:
     """
-    Регрессия: матрица признаков → ``model.predict`` (маска и clip — в ``main_predict``).
+    Регрессия: матрица признаков → ``model.predict`` (маска — в ``main_predict``).
 
     Вход:
         model_result: элемент[1] из pickle (регрессия);
@@ -854,7 +848,7 @@ def run_regression_model(
         # Подготовка матрицы признаков аналогична классификации.
         model, t = _prepare_matrix(model_result, df)
         try:
-            # Сырые значения `predict`; маска, clip >= 0 — в `main_predict`.
+            # Сырые значения `predict`; маска — в `main_predict`.
             pred = model.predict(t)
             raw = list(pred)
         except Exception:
@@ -896,12 +890,12 @@ def main_predict(
     Возвращает:
         dict с ключами:
             - "oisuu_responce": версия, порог, proba/метки классификации,
-              regression_predictions и predictions (маска + clip >= 0, см. ``_masked_predictions``);
+              regression_predictions и predictions (маска, см. ``_masked_predictions``);
             - "main_response": ``usage_model``, ``result``, ``df`` — те же метрики, что в oisuu.
             # В `result` выводятся следующие ключи (в указанном порядке):
             #   - classification_proba: вероятности положительного класса для каждой записи
             #   - classification_predictions: предсказанные бинарные метки (0 или 1) для каждой записи
-            #   - regression_predictions: маскированная регрессия (>= 0)
+            #   - regression_predictions: маскированная регрессия
             #   - prediction: то же, что oisuu predictions
             - "second_response": всегда {}.
 
