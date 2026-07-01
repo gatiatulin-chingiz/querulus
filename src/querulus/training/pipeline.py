@@ -25,6 +25,35 @@ class DatasetSplit:
 
 
 @dataclass
+class ModelTrainingReport:
+    """Сводка по обучению одной модели."""
+
+    model: str
+    target: str
+    train_period: tuple[str, str]
+    test_period: tuple[str, str]
+    target_filter: str | None
+    train_rows: int
+    test_rows: int
+    train_target_mean: float | None
+    test_target_mean: float | None
+    features: list[str]
+    cat_features: list[str]
+    hyperparameters: dict[str, object]
+
+
+@dataclass
+class TrainingSummary:
+    """Сводка по пайплайну обучения frequency + severity."""
+
+    date_column: str
+    mvp_feature_count: int
+    mvp_categorical_count: int
+    frequency: ModelTrainingReport
+    severity: ModelTrainingReport
+
+
+@dataclass
 class TrainingArtifacts:
     """Результаты обучения моделей."""
 
@@ -35,6 +64,7 @@ class TrainingArtifacts:
     severity_metrics_table: pd.DataFrame
     frequency_diagnostics: object
     severity_diagnostics: object
+    summary: TrainingSummary
     feature_names: list[str]
     categorical_features: list[str]
     frequency_features: list[str]
@@ -238,6 +268,175 @@ def _format_metric_value(value: float | int | None) -> str:
     return f"{numeric:.6f}"
 
 
+def _target_mean(series: pd.Series) -> float | None:
+    """Среднее значение таргета для отчёта."""
+    if series.empty:
+        return None
+    return float(series.mean())
+
+
+def _build_model_report(
+    model_name: str,
+    target: str,
+    split: DatasetSplit,
+    features: list[str],
+    cat_features: list[str],
+    config: TrainingConfig,
+    *,
+    target_filter: str | None = None,
+    hyperparameters: dict[str, object] | None = None,
+) -> ModelTrainingReport:
+    """Собрать сводку по одной модели."""
+    params = hyperparameters or {}
+    return ModelTrainingReport(
+        model=model_name,
+        target=target,
+        train_period=config.train_period,
+        test_period=config.test_period,
+        target_filter=target_filter,
+        train_rows=len(split.y_train),
+        test_rows=len(split.y_test),
+        train_target_mean=_target_mean(split.y_train),
+        test_target_mean=_target_mean(split.y_test),
+        features=features,
+        cat_features=cat_features,
+        hyperparameters=params,
+    )
+
+
+def _format_period(period: tuple[str, str]) -> str:
+    return f"{period[0]} .. {period[1]}"
+
+
+def _format_feature_list(features: list[str]) -> str:
+    if not features:
+        return "—"
+    return ", ".join(features)
+
+
+def format_training_summary(summary: TrainingSummary) -> pd.DataFrame:
+    """Таблица ключевых параметров обучения для ноутбука."""
+    rows: list[dict[str, str]] = [
+        {
+            "model": "mvp",
+            "parameter": "mvp_features",
+            "value": str(summary.mvp_feature_count),
+        },
+        {
+            "model": "mvp",
+            "parameter": "mvp_categorical_features",
+            "value": str(summary.mvp_categorical_count),
+        },
+        {
+            "model": "mvp",
+            "parameter": "date_column",
+            "value": summary.date_column,
+        },
+    ]
+    for report in (summary.frequency, summary.severity):
+        train_share = report.train_rows / (report.train_rows + report.test_rows) * 100
+        test_share = report.test_rows / (report.train_rows + report.test_rows) * 100
+        rows.extend(
+            [
+                {"model": report.model, "parameter": "target", "value": report.target},
+                {
+                    "model": report.model,
+                    "parameter": "train_period",
+                    "value": _format_period(report.train_period),
+                },
+                {
+                    "model": report.model,
+                    "parameter": "test_period",
+                    "value": _format_period(report.test_period),
+                },
+                {
+                    "model": report.model,
+                    "parameter": "target_filter",
+                    "value": report.target_filter or "—",
+                },
+                {
+                    "model": report.model,
+                    "parameter": "train_rows",
+                    "value": str(report.train_rows),
+                },
+                {
+                    "model": report.model,
+                    "parameter": "test_rows",
+                    "value": str(report.test_rows),
+                },
+                {
+                    "model": report.model,
+                    "parameter": "train_share_pct",
+                    "value": f"{train_share:.2f}",
+                },
+                {
+                    "model": report.model,
+                    "parameter": "test_share_pct",
+                    "value": f"{test_share:.2f}",
+                },
+                {
+                    "model": report.model,
+                    "parameter": "train_target_mean",
+                    "value": "—" if report.train_target_mean is None else f"{report.train_target_mean:.6f}",
+                },
+                {
+                    "model": report.model,
+                    "parameter": "test_target_mean",
+                    "value": "—" if report.test_target_mean is None else f"{report.test_target_mean:.6f}",
+                },
+                {
+                    "model": report.model,
+                    "parameter": "features_count",
+                    "value": str(len(report.features)),
+                },
+                {
+                    "model": report.model,
+                    "parameter": "features",
+                    "value": _format_feature_list(report.features),
+                },
+                {
+                    "model": report.model,
+                    "parameter": "cat_features_count",
+                    "value": str(len(report.cat_features)),
+                },
+                {
+                    "model": report.model,
+                    "parameter": "cat_features",
+                    "value": _format_feature_list(report.cat_features),
+                },
+            ]
+        )
+        for key, value in report.hyperparameters.items():
+            rows.append(
+                {
+                    "model": report.model,
+                    "parameter": key,
+                    "value": str(value),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def format_features_table(features: list[str], cat_features: list[str]) -> pd.DataFrame:
+    """Таблица признаков модели с типом для CatBoost."""
+    cat_set = set(cat_features)
+    return pd.DataFrame(
+        {
+            "feature": features,
+            "type": ["categorical" if feature in cat_set else "numeric" for feature in features],
+        }
+    )
+
+
+def log_training_summary(summary: TrainingSummary) -> None:
+    """Вывести сводку обучения в лог."""
+    import logging
+
+    logger = logging.getLogger("querulus.training")
+    table = format_training_summary(summary)
+    logger.info("Training summary:\n%s", table.to_string(index=False))
+
+
 def format_metrics_table(table: pd.DataFrame) -> pd.DataFrame:
     """Вернуть копию таблицы метрик с форматированными train/test колонками."""
     if table.empty:
@@ -286,6 +485,20 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         cat_features=frequency_cat_features,
         feature_names=frequency_features,
     )
+    frequency_hyperparameters = {
+        "iterations": config.frequency_iterations,
+        "random_state": config.frequency_random_state,
+        **config.frequency_classifier_params,
+    }
+    severity_hyperparameters = {
+        "iterations": config.severity_iterations,
+        "random_state": config.severity_random_state,
+        **config.severity_regressor_params,
+    }
+    severity_target_filter = (
+        f"{config.severity_target} in [{config.severity_range[0]}, {config.severity_range[1]}]"
+    )
+
     frequency_model = CatBoostClassifier(
         iterations=config.frequency_iterations,
         random_state=config.frequency_random_state,
@@ -349,6 +562,32 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
     )
     metrics = {"frequency": frequency_metrics, "severity": severity_metrics}
 
+    summary = TrainingSummary(
+        date_column=config.date_column,
+        mvp_feature_count=len(features),
+        mvp_categorical_count=len(cat_features),
+        frequency=_build_model_report(
+            "frequency",
+            config.frequency_target,
+            frequency_split,
+            frequency_features,
+            frequency_cat_features,
+            config,
+            hyperparameters=frequency_hyperparameters,
+        ),
+        severity=_build_model_report(
+            "severity",
+            config.severity_target,
+            severity_split,
+            severity_features,
+            severity_cat_features,
+            config,
+            target_filter=severity_target_filter,
+            hyperparameters=severity_hyperparameters,
+        ),
+    )
+    log_training_summary(summary)
+
     return TrainingArtifacts(
         frequency_model=frequency_model,
         severity_model=severity_model,
@@ -357,6 +596,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         severity_metrics_table=_model_metrics_table(severity_metrics),
         frequency_diagnostics=frequency_diagnostics,
         severity_diagnostics=severity_diagnostics,
+        summary=summary,
         feature_names=features,
         categorical_features=cat_features,
         frequency_features=frequency_features,
