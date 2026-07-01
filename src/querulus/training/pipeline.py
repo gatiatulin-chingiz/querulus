@@ -4,7 +4,6 @@ from __future__ import annotations
 import contextlib
 from dataclasses import dataclass
 import importlib
-import inspect
 import io
 from pathlib import Path
 import sys
@@ -72,8 +71,21 @@ def _require_model_diagnostics(config: TrainingConfig):
     return module.ModelDiagnostics
 
 
-def _mvp_features(df: pd.DataFrame, config: TrainingConfig) -> tuple[list[str], list[str]]:
-    """Определить типы признаков через AutoMVP."""
+def _stringify_categorical_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """Привести категориальные признаки к строкам, как в model_learn.py."""
+    result = df.copy()
+    for column in columns:
+        if column not in result.columns:
+            continue
+        try:
+            result[column] = result[column].apply(lambda value: int(float(value))).astype(str)
+        except (ValueError, TypeError):
+            result[column] = result[column].astype(str)
+    return result
+
+
+def _mvp_features(df: pd.DataFrame, config: TrainingConfig) -> tuple[pd.DataFrame, list[str], list[str]]:
+    """Определить типы признаков через AutoMVP (порядок шагов как в model_learn.py)."""
     try:
         from querulus.AutoMVP import MVP
     except Exception as exc:
@@ -85,6 +97,11 @@ def _mvp_features(df: pd.DataFrame, config: TrainingConfig) -> tuple[list[str], 
     mvp = MVP(df, print_col_type=False)
     with contextlib.redirect_stdout(io.StringIO()):
         mvp.value_type()
+
+    # В Litigant: сначала value_type, затем str-кодирование cat/binary, затем correct_types.
+    initial_categorical = mvp.types_dict["BINARY"] + mvp.types_dict["CATEGORIAL"]
+    data = _stringify_categorical_columns(df, initial_categorical)
+
     other_cols = [config.date_column, *config.drop_columns]
     input_types = {key: list(value) for key, value in config.mvp_input_types.items()}
     mvp.correct_types(input_types, other_cols)
@@ -92,27 +109,14 @@ def _mvp_features(df: pd.DataFrame, config: TrainingConfig) -> tuple[list[str], 
     features = [
         column
         for column in types["BINARY"] + types["CATEGORIAL"] + types["NUMERIC"]
-        if column in df.columns and column not in config.drop_columns
+        if column in data.columns and column not in config.drop_columns
     ]
     categorical = [
         column
         for column in types["CATEGORIAL"] + types["BINARY"]
         if column in features
     ]
-    return features, categorical
-
-
-def _prepare_categorical_columns(df: pd.DataFrame, cat_features: list[str]) -> pd.DataFrame:
-    """Привести категориальные признаки к строкам, как в model_learn.py."""
-    result = df.copy()
-    for column in cat_features:
-        if column not in result.columns:
-            continue
-        try:
-            result[column] = result[column].apply(lambda value: int(float(value))).astype(str)
-        except (ValueError, TypeError):
-            result[column] = result[column].astype(str)
-    return result
+    return data, features, categorical
 
 
 def _select_model_features(
@@ -142,6 +146,7 @@ def _split_by_date(
     config: TrainingConfig,
     *,
     target_range: tuple[float, float] | None = None,
+    full_frame: bool = False,
 ) -> DatasetSplit:
     """Разбить датасет на train/test по периоду."""
     data = df.copy()
@@ -151,10 +156,16 @@ def _split_by_date(
 
     train_mask = data[config.date_column].between(*config.train_period)
     test_mask = data[config.date_column].between(*config.test_period)
+    if full_frame:
+        x_train = data.loc[train_mask]
+        x_test = data.loc[test_mask]
+    else:
+        x_train = data.loc[train_mask, features]
+        x_test = data.loc[test_mask, features]
     return DatasetSplit(
-        x_train=data.loc[train_mask, features],
+        x_train=x_train,
         y_train=data.loc[train_mask, target],
-        x_test=data.loc[test_mask, features],
+        x_test=x_test,
         y_test=data.loc[test_mask, target],
     )
 
@@ -176,27 +187,24 @@ def _importance_frame(model: object, feature_names: list[str]) -> pd.DataFrame:
 def _diagnostics_metrics(
     ModelDiagnostics,
     split: DatasetSplit,
+    diagnostics_split: DatasetSplit,
     model: object,
     features: list[str],
     cat_features: list[str],
     task_type: str,
-    config: TrainingConfig,
 ) -> tuple[object, dict[str, dict[str, float]]]:
     """Получить метрики через ModelDiagnostics."""
     diagnostics = ModelDiagnostics(
-        X_train=split.x_train,
-        y_train=split.y_train,
-        X_test=split.x_test,
-        y_test=split.y_test,
+        X_train=diagnostics_split.x_train,
+        y_train=diagnostics_split.y_train,
+        X_test=diagnostics_split.x_test,
+        y_test=diagnostics_split.y_test,
         model=model,
         features=features,
         cat_features=cat_features,
         task_type=task_type,
     )
-    metrics_kwargs: dict[str, object] = {"print_metrics": False}
-    if "best_threshold_metric" in inspect.signature(diagnostics.compute_metrics).parameters:
-        metrics_kwargs["best_threshold_metric"] = config.best_threshold_metric
-    train_metrics, test_metrics = diagnostics.compute_metrics(**metrics_kwargs)
+    train_metrics, test_metrics = diagnostics.compute_metrics(print_metrics=False)
     return diagnostics, {"train": train_metrics, "test": test_metrics}
 
 
@@ -244,8 +252,10 @@ def format_metrics_table(table: pd.DataFrame) -> pd.DataFrame:
 def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> TrainingArtifacts:
     """Обучить модели частоты (`TARGET_2`) и тяжести (`TARGET_3_SEV`)."""
     config = config or TrainingConfig()
-    features, cat_features = _mvp_features(df, config)
-    data = _prepare_categorical_columns(df, cat_features)
+    data, features, cat_features = _mvp_features(df, config)
+    if config.frequency_target in data.columns:
+        data[config.frequency_target] = data[config.frequency_target].astype(int)
+
     frequency_features, frequency_cat_features = _select_model_features(
         features,
         cat_features,
@@ -263,6 +273,13 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
     ModelDiagnostics = _require_model_diagnostics(config)
 
     frequency_split = _split_by_date(data, config.frequency_target, frequency_features, config)
+    frequency_diag_split = _split_by_date(
+        data,
+        config.frequency_target,
+        frequency_features,
+        config,
+        full_frame=True,
+    )
     frequency_pool = Pool(
         frequency_split.x_train,
         frequency_split.y_train.astype(int),
@@ -270,8 +287,8 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         feature_names=frequency_features,
     )
     frequency_model = CatBoostClassifier(
-        iterations=config.iterations,
-        random_state=config.random_state,
+        iterations=config.frequency_iterations,
+        random_state=config.frequency_random_state,
         **config.frequency_classifier_params,
     )
     frequency_model.fit(
@@ -287,6 +304,14 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         config,
         target_range=config.severity_range,
     )
+    severity_diag_split = _split_by_date(
+        data,
+        config.severity_target,
+        severity_features,
+        config,
+        target_range=config.severity_range,
+        full_frame=True,
+    )
     severity_pool = Pool(
         severity_split.x_train,
         severity_split.y_train,
@@ -294,8 +319,8 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         feature_names=severity_features,
     )
     severity_model = CatBoostRegressor(
-        iterations=config.iterations,
-        random_state=config.random_state,
+        iterations=config.severity_iterations,
+        random_state=config.severity_random_state,
         **config.severity_regressor_params,
     )
     severity_model.fit(
@@ -307,20 +332,20 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
     frequency_diagnostics, frequency_metrics = _diagnostics_metrics(
         ModelDiagnostics,
         frequency_split,
+        frequency_diag_split,
         frequency_model,
         frequency_features,
         frequency_cat_features,
         "classification",
-        config,
     )
     severity_diagnostics, severity_metrics = _diagnostics_metrics(
         ModelDiagnostics,
         severity_split,
+        severity_diag_split,
         severity_model,
         severity_features,
         severity_cat_features,
         "regression",
-        config,
     )
     metrics = {"frequency": frequency_metrics, "severity": severity_metrics}
 
