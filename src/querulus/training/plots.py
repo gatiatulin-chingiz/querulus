@@ -15,7 +15,7 @@ from sklearn.metrics import (
 )
 
 from querulus.training.config import TrainingConfig
-from querulus.training.pipeline import TrainingArtifacts
+from querulus.training.pipeline import TrainingArtifacts, resolve_mvp_types
 from querulus.training.research_eda import research_continous, research_feature
 
 ModelType = Literal["frequency", "severity"]
@@ -222,12 +222,21 @@ def run_mvp_frequency_eda(
     """EDA по MVP-признакам до обучения (как model_learn.py:406-427)."""
     config = config or TrainingConfig()
     plot_df = _ensure_exposure(df)
-    types = config.mvp_input_types
+    types = resolve_mvp_types(plot_df, config)
     geo_columns = {"LONGITUDE", "LATITUDE"}
+    drop_columns = set(config.drop_columns)
 
-    numeric_cols = [col for col in types["NUMERIC"] if col not in geo_columns and col in plot_df.columns]
-    binary_cols = [col for col in types["BINARY"] if col in plot_df.columns]
-    categorical_cols = [col for col in types["CATEGORIAL"] if col in plot_df.columns]
+    numeric_cols = [
+        col
+        for col in types["NUMERIC"]
+        if col not in geo_columns and col in plot_df.columns and col not in drop_columns
+    ]
+    binary_cols = [
+        col for col in types["BINARY"] if col in plot_df.columns and col not in drop_columns
+    ]
+    categorical_cols = [
+        col for col in types["CATEGORIAL"] if col in plot_df.columns and col not in drop_columns
+    ]
 
     print("\n=== Frequency MVP EDA (numeric) ===")
     _plot_features_eda(
@@ -269,13 +278,6 @@ def run_mvp_frequency_eda(
     )
 
 
-def _severity_plot_frame(df: pd.DataFrame, config: TrainingConfig) -> pd.DataFrame:
-    """Оставить строки в диапазоне severity, как при обучении регрессии."""
-    data = df.copy()
-    data[config.date_column] = pd.to_datetime(data[config.date_column])
-    return data[data[config.severity_target].between(*config.severity_range)]
-
-
 def run_model_diagnostics_visualizations(
     df: pd.DataFrame,
     training: TrainingArtifacts,
@@ -283,12 +285,9 @@ def run_model_diagnostics_visualizations(
     *,
     plot_frequency_probabilities: bool = True,
     plot_model_diagnostics: bool = True,
-    plot_severity_eda: bool = True,
-    severity_eda_features: list[str] | None = None,
 ) -> None:
-    """Графики после обучения: вероятности, ModelDiagnostics, severity EDA по importance."""
+    """Графики после обучения: вероятности классификации и ModelDiagnostics."""
     config = config or TrainingConfig()
-    plot_df = _ensure_exposure(df)
 
     if plot_frequency_probabilities and training.frequency_split is not None:
         print("\n=== Frequency probability diagnostics ===")
@@ -328,31 +327,6 @@ def run_model_diagnostics_visualizations(
             training.severity_diagnostics.diagnostics_plots(
                 training.severity_split.y_test, pred_test, title_prefix="Test"
             )
-
-    if plot_severity_eda:
-        print("\n=== Severity feature EDA (importance) ===")
-        severity_df = _severity_plot_frame(plot_df, config)
-        if severity_eda_features is None:
-            severity_eda_features = training.severity_importance["feature"].tolist()
-        severity_eda_features = [
-            column for column in severity_eda_features if column in severity_df.columns
-        ]
-        severity_cat = set(training.severity_categorical_features)
-        for column in severity_eda_features:
-            if column in severity_cat:
-                _plot_features_eda(
-                    severity_df,
-                    [column],
-                    [column],
-                    model_type="severity",
-                )
-            else:
-                _plot_features_eda(
-                    severity_df,
-                    [column],
-                    [],
-                    model_type="severity",
-                )
 
 
 def run_training_visualizations(

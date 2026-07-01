@@ -116,6 +116,26 @@ def _stringify_categorical_columns(df: pd.DataFrame, columns: list[str]) -> pd.D
     return result
 
 
+def resolve_mvp_types(df: pd.DataFrame, config: TrainingConfig) -> dict[str, list[str]]:
+    """Словарь типов признаков после value_type + correct_types (как mvp.types_dict в model_learn)."""
+    try:
+        from querulus.AutoMVP import MVP
+    except Exception as exc:
+        raise ImportError(
+            "Не удалось импортировать querulus.AutoMVP.MVP. "
+            "Проверьте, что AutoMVP.py является валидным Python-модулем."
+        ) from exc
+
+    mvp = MVP(df, print_col_type=False)
+    with contextlib.redirect_stdout(io.StringIO()):
+        mvp.value_type()
+
+    other_cols = [config.date_column, *config.drop_columns]
+    input_types = {key: list(value) for key, value in config.mvp_input_types.items()}
+    mvp.correct_types(input_types, other_cols)
+    return {key: list(value) for key, value in mvp.types_dict.items()}
+
+
 def _mvp_features(df: pd.DataFrame, config: TrainingConfig) -> tuple[pd.DataFrame, list[str], list[str]]:
     """Определить типы признаков через AutoMVP (порядок шагов как в model_learn.py)."""
     try:
