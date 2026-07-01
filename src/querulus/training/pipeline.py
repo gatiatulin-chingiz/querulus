@@ -75,6 +75,7 @@ class TrainingArtifacts:
     severity_importance: pd.DataFrame
     frequency_split: DatasetSplit | None = None
     severity_split: DatasetSplit | None = None
+    feature_frame: pd.DataFrame | None = None
 
 
 def _require_catboost():
@@ -629,4 +630,5 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         severity_categorical_features=severity_cat_features,
         frequency_importance=_importance_frame(frequency_model, frequency_features),
         severity_importance=_importance_frame(severity_model, severity_features),
+        feature_frame=data,
     )

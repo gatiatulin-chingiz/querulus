@@ -261,6 +261,54 @@ def apply_model_predictions(
     )
 
 
+def _feature_rows_for_predict(
+    training: object,
+    effect_index: pd.Index,
+    effect_frame: pd.DataFrame,
+) -> pd.DataFrame:
+    """Строки с признаками после AutoMVP (как при обучении CatBoost)."""
+    feature_frame = getattr(training, "feature_frame", None)
+    if feature_frame is not None:
+        return feature_frame.loc[effect_index]
+    from querulus.training.pipeline import _stringify_categorical_columns
+
+    cat_features = getattr(training, "severity_categorical_features", []) + getattr(
+        training, "frequency_categorical_features", []
+    )
+    cat_features = list(dict.fromkeys(cat_features))
+    return _stringify_categorical_columns(effect_frame, cat_features)
+
+
+def _catboost_predict(
+    model: object,
+    features: pd.DataFrame,
+    cat_features: list[str],
+) -> np.ndarray:
+    """predict с явным Pool для категориальных признаков."""
+    cat_features = [column for column in cat_features if column in features.columns]
+    if cat_features:
+        from catboost import Pool
+
+        pool = Pool(features, cat_features=cat_features)
+        return np.asarray(model.predict(pool), dtype=float)
+    return np.asarray(model.predict(features), dtype=float)
+
+
+def _catboost_predict_proba(
+    model: object,
+    features: pd.DataFrame,
+    cat_features: list[str],
+) -> np.ndarray:
+    """predict_proba[:, 1] с явным Pool для категориальных признаков."""
+    cat_features = [column for column in cat_features if column in features.columns]
+    if cat_features:
+        from catboost import Pool
+
+        pool = Pool(features, cat_features=cat_features)
+        return np.asarray(model.predict_proba(pool)[:, 1], dtype=float)
+    return np.asarray(model.predict_proba(features)[:, 1], dtype=float)
+
+
 def run_fin_effect_pipeline(
     df: pd.DataFrame,
     frequency_proba: np.ndarray | pd.Series,
@@ -307,25 +355,31 @@ def run_fin_effect_from_training(
 
     if split == "train":
         effect_index = frequency_split.x_train.index
-        freq_x = frequency_split.x_train[freq_features]
         y_true_freq = frequency_split.y_train
     elif split == "test":
         effect_index = frequency_split.x_test.index
-        freq_x = frequency_split.x_test[freq_features]
         y_true_freq = frequency_split.y_test
     else:
         effect_index = frequency_split.x_train.index.union(frequency_split.x_test.index)
-        freq_x = pd.concat([frequency_split.x_train[freq_features], frequency_split.x_test[freq_features]])
         y_true_freq = pd.concat([frequency_split.y_train, frequency_split.y_test])
 
     effect_frame = df.loc[effect_index]
+    predict_frame = _feature_rows_for_predict(training, effect_index, effect_frame)
+
     freq_proba = pd.Series(
-        training.frequency_model.predict_proba(freq_x)[:, 1],
+        _catboost_predict_proba(
+            training.frequency_model,
+            predict_frame[freq_features],
+            getattr(training, "frequency_categorical_features", []),
+        ),
         index=effect_index,
     )
-    # severity — на всех строках frequency-сплита (не severity_split с фильтром TARGET_3_SEV)
     sev_pred = pd.Series(
-        training.severity_model.predict(effect_frame[sev_features]),
+        _catboost_predict(
+            training.severity_model,
+            predict_frame[sev_features],
+            getattr(training, "severity_categorical_features", []),
+        ),
         index=effect_index,
     )
 
