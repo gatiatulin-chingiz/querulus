@@ -64,6 +64,8 @@ class TrainingArtifacts:
     severity_metrics_table: pd.DataFrame
     frequency_diagnostics: object
     severity_diagnostics: object
+    frequency_split: DatasetSplit | None = None
+    severity_split: DatasetSplit | None = None
     summary: TrainingSummary
     feature_names: list[str]
     categorical_features: list[str]
@@ -596,6 +598,8 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         severity_metrics_table=_model_metrics_table(severity_metrics),
         frequency_diagnostics=frequency_diagnostics,
         severity_diagnostics=severity_diagnostics,
+        frequency_split=frequency_split,
+        severity_split=severity_split,
         summary=summary,
         feature_names=features,
         categorical_features=cat_features,
