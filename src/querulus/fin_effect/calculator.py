@@ -92,8 +92,6 @@ def prepare_effect_frame(df: pd.DataFrame, config: FinEffectConfig | None = None
     config = config or FinEffectConfig()
     result = df.copy()
 
-    # Litigant: взносы до fillna суммовых колонок
-    result[config.premiums_column] = add_premiums_column(result, config)
     for column in (
         config.pretension_payments_column,
         config.fu_recovery_column,
@@ -104,6 +102,7 @@ def prepare_effect_frame(df: pd.DataFrame, config: FinEffectConfig | None = None
         if column in result.columns:
             result[column] = _numeric_series(result, column)
 
+    result[config.premiums_column] = add_premiums_column(result, config)
     result["fin_effect_fact"] = compute_fin_effect_fact(result, config)
     result = fix_target_on_pretension(result, config)
     return result
@@ -285,17 +284,14 @@ def _catboost_predict(
     features: pd.DataFrame,
     cat_features: list[str],
 ) -> np.ndarray:
-    """predict как в Litigant fin_effect.py; Pool — fallback при ошибке типов."""
-    try:
-        return np.asarray(model.predict(features), dtype=float)
-    except TypeError:
-        cat_features = [column for column in cat_features if column in features.columns]
-        if cat_features:
-            from catboost import Pool
+    """predict с явным Pool для категориальных признаков."""
+    cat_features = [column for column in cat_features if column in features.columns]
+    if cat_features:
+        from catboost import Pool
 
-            pool = Pool(features, cat_features=cat_features)
-            return np.asarray(model.predict(pool), dtype=float)
-        raise
+        pool = Pool(features, cat_features=cat_features)
+        return np.asarray(model.predict(pool), dtype=float)
+    return np.asarray(model.predict(features), dtype=float)
 
 
 def _catboost_predict_proba(
@@ -303,17 +299,14 @@ def _catboost_predict_proba(
     features: pd.DataFrame,
     cat_features: list[str],
 ) -> np.ndarray:
-    """predict_proba[:, 1] как в Litigant; Pool — fallback при ошибке типов."""
-    try:
-        return np.asarray(model.predict_proba(features)[:, 1], dtype=float)
-    except TypeError:
-        cat_features = [column for column in cat_features if column in features.columns]
-        if cat_features:
-            from catboost import Pool
+    """predict_proba[:, 1] с явным Pool для категориальных признаков."""
+    cat_features = [column for column in cat_features if column in features.columns]
+    if cat_features:
+        from catboost import Pool
 
-            pool = Pool(features, cat_features=cat_features)
-            return np.asarray(model.predict_proba(pool)[:, 1], dtype=float)
-        raise
+        pool = Pool(features, cat_features=cat_features)
+        return np.asarray(model.predict_proba(pool)[:, 1], dtype=float)
+    return np.asarray(model.predict_proba(features)[:, 1], dtype=float)
 
 
 def run_fin_effect_pipeline(
@@ -362,10 +355,13 @@ def run_fin_effect_from_training(
 
     if split == "train":
         effect_index = frequency_split.x_train.index
+        y_true_freq = frequency_split.y_train
     elif split == "test":
         effect_index = frequency_split.x_test.index
+        y_true_freq = frequency_split.y_test
     else:
         effect_index = frequency_split.x_train.index.union(frequency_split.x_test.index)
+        y_true_freq = pd.concat([frequency_split.y_train, frequency_split.y_test])
 
     effect_frame = df.loc[effect_index]
     predict_frame = _feature_rows_for_predict(training, effect_index, effect_frame)
@@ -387,8 +383,10 @@ def run_fin_effect_from_training(
         index=effect_index,
     )
 
-    target_column = frequency_target_column or config.frequency_target_column
-    y_true = effect_frame[target_column].astype(int)
+    if frequency_target_column:
+        y_true = effect_frame[frequency_target_column]
+    else:
+        y_true = y_true_freq
 
     return run_fin_effect_pipeline(
         effect_frame,
