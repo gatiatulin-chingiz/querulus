@@ -100,6 +100,13 @@ def read_artifact(
     return df
 
 
+def _dedupe_columns(df: T) -> T:
+    """Убрать дубли имён колонок после JOIN (pyarrow не пишет parquet с дублями)."""
+    if df.columns.is_unique:
+        return df
+    return df.loc[:, ~df.columns.duplicated()].copy()
+
+
 def checkpoint(
     df: T,
     paths: DataPaths,
@@ -140,7 +147,7 @@ def load_sql_artifact(
 
     reader = sql_reader or (lambda q, c: pd.read_sql(q, c))
     logger.info("LOAD sql: %s", label)
-    df = reader(query, conn.get())
+    df = _dedupe_columns(reader(query, conn.get()))
 
     if save_checkpoint:
         out = paths.artifact(directory, name)
