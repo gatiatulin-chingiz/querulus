@@ -81,7 +81,7 @@ def read_artifact(
     *,
     columns: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Загрузить parquet с учётом legacy-путей и вариантов имени."""
+    """Загрузить parquet из data/raw или data/processed."""
     path = paths.resolve_artifact(directory, name)
     if path is None:
         logger.error("Не найден parquet: %s", name)
@@ -91,8 +91,7 @@ def read_artifact(
         raise FileNotFoundError(
             f"Артефакт {name!r} не найден. "
             f"Задайте USE_SQL=True для загрузки из БД, путь в configs/dataset_sources.json "
-            f"или положите файл в legacy "
-            f"({config.litigant_legacy_data_root}/data/raw|processed|parquet). "
+            f"или положите файл в {write_path.parent}. "
             f"Путь записи при save_checkpoint: {write_path}"
         )
     df = pd.read_parquet(str(path), columns=columns)
@@ -152,8 +151,15 @@ def load_sql_artifact(
 
     if not use_sql:
         path = paths.resolve_artifact(directory, name)
-        if path is not None:
-            return read_parquet_path(path, artifact=label, columns=columns)
+        if path is None:
+            candidates = paths.artifact_candidates(directory, name)
+            checked = "\n".join(f"  - {item}" for item in candidates)
+            raise FileNotFoundError(
+                f"Артефакт {name!r} не найден при USE_SQL=False.\n"
+                f"Проверенные пути:\n{checked}\n"
+                "Укажите USE_SQL=True или положите parquet в data/raw."
+            )
+        return read_parquet_path(path, artifact=label, columns=columns)
 
     out = paths.artifact(directory, name)
     reader = sql_reader or _read_sql

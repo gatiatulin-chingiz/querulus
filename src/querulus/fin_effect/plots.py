@@ -342,7 +342,7 @@ def plot_target_monthly_share(
     *,
     config: FinEffectConfig | None = None,
 ) -> None:
-    """Доля TARGET_2 = 1 по месяцам."""
+    """Доля TARGET = 1 по месяцам."""
     plt, _, _, _, _, _ = _plot_deps()
     config = config or FinEffectConfig()
     data = df.copy()
@@ -361,7 +361,7 @@ def plot_target_monthly_share(
     plt.bar(monthly["MONTH_START"], monthly["target_share"] * 100, width=25, alpha=0.8)
     plt.xlabel("Месяц")
     plt.ylabel("Доля положительных случаев, %")
-    plt.title("Доля TARGET_2 = 1 в общем объёме (помесячно)")
+    plt.title("Доля TARGET = 1 в общем объёме (помесячно)")
     plt.grid(axis="y", alpha=0.3, linestyle="--")
     plt.xticks(rotation=45)
     plt.tight_layout()
@@ -373,7 +373,7 @@ def plot_positive_cases_by_month(
     *,
     config: FinEffectConfig | None = None,
 ) -> None:
-    """Количество положительных TARGET_2 по месяцам."""
+    """Количество положительных TARGET по месяцам."""
     plt, _, _, _, _, _ = _plot_deps()
     config = config or FinEffectConfig()
     data = df.copy()
@@ -390,7 +390,7 @@ def plot_positive_cases_by_month(
     plt.figure(figsize=(12, 5))
     plt.bar(positive["MONTH_START"], positive["positive_count"], width=25, alpha=0.8)
     plt.xlabel("Месяц")
-    plt.ylabel("Количество положительных случаев (TARGET_2 = 1)")
+    plt.ylabel("Количество положительных случаев (TARGET = 1)")
     plt.title("Положительные случаи по месяцам")
     plt.grid(axis="y", alpha=0.3)
     plt.xticks(rotation=45)

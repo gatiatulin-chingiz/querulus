@@ -5,7 +5,6 @@
     "df_pretensions.parquet": "",
     "df_payments.parquet": "",
     "df_claims_persons.parquet": "",
-    "df_claims_pay.parquet": "",
     "df_claims_incoming.parquet": "",
     "pretension_fio_id.parquet": "",
     "df_calc_agg.parquet": "",

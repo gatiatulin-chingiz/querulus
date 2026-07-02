@@ -1,4 +1,9 @@
-"""Шаг пайплайна: enrich."""
+"""Шаг пайплайна: enrich.
+
+LEGACY (Litigant): не вызывается при include_enrich=False.
+Колонки *_FTRS_* содержат агрегаты претензий/судов и дают утечку таргета ПСР.
+Модуль сохранён как справочник SQL/агрегаций для будущего feature engineering (as-of T0).
+"""
 from __future__ import annotations
 
 from collections import Counter
@@ -6,19 +11,14 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
+from querulus.dataset.filters import apply_victim_filters
 from querulus.dataset.io import checkpoint
 from querulus.dataset.paths import DataPaths
 from querulus.dataset.utils import my_mode
 
 
 def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims_payments, df_pretensions, df_claims_persons, pretension_fio_id, *, save_checkpoint: bool = True):
-    df = df_victim.query(
-    'REFUND_FORM_DETAILED in ["Ремонт","Денежная","Денежная. Отказ от ремонта","Ремонт. Смена СТОА"]' 
-    'and LOSS_DATE_TIME >="2022-01-01"'
-    'and LOSS_DATE_TIME <="2025-06-30"'
-    'and LOSS_PROCESS in ["Прямое ОСАГО (с 1 марта 2009)","Традиционное ОСАГО"]'
-    'and RISK=="Ущерб имуществу третьих лиц"'
-            )
+    df = apply_victim_filters(df_victim)
     df = checkpoint(
         df,
         paths,

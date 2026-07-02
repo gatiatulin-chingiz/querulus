@@ -11,10 +11,8 @@ class FinEffectConfig:
     incident_column: str = "INCIDENT_NUMBER"
     filial_column: str = "FILIAL"
     date_column: str = "LOSS_DATE_TIME"
-    target_column: str = "TARGET"
-    frequency_target_column: str = "TARGET_2"
-    severity_target_column: str = "TARGET_3_SEV"
-    severity_freq_column: str = "TARGET_3_FREQ"
+    frequency_target_column: str = "TARGET"
+    severity_target_column: str = "TARGET_SEV"
     base_payment_column: str = "Выплата_по_основному_убытку"
     pretension_payments_column: str = "Сумма_выплат_по_претензиям"
     fu_recovery_column: str = "Сумма_взыскано_по_ФУ"
@@ -26,7 +24,6 @@ class FinEffectConfig:
     court_fee_amount: float = 15_000.0
     apply_court_fee: bool = False
     include_surcharge_in_fact: bool = False
-    fix_target_on_pretension: bool = True
     negate_fact_for_report: bool = True
     threshold_start: float = 0.0
     threshold_stop: float = 1.1
@@ -43,9 +40,8 @@ class FinEffectConfig:
             "Суммы_взыскано_по_иску",
             "Взносы",
             "fin_effect_fact",
-            "TARGET_3_FREQ",
-            "TARGET_3_SEV",
-            "TARGET_2",
+            "TARGET_SEV",
+            "TARGET",
             "pred_freq",
             "pred_sev",
             "fin_effect_model",
@@ -76,9 +72,8 @@ ANALYTICS_RENAME_DICT: dict[str, str] = {
     "Суммы_взыскано_по_иску": "СУММА ВЗЫСКАННАЯ В СУДЕ",
     "Взносы": "ВЗНОСЫ",
     "fin_effect_fact": "ФАКТ ФИН. ЭФФЕКТ ",
-    "TARGET_3_FREQ": "ФАКТ БЫЛО ВЗЫСКАНИЕ ОСНОВНОГО ДОЛГА/УТС/ИЗНОСА",
-    "TARGET_3_SEV": "ФАКТ СУММА ВЗЫСКАНИЯ ОСНОВНОГО ДОЛГА/УТС/ИЗНОСА",
-    "TARGET_2": "БЫЛ ПСР (НОВЫЙ ТАРГЕТ)",
+    "TARGET_SEV": "ФАКТ СУММА ВЗЫСКАНИЯ ОСНОВНОГО ДОЛГА/УТС/ИЗНОСА",
+    "TARGET": "БЫЛ ПСР",
     "pred_freq": "МОДЕЛЬ БУДЕТ ЛИ ВЗЫСКАНИЕ ОСНОВНОГО ДОЛГА/УТС/ИЗНОСА",
     "pred_sev": "МОДЕЛЬ СУММА ВЗЫСКАНИЯ ОСНОВНОГО ДОЛГА/УТС/ИЗНОСА",
     "fin_effect_model": "МОДЕЛЬ ФИН. ЭФФЕКТ",

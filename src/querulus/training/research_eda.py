@@ -6,8 +6,8 @@ import numpy as np
 import pandas as pd
 
 expsoure = "expos"
-damage_count = "TARGET_2"
-damage_sum = "TARGET_3_SEV"
+damage_count = "TARGET"
+damage_sum = "TARGET_SEV"
 
 
 def plot_cat_vs_target(data, x_min, x_max, figsize, feature, save, model_type, rotation):

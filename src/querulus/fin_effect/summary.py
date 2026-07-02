@@ -1,4 +1,4 @@
-"""Сводная таблица финансового эффекта по квадрантам TARGET_2 × pred_freq."""
+"""Сводная таблица финансового эффекта по квадрантам TARGET × pred_freq."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,7 +19,7 @@ def create_summary_table(
     effect_df: pd.DataFrame,
     config: FinEffectConfig | None = None,
 ) -> pd.DataFrame:
-    """Сводная таблица по комбинациям TARGET_2 и pred_freq (Litigant)."""
+    """Сводная таблица по комбинациям TARGET и pred_freq (Litigant)."""
     config = config or FinEffectConfig()
     masks = {
         "1_1": (effect_df[config.frequency_target_column] == 1)

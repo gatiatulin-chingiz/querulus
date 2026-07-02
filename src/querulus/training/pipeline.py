@@ -472,7 +472,7 @@ def format_metrics_table(table: pd.DataFrame) -> pd.DataFrame:
 
 
 def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> TrainingArtifacts:
-    """Обучить модели частоты (`TARGET_2`) и тяжести (`TARGET_3_SEV`)."""
+    """Обучить модели частоты (`TARGET`) и тяжести (`TARGET_SEV`)."""
     config = config or TrainingConfig()
     data, features, cat_features = _mvp_features(df, config)
     if config.frequency_target in data.columns:

@@ -1,4 +1,8 @@
-"""Шаг пайплайна: payments."""
+"""Шаг пайплайна: payments.
+
+LEGACY (Litigant): не вызывается при include_enrich=False.
+Может пригодиться для будущего feature engineering (cumsum выплат до даты).
+"""
 from __future__ import annotations
 
 import gc

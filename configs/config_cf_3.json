@@ -34,7 +34,7 @@
   "models_configs": [
     {
       "name": "querulus_cf_3",
-      "column_target": "TARGET_2",
+      "column_target": "TARGET",
       "objective": "binary",
       "wrapper": "catboost",
       "params_catboost": {
@@ -206,7 +206,7 @@
     },
     {
       "name": "querulus_cf_3_glm",
-      "column_target": "TARGET_2",
+      "column_target": "TARGET",
       "objective": "binary",
       "wrapper": "glm",
       "params_glm": {
@@ -370,7 +370,7 @@
     },
     {
       "name": "querulus_cf_3_xgb",
-      "column_target": "TARGET_2",
+      "column_target": "TARGET",
       "objective": "binary",
       "wrapper": "xgboost",
       "relative_features": [],
@@ -544,7 +544,7 @@
     },
     {
       "name": "querulus_cf_3_lgb",
-      "column_target": "TARGET_2",
+      "column_target": "TARGET",
       "objective": "binary",
       "wrapper": "lightgbm",
       "relative_features": [],

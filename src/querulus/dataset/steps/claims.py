@@ -1,4 +1,9 @@
-"""Шаг пайплайна: claims."""
+"""Шаг пайплайна: claims.
+
+LEGACY (Litigant): не вызывается при include_enrich=False.
+Колонки *_FTRS_* дают утечку ПСР — не использовать в обучении.
+SQL и агрегации здесь могут пригодиться для будущего feature engineering (as-of T0).
+"""
 from __future__ import annotations
 
 import gc
@@ -9,6 +14,7 @@ import pandas as pd
 from sklearn.preprocessing import OneHotEncoder
 
 from querulus.dataset.constants import RENAME_DICT
+from querulus.dataset.filters import claims_sql_predicate
 from querulus.dataset.io import checkpoint, load_sql_artifact
 from querulus.dataset.paths import DataPaths
 from querulus.dataset.utils import convert_to_binary
@@ -42,63 +48,8 @@ def load_claims(paths: DataPaths, conn, *, use_sql: bool = False, save_checkpoin
         sql_reader=pd.read_sql_query,
     )
 
-
-
-    query_pay = \
-    """
-    WITH doc as (
-        SELECT [_Document5472_IDRRef]
-              ,[_KeyField]
-              ,[_LineNo14756]
-              ,[_Fld14757]
-              ,[_Fld14758]
-              ,[_Fld14759]
-              ,[_Fld14760]
-              ,[_Fld14761]
-              ,[_Fld14762RRef]
-              ,[_Fld14763]
-              ,ROW_NUMBER() OVER (PARTITION BY [_Document5472_IDRRef] ORDER BY [_LineNo14756] DESC) as rn
-          FROM [oisuu81].[dbo].[_Document5472_VT14755]
-    )
-    SELECT
-           itl.[IncidentNumber]
-          ,icnl.[IncomingClaimNumber]
-          ,RecoveredValueWithSD
-          ,docs.[_Fld14757] as [Payment_fee_fu]
-          ,ROW_NUMBER() OVER (PARTITION BY IncomingClaimNumber ORDER BY RecoveredValuePeriod desc) rn_inst
-    FROM [OISUU_report].[Datamart].[oisuu81_t_IncomingClaimNewLogicByInst] as icnl
-    LEFT JOIN [OISUU_report].[dbo].[oisuu81_t_IncidentToLoss] as itl on itl.LossNumber=icnl.LinkLossNumber
-    LEFT JOIN [OISUU_report].[dbo].[oisuu81_t_Losses] as l on l.LossNumber=itl.LossNumber
-    LEFT JOIN doc as docs on docs.[_Document5472_IDRRef]=icnl.[IncomingClaimID]
-    WHERE (ClaimOrigin not in ('Исходящий иск') or ClaimOrigin is null )
-        AND (docs.rn = 1 or docs.rn is null)
-        and icnl.Instance != 'Суд кассационной инстанции'
-        and icnl.RecoveredValuePeriod is not null
-    """
-
-    df_claims_pay = load_sql_artifact(
-        paths,
-        conn,
-        paths.raw_dir,
-        "df_claims_pay.parquet",
-        query_pay,
-        use_sql=use_sql,
-        save_checkpoint=save_checkpoint,
-        sql_reader=pd.read_sql_query,
-    )
-
-
-    # Группируем все взыскания по инциденты 
-    df_claims_pay['RecoveredValueWithSD'] = df_claims_pay['RecoveredValueWithSD'].fillna(0)
-    df_claims_pay['Payment_fee_fu'] = df_claims_pay['Payment_fee_fu'].fillna(0)
-    df_claims_pay = df_claims_pay[df_claims_pay['rn_inst']==1].groupby('IncidentNumber')[['RecoveredValueWithSD','Payment_fee_fu']].agg('sum').reset_index()
-    df_claims_pay[:2]
-
-
-
-
-    query = \
-    """
+    claims_where = claims_sql_predicate(icnl_alias="icnl", loss_alias="l")
+    query = f"""
     WITH doc as (
         SELECT [_Document5472_IDRRef]
               ,[_KeyField]
@@ -185,8 +136,8 @@ def load_claims(paths: DataPaths, conn, *, use_sql: bool = False, save_checkpoin
     LEFT JOIN [OISUU_report].[dbo].[oisuu81_t_IncidentToLoss] as itl on itl.LossNumber=icnl.LinkLossNumber
     LEFT JOIN [OISUU_report].[dbo].[oisuu81_t_Losses] as l on l.LossNumber=itl.LossNumber
     LEFT JOIN doc as docs on docs.[_Document5472_IDRRef]=icnl.[IncomingClaimID]
-    WHERE (ClaimOrigin not in ('Исходящий иск') or ClaimOrigin is null )
-        AND (docs.rn = 1 or docs.rn is null)
+    WHERE (docs.rn = 1 or docs.rn is null)
+        AND {claims_where}
     """
 
 

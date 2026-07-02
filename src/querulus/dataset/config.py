@@ -5,7 +5,6 @@ from pathlib import Path
 from querulus import PROJECT_ROOT
 from querulus.env import load_project_env
 
-base_path = Path(__file__).resolve().parent
 project_root = PROJECT_ROOT
 
 env_reader = load_project_env()
@@ -26,11 +25,8 @@ def _load_artifact_overrides() -> dict[str, str]:
     }
 
 
-# --- Dataset paths (collect pipeline) ---
-litigant_data_root = env_reader.str("LITIGANT_DATA_ROOT", str(project_root))
-litigant_legacy_data_root = env_reader.str("LITIGANT_LEGACY_DATA_ROOT", "")
+# --- Dataset paths ---
 victim_parquet_path = env_reader.str("VICTIM_PARQUET", "")
-litigant_artifact_version = env_reader.str("LITIGANT_ARTIFACT_VERSION", "")
 artifact_overrides = _load_artifact_overrides()
 
 # --- OISUU / pymssql ---

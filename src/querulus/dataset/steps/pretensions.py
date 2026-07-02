@@ -1,4 +1,8 @@
-"""Шаг пайплайна: pretensions."""
+"""Шаг пайплайна: pretensions.
+
+LEGACY (Litigant): не вызывается при include_enrich=False.
+SQL и обогащение претензий — справочник для будущего feature engineering (as-of T0).
+"""
 from __future__ import annotations
 
 import logging

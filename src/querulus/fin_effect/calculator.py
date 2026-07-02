@@ -75,20 +75,8 @@ def compute_fin_effect_fact(df: pd.DataFrame, config: FinEffectConfig | None = N
     return total
 
 
-def fix_target_on_pretension(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.DataFrame:
-    """TARGET='1', если были выплаты по претензиям при TARGET='0'."""
-    config = config or FinEffectConfig()
-    if not config.fix_target_on_pretension or config.target_column not in df.columns:
-        return df
-    result = df.copy()
-    pretensions = _numeric_series(result, config.pretension_payments_column)
-    mask = (result[config.target_column].astype(str) == "0") & (pretensions > 0)
-    result.loc[mask, config.target_column] = "1"
-    return result
-
-
 def prepare_effect_frame(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.DataFrame:
-    """Подготовить _df_effect: fillna, взносы, fin_effect_fact, правка TARGET."""
+    """Подготовить _df_effect: fillna, взносы, fin_effect_fact."""
     config = config or FinEffectConfig()
     result = df.copy()
 
@@ -104,7 +92,6 @@ def prepare_effect_frame(df: pd.DataFrame, config: FinEffectConfig | None = None
 
     result[config.premiums_column] = add_premiums_column(result, config)
     result["fin_effect_fact"] = compute_fin_effect_fact(result, config)
-    result = fix_target_on_pretension(result, config)
     return result
 
 

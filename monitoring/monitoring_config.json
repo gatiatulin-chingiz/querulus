@@ -5,5 +5,5 @@
     "dashboard_name": "querulus",
     "grafana_table_name": "querulus_DataDrift",
     "extrapolation_period": 4,
-    "target_column": "TARGET_3_SEV"
+    "target_column": "TARGET_SEV"
 }

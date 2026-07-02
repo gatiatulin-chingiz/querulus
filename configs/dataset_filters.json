@@ -1,0 +1,35 @@
+{
+  "_comment": "Единые фильтры пайплайна querulus.dataset. Редактируйте здесь, не в коде шагов.",
+
+  "victim": {
+    "_comment": "Фильтр строк victim parquet (pandas query). T0 — заявление первичного убытка.",
+    "refund_forms": [
+      "Ремонт",
+      "Денежная",
+      "Денежная. Отказ от ремонта",
+      "Ремонт. Смена СТОА"
+    ],
+    "loss_date_from": "2022-01-01",
+    "loss_date_to": "2025-06-30",
+    "loss_processes": [
+      "Прямое ОСАГО (с 1 марта 2009)",
+      "Традиционное ОСАГО"
+    ],
+    "risk": "Ущерб имуществу третьих лиц"
+  },
+
+  "claims_sql": {
+    "_comment": "Общий WHERE для исков (claims.py legacy, target_3_claims в targets.py). Кассация не фильтруется.",
+    "claim_origins": ["ВСК", "Обращение к ФУ"],
+    "exclude_claim_items": ["ВСК - 3 лицо"],
+    "loss_processes": [
+      "Прямое ОСАГО (с 1 марта 2009)",
+      "Традиционное ОСАГО"
+    ]
+  },
+
+  "primary_loss": {
+    "_comment": "Первичный убыток на инцидент: максимальный LossNumber (как в df_calc_agg).",
+    "order_by": "loss_number_desc"
+  }
+}
