@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
@@ -25,7 +26,6 @@ class LazyOisuuConnection:
 
     def get(self) -> pymssql.Connection:
         if self._conn is None:
-            logger.info("Подключение к OISUU (%s)...", config.oisuu_db_server or "?")
             self._conn = connect_oisuu()
         return self._conn
 
@@ -107,6 +107,17 @@ def _dedupe_columns(df: T) -> T:
     return df.loc[:, ~df.columns.duplicated()].copy()
 
 
+def _read_sql(query: str, connection) -> pd.DataFrame:
+    """read_sql без предупреждения pandas про pymssql DBAPI2."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="pandas only supports SQLAlchemy connectable.*",
+            category=UserWarning,
+        )
+        return pd.read_sql(query, connection)
+
+
 def checkpoint(
     df: T,
     paths: DataPaths,
@@ -143,17 +154,16 @@ def load_sql_artifact(
         path = paths.resolve_artifact(directory, name)
         if path is not None:
             return read_parquet_path(path, artifact=label, columns=columns)
-        logger.info("Parquet %r не найден — выгрузка из SQL", name)
 
-    reader = sql_reader or (lambda q, c: pd.read_sql(q, c))
-    logger.info("LOAD sql: %s", label)
+    out = paths.artifact(directory, name)
+    reader = sql_reader or _read_sql
     df = _dedupe_columns(reader(query, conn.get()))
+    _log_parquet("LOAD", out, df, label)
 
     if save_checkpoint:
-        out = paths.artifact(directory, name)
         out.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(str(out))
-        logger.info("SAVE raw: %s  shape=%s", out, df.shape)
+        _log_parquet("SAVE", out, df, label)
 
     return df
 

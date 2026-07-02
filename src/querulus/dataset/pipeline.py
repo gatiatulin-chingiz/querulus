@@ -6,7 +6,6 @@ import logging
 
 import pandas as pd
 
-from querulus.dataset import config
 from querulus.dataset.io import LazyOisuuConnection, setup_notebook_logging
 from querulus.dataset.paths import DataPaths
 from querulus.dataset.steps.claims import load_claims
@@ -26,12 +25,6 @@ def run_pipeline(
 ) -> pd.DataFrame:
     """Собрать обучающий датасет: victim → claims → payments → pretensions → enrich → targets."""
     setup_notebook_logging()
-    logger.info(
-        "Старт пайплайна: use_sql=%s, save_checkpoint=%s, data_root=%s",
-        use_sql,
-        save_checkpoint,
-        config.litigant_data_root,
-    )
 
     paths = DataPaths.from_config()
     conn = LazyOisuuConnection()
