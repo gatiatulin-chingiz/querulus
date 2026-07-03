@@ -31,12 +31,14 @@ def victim_filter_query(filters: dict[str, Any] | None = None) -> str:
     risk = json.dumps(cfg["risk"], ensure_ascii=False)
     date_from = json.dumps(cfg["loss_date_from"])
     date_to = json.dumps(cfg["loss_date_to"])
+    victim_object_type = json.dumps(cfg["victim_object_type"], ensure_ascii=False)
     return (
         f"REFUND_FORM_DETAILED in [{forms}]"
         f" and LOSS_DATE_TIME >= {date_from}"
         f" and LOSS_DATE_TIME <= {date_to}"
         f" and LOSS_PROCESS in [{processes}]"
         f" and RISK == {risk}"
+        f" and VICTIM_OBJECT_TYPE == {victim_object_type}"
     )
 
 
