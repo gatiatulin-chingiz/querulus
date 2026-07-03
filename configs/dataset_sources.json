@@ -2,6 +2,7 @@
   "_comment": "Явные пути к parquet (пустая строка = авто-поиск). Ключи совпадают с именами артефактов пайплайна.",
   "artifact_paths": {
     "victim": "",
+    "df_loss_object_types.parquet": "",
     "df_pretensions.parquet": "",
     "df_payments.parquet": "",
     "df_claims_persons.parquet": "",

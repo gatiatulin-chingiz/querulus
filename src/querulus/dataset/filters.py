@@ -41,38 +41,59 @@ def ensure_victim_object_type_column(
     """Гарантировать колонку VICTIM_OBJECT_TYPE в итоговом датасете."""
     df = _normalize_victim_object_type_column(df)
     if VICTIM_OBJECT_TYPE_COLUMN not in df.columns:
-        cfg = (filters or load_dataset_filters())["victim"]
-        df = df.copy()
-        df[VICTIM_OBJECT_TYPE_COLUMN] = cfg["victim_object_type"]
-    else:
-        df = df.copy()
-        df[VICTIM_OBJECT_TYPE_COLUMN] = df[VICTIM_OBJECT_TYPE_COLUMN].astype(str)
+        raise KeyError(
+            f"Колонка {VICTIM_OBJECT_TYPE_COLUMN!r} отсутствует. "
+            "Загрузите df_loss_object_types.parquet или включите USE_SQL=True."
+        )
+    df = df.copy()
+    df[VICTIM_OBJECT_TYPE_COLUMN] = df[VICTIM_OBJECT_TYPE_COLUMN].astype(str)
     return df
 
 
-def victim_filter_query(filters: dict[str, Any] | None = None) -> str:
-    """Pandas query для victim после загрузки parquet."""
+def victim_parquet_filter_query(filters: dict[str, Any] | None = None) -> str:
+    """Pandas query для victim parquet (без VictimObjectType)."""
     cfg = (filters or load_dataset_filters())["victim"]
     forms = _quote_list(cfg["refund_forms"])
     processes = _quote_list(cfg["loss_processes"])
     risk = json.dumps(cfg["risk"], ensure_ascii=False)
     date_from = json.dumps(cfg["loss_date_from"])
     date_to = json.dumps(cfg["loss_date_to"])
-    victim_object_type = json.dumps(cfg["victim_object_type"], ensure_ascii=False)
     return (
         f"REFUND_FORM_DETAILED in [{forms}]"
         f" and LOSS_DATE_TIME >= {date_from}"
         f" and LOSS_DATE_TIME <= {date_to}"
         f" and LOSS_PROCESS in [{processes}]"
         f" and RISK == {risk}"
-        f" and {VICTIM_OBJECT_TYPE_COLUMN} == {victim_object_type}"
     )
 
 
-def apply_victim_filters(df: pd.DataFrame, filters: dict[str, Any] | None = None) -> pd.DataFrame:
-    """Отфильтровать victim по единому конфигу."""
-    df = _normalize_victim_object_type_column(df)
-    return df.query(victim_filter_query(filters))
+def loss_object_types_sql(filters: dict[str, Any] | None = None) -> str:
+    """SQL: LossNumber, VictimObjectType, VictimVehicleTypeByClassificator из oisuu81_t_Losses."""
+    filters_cfg = filters or load_dataset_filters()
+    victim_cfg = filters_cfg["victim"]
+    sql_cfg = filters_cfg["loss_object_types_sql"]
+    processes = ", ".join(f"'{value}'" for value in victim_cfg["loss_processes"])
+    risk = victim_cfg["risk"].replace("'", "''")
+    insurance_type_group = sql_cfg["insurance_type_group"].replace("'", "''")
+    return f"""
+    SELECT
+        l.LossNumber AS LOSS_NUMBER,
+        l.VictimObjectType AS VICTIM_OBJECT_TYPE,
+        l.VictimVehicleTypeByClassificator AS VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR
+    FROM [OISUU_report].[dbo].[oisuu81_t_Losses] AS l
+    WHERE l.InsuranceTypeGroup = '{insurance_type_group}'
+      AND l.LossProcess IN ({processes})
+      AND l.Risk = '{risk}'
+    """
+
+
+def merge_loss_object_types(df: pd.DataFrame, df_loss_types: pd.DataFrame) -> pd.DataFrame:
+    """Присоединить VictimObjectType к victim по LOSS_NUMBER."""
+    loss_types = _normalize_victim_object_type_column(df_loss_types)
+    columns = ["LOSS_NUMBER", VICTIM_OBJECT_TYPE_COLUMN]
+    if "VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR" in loss_types.columns:
+        columns.append("VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR")
+    return df.merge(loss_types[columns].drop_duplicates("LOSS_NUMBER"), on="LOSS_NUMBER", how="left")
 
 
 def claims_sql_predicate(

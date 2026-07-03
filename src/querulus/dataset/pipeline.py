@@ -38,7 +38,9 @@ def run_pipeline(
     df: pd.DataFrame | None = None
 
     try:
-        df_victim = load_victim(paths)
+        df_victim = load_victim(
+            paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint
+        )
 
         if include_enrich:
             df_claims_persons, df_claims, df_claims_ = load_claims(

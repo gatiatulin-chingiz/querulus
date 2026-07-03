@@ -11,14 +11,13 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
-from querulus.dataset.filters import apply_victim_filters
 from querulus.dataset.io import checkpoint
 from querulus.dataset.paths import DataPaths
 from querulus.dataset.utils import my_mode
 
 
 def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims_payments, df_pretensions, df_claims_persons, pretension_fio_id, *, save_checkpoint: bool = True):
-    df = apply_victim_filters(df_victim)
+    df = df_victim
     df = checkpoint(
         df,
         paths,

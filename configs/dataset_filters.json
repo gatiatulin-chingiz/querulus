@@ -19,6 +19,11 @@
     "victim_object_type": "Автотранспорт"
   },
 
+  "loss_object_types_sql": {
+    "_comment": "VictimObjectType из oisuu81_t_Losses (нет в victim parquet). loss_processes/risk — из victim.",
+    "insurance_type_group": "ОСАГо"
+  },
+
   "claims_sql": {
     "_comment": "Общий WHERE для исков (claims.py legacy, target_3_claims в targets.py). Кассация не фильтруется.",
     "claim_origins": ["ВСК", "Обращение к ФУ"],
