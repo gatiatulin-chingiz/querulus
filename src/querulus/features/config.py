@@ -42,6 +42,28 @@ class FeatureConfig:
     fe_columns: tuple[str, ...] = ()
 
 
+FE_CATEGORICAL_SUFFIXES: tuple[str, ...] = ("_BIN", "_BUCKET", "_TIER")
+FE_CATEGORICAL_EXPLICIT: frozenset[str] = frozenset(
+    {
+        "FE_SEASON_EVENT",
+        "FE_HOUR_BUCKET_EVENT",
+        "FE_PARTICIPANTS_BIN",
+    }
+)
+
+
+def is_fe_categorical(column: str) -> bool:
+    """Строковые FE-колонки (бакеты), которые CatBoost должен получать как cat."""
+    return column.startswith("FE_") and (
+        column in FE_CATEGORICAL_EXPLICIT or column.endswith(FE_CATEGORICAL_SUFFIXES)
+    )
+
+
+def fe_categorical_columns(columns: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    """Отфильтровать категориальные FE из списка имён колонок."""
+    return tuple(column for column in columns if is_fe_categorical(column))
+
+
 def load_feature_config(path: Path | None = None) -> FeatureConfig:
     """Загрузить configs/features_v1.json."""
     config_path = path or _CONFIG_PATH

@@ -11,6 +11,7 @@ import sys
 import pandas as pd
 
 from querulus import PROJECT_ROOT
+from querulus.features.config import is_fe_categorical
 from querulus.training.config import TrainingConfig
 
 
@@ -117,8 +118,26 @@ def _stringify_categorical_columns(df: pd.DataFrame, columns: list[str]) -> pd.D
     return result
 
 
-def resolve_mvp_types(df: pd.DataFrame, config: TrainingConfig) -> dict[str, list[str]]:
-    """Словарь типов признаков после value_type + correct_types (как mvp.types_dict в model_learn)."""
+def _fe_categorical_in_frame(df: pd.DataFrame) -> list[str]:
+    """Категориальные FE_* колонки, присутствующие во фрейме."""
+    return [column for column in df.columns if is_fe_categorical(column)]
+
+
+def _merge_fe_categorical_types(input_types: dict[str, list[str]], fe_cat: list[str]) -> dict[str, list[str]]:
+    """Добавить FE-бакеты в CATEGORIAL и убрать из NUMERIC."""
+    merged = {key: list(value) for key, value in input_types.items()}
+    categorical = list(dict.fromkeys(merged.get("CATEGORIAL", []) + fe_cat))
+    numeric = [column for column in merged.get("NUMERIC", []) if column not in fe_cat]
+    merged["CATEGORIAL"] = categorical
+    merged["NUMERIC"] = numeric
+    return merged
+
+
+def _apply_mvp_types(
+    df: pd.DataFrame,
+    config: TrainingConfig,
+) -> tuple[pd.DataFrame, dict[str, list[str]]]:
+    """value_type → stringify cat → correct_types с учётом FE-бакетов."""
     try:
         from querulus.AutoMVP import MVP
     except Exception as exc:
@@ -127,48 +146,51 @@ def resolve_mvp_types(df: pd.DataFrame, config: TrainingConfig) -> dict[str, lis
             "Проверьте, что AutoMVP.py является валидным Python-модулем."
         ) from exc
 
+    fe_cat = _fe_categorical_in_frame(df)
     mvp = MVP(df, print_col_type=False)
     with contextlib.redirect_stdout(io.StringIO()):
         mvp.value_type()
 
+    initial_categorical = list(
+        dict.fromkeys(mvp.types_dict["BINARY"] + mvp.types_dict["CATEGORIAL"] + fe_cat)
+    )
+    data = _stringify_categorical_columns(df, initial_categorical)
+
     other_cols = [config.date_column, *config.drop_columns]
-    input_types = {key: list(value) for key, value in config.mvp_input_types.items()}
+    input_types = _merge_fe_categorical_types(
+        {key: list(value) for key, value in config.mvp_input_types.items()},
+        fe_cat,
+    )
     mvp.correct_types(input_types, other_cols)
-    return {key: list(value) for key, value in mvp.types_dict.items()}
+    types = {key: list(value) for key, value in mvp.types_dict.items()}
+    return data, types
+
+
+def resolve_mvp_types(df: pd.DataFrame, config: TrainingConfig) -> dict[str, list[str]]:
+    """Словарь типов признаков после value_type + correct_types (как mvp.types_dict в model_learn)."""
+    _, types = _apply_mvp_types(df, config)
+    return types
 
 
 def _mvp_features(df: pd.DataFrame, config: TrainingConfig) -> tuple[pd.DataFrame, list[str], list[str]]:
     """Определить типы признаков через AutoMVP (порядок шагов как в model_learn.py)."""
-    try:
-        from querulus.AutoMVP import MVP
-    except Exception as exc:
-        raise ImportError(
-            "Не удалось импортировать querulus.AutoMVP.MVP. "
-            "Проверьте, что AutoMVP.py является валидным Python-модулем."
-        ) from exc
-
-    mvp = MVP(df, print_col_type=False)
-    with contextlib.redirect_stdout(io.StringIO()):
-        mvp.value_type()
-
-    # В Litigant: сначала value_type, затем str-кодирование cat/binary, затем correct_types.
-    initial_categorical = mvp.types_dict["BINARY"] + mvp.types_dict["CATEGORIAL"]
-    data = _stringify_categorical_columns(df, initial_categorical)
-
-    other_cols = [config.date_column, *config.drop_columns]
-    input_types = {key: list(value) for key, value in config.mvp_input_types.items()}
-    mvp.correct_types(input_types, other_cols)
-    types = mvp.types_dict
+    data, types = _apply_mvp_types(df, config)
+    fe_cat = set(_fe_categorical_in_frame(df))
     features = [
         column
         for column in types["BINARY"] + types["CATEGORIAL"] + types["NUMERIC"]
         if column in data.columns and column not in config.drop_columns
     ]
-    categorical = [
-        column
-        for column in types["CATEGORIAL"] + types["BINARY"]
-        if column in features
-    ]
+    categorical = list(
+        dict.fromkeys(
+            [
+                column
+                for column in types["CATEGORIAL"] + types["BINARY"]
+                if column in features
+            ]
+            + [column for column in fe_cat if column in features]
+        )
+    )
     return data, features, categorical
 
 

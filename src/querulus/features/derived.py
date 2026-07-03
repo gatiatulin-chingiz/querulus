@@ -238,12 +238,8 @@ def _add_victim_vehicle_features(df: pd.DataFrame, config: FeatureConfig) -> pd.
     made_rf = _as_flag(_series(df, "VICTIM_VEHICLE_MADE_IN_RF"))
     df["FE_VICTIM_JAPAN_RF"] = ((japan == 1) & (made_rf == 1)).astype("Int64")
 
-    df["FE_VICTIM_ENGINE_BUCKET"] = (
-        _series(df, "VICTIM_TYPE_ENGINE").astype("string").fillna("missing")
-    )
-    df["FE_VICTIM_BODY_BUCKET"] = (
-        _series(df, "VICTIM_TYPE_BODY").astype("string").fillna("missing")
-    )
+    df["FE_VICTIM_ENGINE_BUCKET"] = _series(df, "VICTIM_TYPE_ENGINE").astype("string")
+    df["FE_VICTIM_BODY_BUCKET"] = _series(df, "VICTIM_TYPE_BODY").astype("string")
     return df
 
 
@@ -259,9 +255,7 @@ def _add_guilty_vehicle_features(df: pd.DataFrame, config: FeatureConfig) -> pd.
     )
     weight = pd.to_numeric(_series(df, "GUILTY_MAX_WEIGHT"), errors="coerce")
     df["FE_GUILTY_HEAVY"] = (weight > th.vehicle_weight_heavy).astype("Int64")
-    df["FE_GUILTY_ENGINE_BUCKET"] = (
-        _series(df, "GUILTY_TYPE_ENGINE").astype("string").fillna("missing")
-    )
+    df["FE_GUILTY_ENGINE_BUCKET"] = _series(df, "GUILTY_TYPE_ENGINE").astype("string")
     return df
 
 
