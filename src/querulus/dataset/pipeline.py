@@ -14,6 +14,7 @@ from querulus.dataset.steps.payments import load_claims_payments
 from querulus.dataset.steps.pretensions import load_pretensions
 from querulus.dataset.steps.targets import build_targets
 from querulus.dataset.steps.victim import load_victim
+from querulus.features.pipeline import run_features
 
 logger = logging.getLogger("querulus.dataset")
 
@@ -74,6 +75,7 @@ def run_pipeline(
         df = build_targets(
             paths, conn, df, save_checkpoint=save_checkpoint, use_sql=use_sql
         )
+        df = run_features(df, paths, save_checkpoint=save_checkpoint)
     finally:
         conn.close()
 

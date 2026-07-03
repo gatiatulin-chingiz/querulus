@@ -6,7 +6,7 @@ import pandas as pd
 
 from querulus.dataset.constants import RENAME_DICT
 from querulus.dataset.filters import claims_sql_predicate, ensure_victim_object_type_column, select_primary_loss_per_incident
-from querulus.dataset.io import checkpoint, load_sql_artifact
+from querulus.dataset.io import load_sql_artifact
 from querulus.dataset.paths import DataPaths
 
 
@@ -303,11 +303,4 @@ def build_targets(
 
     df = ensure_victim_object_type_column(df)
 
-    df = checkpoint(
-        df,
-        paths,
-        paths.processed_dir,
-        "df_final_3.parquet",
-        save=save_checkpoint,
-    )
     return df

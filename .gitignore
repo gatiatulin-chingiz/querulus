@@ -52,3 +52,7 @@ results/
 *.tmp
 *.bak
 *~
+
+# FE-документация (локально, не в git)
+features_engineering/discriptions/
+features_engineering/features_list.txt
