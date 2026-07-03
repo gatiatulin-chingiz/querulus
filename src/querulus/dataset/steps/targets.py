@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 from querulus.dataset.constants import RENAME_DICT
-from querulus.dataset.filters import claims_sql_predicate, select_primary_loss_per_incident
+from querulus.dataset.filters import claims_sql_predicate, ensure_victim_object_type_column, select_primary_loss_per_incident
 from querulus.dataset.io import checkpoint, load_sql_artifact
 from querulus.dataset.paths import DataPaths
 
@@ -300,6 +300,8 @@ def build_targets(
         df['Сумма_выплат_по_претензиям'] + df['Сумма_взыскано_по_ФУ'] + df['Суммы_взыскано_по_иску']
     ).fillna(0)
     df['TARGET'] = df['TARGET'].apply(lambda x: 1 if x > 0 else 0).astype(int)
+
+    df = ensure_victim_object_type_column(df)
 
     df = checkpoint(
         df,

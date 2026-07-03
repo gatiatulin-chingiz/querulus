@@ -10,6 +10,8 @@ import pandas as pd
 from querulus import PROJECT_ROOT
 
 _FILTERS_PATH = PROJECT_ROOT / "configs" / "dataset_filters.json"
+VICTIM_OBJECT_TYPE_COLUMN = "VICTIM_OBJECT_TYPE"
+_VICTIM_OBJECT_TYPE_ALIASES = ("VictimObjectType",)
 
 
 def load_dataset_filters() -> dict[str, Any]:
@@ -21,6 +23,31 @@ def load_dataset_filters() -> dict[str, Any]:
 
 def _quote_list(values: list[str]) -> str:
     return ", ".join(json.dumps(item, ensure_ascii=False) for item in values)
+
+
+def _normalize_victim_object_type_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Привести имя колонки типа объекта потерпевшего к VICTIM_OBJECT_TYPE."""
+    if VICTIM_OBJECT_TYPE_COLUMN in df.columns:
+        return df
+    for alias in _VICTIM_OBJECT_TYPE_ALIASES:
+        if alias in df.columns:
+            return df.rename(columns={alias: VICTIM_OBJECT_TYPE_COLUMN})
+    return df
+
+
+def ensure_victim_object_type_column(
+    df: pd.DataFrame, filters: dict[str, Any] | None = None
+) -> pd.DataFrame:
+    """Гарантировать колонку VICTIM_OBJECT_TYPE в итоговом датасете."""
+    df = _normalize_victim_object_type_column(df)
+    if VICTIM_OBJECT_TYPE_COLUMN not in df.columns:
+        cfg = (filters or load_dataset_filters())["victim"]
+        df = df.copy()
+        df[VICTIM_OBJECT_TYPE_COLUMN] = cfg["victim_object_type"]
+    else:
+        df = df.copy()
+        df[VICTIM_OBJECT_TYPE_COLUMN] = df[VICTIM_OBJECT_TYPE_COLUMN].astype(str)
+    return df
 
 
 def victim_filter_query(filters: dict[str, Any] | None = None) -> str:
@@ -38,12 +65,13 @@ def victim_filter_query(filters: dict[str, Any] | None = None) -> str:
         f" and LOSS_DATE_TIME <= {date_to}"
         f" and LOSS_PROCESS in [{processes}]"
         f" and RISK == {risk}"
-        f" and VICTIM_OBJECT_TYPE == {victim_object_type}"
+        f" and {VICTIM_OBJECT_TYPE_COLUMN} == {victim_object_type}"
     )
 
 
 def apply_victim_filters(df: pd.DataFrame, filters: dict[str, Any] | None = None) -> pd.DataFrame:
     """Отфильтровать victim по единому конфигу."""
+    df = _normalize_victim_object_type_column(df)
     return df.query(victim_filter_query(filters))
 
 
