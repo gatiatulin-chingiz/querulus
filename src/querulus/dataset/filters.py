@@ -68,7 +68,7 @@ def victim_parquet_filter_query(filters: dict[str, Any] | None = None) -> str:
 
 
 def loss_object_types_sql(filters: dict[str, Any] | None = None) -> str:
-    """SQL: LossNumber, VictimObjectType, VictimVehicleTypeByClassificator из oisuu81_t_Losses."""
+    """SQL: поля из oisuu81_t_Losses, отсутствующие в victim parquet."""
     filters_cfg = filters or load_dataset_filters()
     victim_cfg = filters_cfg["victim"]
     sql_cfg = filters_cfg["loss_object_types_sql"]
@@ -79,7 +79,8 @@ def loss_object_types_sql(filters: dict[str, Any] | None = None) -> str:
     SELECT
         l.LossNumber AS LOSS_NUMBER,
         l.VictimObjectType AS VICTIM_OBJECT_TYPE,
-        l.VictimVehicleTypeByClassificator AS VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR
+        l.VictimVehicleTypeByClassificator AS VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR,
+        l.RefundFormByPaymentOrder AS REFUND_FORM_BY_PAYMENT_ORDER
     FROM [OISUU_report].[dbo].[oisuu81_t_Losses] AS l
     WHERE l.InsuranceTypeGroup = '{insurance_type_group}'
       AND l.LossProcess IN ({processes})
@@ -88,11 +89,15 @@ def loss_object_types_sql(filters: dict[str, Any] | None = None) -> str:
 
 
 def merge_loss_object_types(df: pd.DataFrame, df_loss_types: pd.DataFrame) -> pd.DataFrame:
-    """Присоединить VictimObjectType к victim по LOSS_NUMBER."""
+    """Присоединить поля из oisuu81_t_Losses к victim по LOSS_NUMBER."""
     loss_types = _normalize_victim_object_type_column(df_loss_types)
     columns = ["LOSS_NUMBER", VICTIM_OBJECT_TYPE_COLUMN]
-    if "VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR" in loss_types.columns:
-        columns.append("VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR")
+    for optional in (
+        "VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR",
+        "REFUND_FORM_BY_PAYMENT_ORDER",
+    ):
+        if optional in loss_types.columns:
+            columns.append(optional)
     return df.merge(loss_types[columns].drop_duplicates("LOSS_NUMBER"), on="LOSS_NUMBER", how="left")
 
 
