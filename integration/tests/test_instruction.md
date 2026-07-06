@@ -31,7 +31,7 @@ python -m unittest integration.tests.unit_tests -v
 
 Обязательные переменные для интеграционных тестов с моделями:
 
-- `OUTBOXML_MODEL_GROUP` — stem файла `*.pickle` в `data/processed/`
+- `OUTBOXML_MODEL_GROUP` — stem файла `*.pickle` в `integration/results/` (или `prod_models_path`)
 - `OUTBOXML_TRAIN_DF_PATH` — путь к обучающему датафрейму
 
 ```bash

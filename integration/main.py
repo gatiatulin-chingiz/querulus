@@ -244,18 +244,17 @@ def _prod_models_dir() -> Path:
     """
     Абсолютный путь к каталогу с файлами ``*.pickle``.
 
-    Берётся ``config.prod_models_path``: если относительный — склеивается с
-    ``config.base_path`` при наличии, иначе с текущим рабочим каталогом процесса.
+    Берётся ``config.prod_models_path`` (str или Path): если относительный — склеивается с
+    ``config.base_path``.
 
     Возвращает:
         pathlib.Path: существующий или ожидаемый каталог моделей.
     """
-    # Склеиваем base_path из конфига с путем к моделям и возвращаем абсолютный путь
     base = Path(config.base_path)
-    models_path = config.prod_models_path
-    resolved = models_path if models_path.is_absolute() else (base / models_path).resolve()
-    
-    return resolved
+    models_path = Path(config.prod_models_path)
+    if models_path.is_absolute():
+        return models_path
+    return (base / models_path).resolve()
 
 
 # reviewed
