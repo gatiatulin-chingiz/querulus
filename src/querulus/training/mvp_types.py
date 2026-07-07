@@ -1,6 +1,18 @@
 """MVP feature types from model_learn.py."""
 from __future__ import annotations
 
+# Колонки из build_targets: pivot взысканий по текущему инциденту → TARGET_SEV (утечка).
+_TARGET_SEV_RECOVERED_COLS: tuple[str, ...] = tuple(
+    f"{prefix}_{instance}"
+    for prefix in (
+        "RECOVEREDMAINDEBT",
+        "RECOVEREDWEAROUT",
+        "RECOVEREDLOSSCOMMODYVALUE",
+        "RECOVEREDVALUEWITHSD",
+    )
+    for instance in range(1, 6)
+)
+
 DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': ['LONGITUDE', 'LATITUDE'],
  'CATEGORIAL': [],
  'TO_DROP': ['Сумма_взыскано_по_ФУ',
@@ -11,6 +23,10 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': ['LONGITUDE', 'LATIT
              'Номер_инциндента',
              'UTSSurchargeValue_cumsum_by_incident_all',
              'SurchargeValue_cumsum_by_incident_all',
+             'SurchargeValue_cumsum_by_incident',
+             'UTSSurchargeValue_cumsum_by_incident',
+             'Сумма_утс',
+             *list(_TARGET_SEV_RECOVERED_COLS),
              'PAYMENT_VALUE',
              'Сумма_выплат_по_претензиям',
              'FIN',
