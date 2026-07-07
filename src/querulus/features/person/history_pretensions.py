@@ -24,6 +24,14 @@ def _prep_pretensions(df_pret: pd.DataFrame) -> pd.DataFrame:
         df["SURCHARGE_VALUE"] = df["SURCHARGEVALUE"]
     if "UTSSURCHARGEVALUE" in df.columns and "UTS_SURCHARGE_VALUE" not in df.columns:
         df["UTS_SURCHARGE_VALUE"] = df["UTSSURCHARGEVALUE"]
+    if "PRETENSIONNUMBER" in df.columns and "PRETENSION_NUMBER" not in df.columns:
+        df["PRETENSION_NUMBER"] = df["PRETENSIONNUMBER"]
+    if "PRETENSIONTYPES" in df.columns and "PRETENSION_TYPES" not in df.columns:
+        df["PRETENSION_TYPES"] = df["PRETENSIONTYPES"]
+    if "PRETENSIONGETMETHOD" in df.columns and "PRETENSION_GET_METHOD" not in df.columns:
+        df["PRETENSION_GET_METHOD"] = df["PRETENSIONGETMETHOD"]
+    if "ANSWERTYPE" in df.columns and "ANSWER_TYPE" not in df.columns:
+        df["ANSWER_TYPE"] = df["ANSWERTYPE"]
 
     df["PRETENSION_GET_DATE"] = pd.to_datetime(df.get("PRETENSION_GET_DATE"), errors="coerce")
     df[INCIDENT_COLUMN] = pd.to_numeric(df.get(INCIDENT_COLUMN), errors="coerce")
