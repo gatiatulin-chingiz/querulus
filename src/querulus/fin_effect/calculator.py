@@ -45,8 +45,8 @@ class FinEffectResult:
     best_threshold: float
     threshold_metrics: dict[float, ThresholdMetrics]
     net_effect: float
-    baseline_fact_total: float
-    net_effect_vs_baseline: float
+    model_effect_total: float
+    fact_effect_total: float
     threshold_strategies: dict[str, ThresholdStrategyResult] | None = None
 
 
@@ -202,9 +202,16 @@ def search_best_threshold(
     return best_threshold, results
 
 
-def _baseline_fact_total(base_sum: np.ndarray) -> float:
-    """Эталон: суммарный fin_effect_fact (текущий бизнес-процесс)."""
-    return float(np.asarray(base_sum, dtype=float).sum())
+def _signed_effect_totals(
+    fin_effect_model: np.ndarray,
+    fact_before_negate: np.ndarray,
+) -> tuple[float, float, float]:
+    """Итоги в знаковой конвенции Litigant: факт и модель отрицательные, net — экономия."""
+    model_total = float(np.asarray(fin_effect_model, dtype=float).sum())
+    fact_positive = float(np.asarray(fact_before_negate, dtype=float).sum())
+    fact_signed = -fact_positive
+    net_effect = model_total - fact_signed
+    return model_total, fact_signed, net_effect
 
 
 def _f1_score(precision: float, recall: float) -> float:
@@ -299,7 +306,6 @@ def apply_model_predictions(
     y_true_freq_arr = np.asarray(y_true_freq, dtype=int)
     y_proba_arr = np.asarray(y_proba_freq, dtype=float)
     y_pred_sev_arr = np.asarray(y_pred_sev, dtype=float)
-    baseline_total = _baseline_fact_total(base_sum)
     threshold_strategies = search_threshold_strategies(
         y_proba_arr,
         y_true_freq_arr,
@@ -339,8 +345,10 @@ def apply_model_predictions(
     frame["pred_freq"] = pred_freq
     frame["pred_sev"] = y_pred_sev_arr
     frame["fin_effect_model"] = fin_effect_model
-    # negate — только для отчёта; net_effect считаем до инверсии (как в Litigant)
-    net_effect = float(frame["fin_effect_model"].sum() - (-frame["fin_effect_fact"].sum()))
+    model_total, fact_signed, net_effect = _signed_effect_totals(
+        fin_effect_model,
+        frame["fin_effect_fact"].to_numpy(),
+    )
     if config.negate_fact_for_report:
         frame["fin_effect_fact"] = -frame["fin_effect_fact"]
     return FinEffectResult(
@@ -348,8 +356,8 @@ def apply_model_predictions(
         best_threshold=best_threshold,
         threshold_metrics=threshold_metrics,
         net_effect=net_effect,
-        baseline_fact_total=baseline_total,
-        net_effect_vs_baseline=net_effect - baseline_total,
+        model_effect_total=model_total,
+        fact_effect_total=fact_signed,
         threshold_strategies=threshold_strategies,
     )
 
@@ -504,10 +512,10 @@ def print_best_threshold_report(result: FinEffectResult) -> None:
     print("\n" + "=" * 70)
     print("ОПТИМАЛЬНЫЙ ПОРОГ КЛАССИФИКАЦИИ")
     print("=" * 70)
-    print(f"Порог вероятности (net_effect): {result.best_threshold:.2f}")
-    print(f"Чистый финансовый эффект   : {result.net_effect:,.2f} ₽")
-    print(f"Baseline fin_effect_fact   : {result.baseline_fact_total:,.2f} ₽")
-    print(f"Δ net_effect vs baseline   : {result.net_effect_vs_baseline:,.2f} ₽")
+    print(f"Порог вероятности              : {result.best_threshold:.2f}")
+    print(f"Фин. эффект факт (baseline)    : {result.fact_effect_total:,.2f} ₽")
+    print(f"Фин. эффект модели             : {result.model_effect_total:,.2f} ₽")
+    print(f"Чистый финансовый эффект (Δ)   : {result.net_effect:,.2f} ₽")
     if result.threshold_strategies:
         print("\nСравнение стратегий порога:")
         for strategy in result.threshold_strategies.values():
