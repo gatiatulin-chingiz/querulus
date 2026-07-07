@@ -56,3 +56,6 @@ results/
 # FE-документация (локально, не в git)
 features_engineering/discriptions/
 features_engineering/features_list.txt
+
+# SQL-справочник колонок (локально, не в git)
+src/querulus/dataset/sql/
