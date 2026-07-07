@@ -75,7 +75,13 @@ def run_pipeline(
         df = build_targets(
             paths, conn, df, save_checkpoint=save_checkpoint, use_sql=use_sql
         )
-        df = run_features(df, paths, save_checkpoint=save_checkpoint)
+        df = run_features(
+            df,
+            paths,
+            conn=conn,
+            use_sql=use_sql,
+            save_checkpoint=save_checkpoint,
+        )
     finally:
         conn.close()
 

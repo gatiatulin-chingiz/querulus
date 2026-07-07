@@ -18,16 +18,29 @@ def run_features(
     df: pd.DataFrame,
     paths: DataPaths,
     *,
+    conn=None,
+    use_sql: bool = False,
     config: FeatureConfig | None = None,
     save_checkpoint: bool = True,
 ) -> pd.DataFrame:
-    """Этап 0 (cleanup) + этап 1 (derived) и сохранение df_final_3."""
+    """Этап 0 (cleanup) + этап 1 (derived) + person-history и сохранение df_final_3."""
     feature_config = config or load_feature_config()
     rows_before = len(df)
     cols_before = df.shape[1]
 
     df = cleanup_merge_columns(df, feature_config)
     df = add_derived_features(df, feature_config)
+
+    # Person features: история по людям as-of T0 (без legacy enrich).
+    from querulus.features.person.pipeline import run_person_features
+
+    df = run_person_features(
+        df,
+        paths,
+        conn=conn,
+        use_sql=use_sql,
+        save_checkpoint=save_checkpoint,
+    )
 
     fe_added = [col for col in feature_config.fe_columns if col in df.columns]
     logger.info(

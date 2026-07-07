@@ -63,13 +63,12 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': ['LONGITUDE', 'LATIT
              'Взысканный_износ_ФУ',
              'REPAIR_VALUE',
              'Выплаченный_износ_инцидент',
-             'VALUE_AFTER_WITH',
+             # VALUE_BEFORE_WITH / VALUE_AFTER_WITH разрешаем (временно) для обучения
              'CHECK',
              # refund / payment leakage (post-T0)
              'REFUND_FORM_BY_PAYMENT_ORDER',
              'FACT_AMOUNT_WITHOUT_OUTRUN',
              'FACT_AMOUNT_WITH_OUTRUN',
-             'VALUE_BEFORE_WITH',
              'FE_REFUND_FORM_MATCH',
              'FE_REFUND_FORM_MISMATCH',
              'FE_REFUND_IS_CASH',
