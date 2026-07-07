@@ -27,6 +27,8 @@ class TrainingConfig:
 
     Категориальные признаки: AutoMVP ``CATEGORIAL + BINARY`` после ``correct_types``,
     пересечение с признаками конкретной модели — как в Litigant.
+
+    ``mvp_cutoff_nan``: доля пропусков, выше которой AutoMVP убирает колонку из пула.
   """
 
     date_column: str = "LOSS_DATE_TIME"
@@ -39,6 +41,7 @@ class TrainingConfig:
     severity_iterations: int = 100
     frequency_random_state: int = 0
     severity_random_state: int = 0
+    mvp_cutoff_nan: float = 0.95
     modeldiagnostics_root: Path | str | None = "/home/jovyan/old_home"
     frequency_features: tuple[str, ...] | None = DEFAULT_FREQUENCY_FEATURES
     severity_features: tuple[str, ...] | None = DEFAULT_SEVERITY_FEATURES

@@ -147,7 +147,7 @@ def _apply_mvp_types(
         ) from exc
 
     fe_cat = _fe_categorical_in_frame(df)
-    mvp = MVP(df, print_col_type=False)
+    mvp = MVP(df, print_col_type=False, cutoff_nan=config.mvp_cutoff_nan)
     with contextlib.redirect_stdout(io.StringIO()):
         mvp.value_type()
 
