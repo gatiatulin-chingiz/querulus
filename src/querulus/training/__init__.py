@@ -6,6 +6,7 @@ from querulus.training.pipeline import (
     format_features_table,
     format_metrics_table,
     format_training_summary,
+    frequency_predict_proba,
     log_training_summary,
     train_models,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "format_features_table",
     "format_metrics_table",
     "format_training_summary",
+    "frequency_predict_proba",
     "log_training_summary",
     "run_model_diagnostics_visualizations",
     "run_mvp_frequency_eda",

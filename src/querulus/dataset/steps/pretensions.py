@@ -13,6 +13,7 @@ from sklearn.preprocessing import OneHotEncoder
 from querulus.dataset.constants import RENAME_DICT
 from querulus.dataset.io import checkpoint, load_sql_artifact
 from querulus.dataset.paths import DataPaths
+from querulus.dataset.pretension_utils import dedupe_pretension_rows
 from querulus.dataset.utils import convert_to_binary, hex_upper
 
 logger = logging.getLogger("querulus.dataset")
@@ -35,6 +36,7 @@ def load_pretensions(paths: DataPaths, conn, *, use_sql: bool = False, save_chec
     )
 
     df_pretensions = df_pretensions.loc[:, ~df_pretensions.columns.duplicated()].copy()
+    df_pretensions = dedupe_pretension_rows(df_pretensions)
 
     # хадуп не работает, поэтому берем нужные id фио из sql
     sql_pret_id = ( """

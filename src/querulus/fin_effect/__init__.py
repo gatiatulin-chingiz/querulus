@@ -7,6 +7,7 @@ from typing import Any
 from querulus.fin_effect.calculator import (
     FinEffectResult,
     ThresholdMetrics,
+    ThresholdStrategyResult,
     add_premiums_column,
     apply_model_predictions,
     compute_fin_effect_fact,
@@ -19,6 +20,8 @@ from querulus.fin_effect.calculator import (
     run_fin_effect_from_training,
     run_fin_effect_pipeline,
     search_best_threshold,
+    search_best_threshold_by_f1,
+    search_threshold_strategies,
 )
 from querulus.fin_effect.config import ANALYTICS_RENAME_DICT, FinEffectConfig
 from querulus.fin_effect.export import export_analytics_excel
@@ -51,6 +54,7 @@ __all__ = [
     "FinEffectConfig",
     "FinEffectResult",
     "ThresholdMetrics",
+    "ThresholdStrategyResult",
     "add_premiums_column",
     "apply_model_predictions",
     "color_excel_table",
@@ -74,4 +78,6 @@ __all__ = [
     "run_fin_effect_from_training",
     "run_fin_effect_pipeline",
     "search_best_threshold",
+    "search_best_threshold_by_f1",
+    "search_threshold_strategies",
 ]

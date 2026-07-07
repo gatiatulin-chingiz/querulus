@@ -12,6 +12,7 @@ import pandas as pd
 
 from querulus.dataset.io import LazyOisuuConnection, load_sql_artifact
 from querulus.dataset.paths import DataPaths
+from querulus.dataset.pretension_utils import dedupe_pretension_rows
 
 
 def _require_conn(conn: LazyOisuuConnection | None, use_sql: bool) -> LazyOisuuConnection:
@@ -44,7 +45,7 @@ def load_pretensions_base(
         save_checkpoint=save_checkpoint,
     )
     df.columns = df.columns.str.upper()
-    return df
+    return dedupe_pretension_rows(df)
 
 
 def load_pretensions_penalty_surcharge(

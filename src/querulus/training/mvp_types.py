@@ -63,6 +63,7 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': ['LONGITUDE', 'LATIT
              'SEASON_SUMMER_PRECIPITATION_AVG_MAX_osago',
              'total_loss_osago',
              'LOSS_UNIT_DIVISION',
+             'LOSS_STAGE',
              'FUTURE_PROLONGATION_osago',
              'SEASON_WINTER_TEMPERATURE_DEV_MAX_osago',
              'SEASON_SUMMER_TEMPERATURE_AVG_MAX_osago',

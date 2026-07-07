@@ -48,6 +48,8 @@ FE_CATEGORICAL_EXPLICIT: frozenset[str] = frozenset(
         "FE_SEASON_EVENT",
         "FE_HOUR_BUCKET_EVENT",
         "FE_PARTICIPANTS_BIN",
+        "FE_DTPOSAGO_TYPE",
+        "FE_EVENT_SCHEME",
     }
 )
 

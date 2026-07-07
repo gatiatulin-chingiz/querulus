@@ -27,7 +27,7 @@ class FinEffectConfig:
     negate_fact_for_report: bool = True
     threshold_start: float = 0.0
     threshold_stop: float = 1.1
-    threshold_step: float = 0.1
+    threshold_step: float = 0.01
     train_period: tuple[str, str] = ("2022-01-01", "2024-05-31")
     test_period: tuple[str, str] = ("2024-06-01", "2025-06-01")
     export_columns: tuple[str, ...] = field(

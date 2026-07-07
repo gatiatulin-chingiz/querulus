@@ -5,14 +5,18 @@ import contextlib
 from dataclasses import dataclass
 import importlib
 import io
+import logging
 from pathlib import Path
 import sys
 
+import numpy as np
 import pandas as pd
 
 from querulus import PROJECT_ROOT
 from querulus.features.config import is_fe_categorical
 from querulus.training.config import TrainingConfig
+
+logger = logging.getLogger("querulus.training")
 
 
 @dataclass
@@ -77,17 +81,25 @@ class TrainingArtifacts:
     frequency_split: DatasetSplit | None = None
     severity_split: DatasetSplit | None = None
     feature_frame: pd.DataFrame | None = None
+    frequency_calibrator: object | None = None
+    frequency_feature_selection_summary: dict[str, object] | None = None
 
 
 def _require_catboost():
     """Импортировать CatBoost только при запуске обучения."""
     try:
-        from catboost import CatBoostClassifier, CatBoostRegressor, Pool
+        from catboost import (
+            CatBoostClassifier,
+            CatBoostRegressor,
+            EFeaturesSelectionAlgorithm,
+            EShapCalcType,
+            Pool,
+        )
     except ImportError as exc:
         raise ImportError(
             "Для обучения нужен catboost. Установите зависимости окружения проекта."
         ) from exc
-    return CatBoostClassifier, CatBoostRegressor, Pool
+    return CatBoostClassifier, CatBoostRegressor, Pool, EFeaturesSelectionAlgorithm, EShapCalcType
 
 
 def _require_model_diagnostics(config: TrainingConfig):
@@ -257,6 +269,97 @@ def _importance_frame(model: object, feature_names: list[str]) -> pd.DataFrame:
         .sort_values("importance", ascending=False)
         .reset_index(drop=True)
     )
+
+
+def _check_frequency_leakage(
+    model: object,
+    feature_names: list[str],
+    *,
+    leak_level: float,
+) -> pd.DataFrame | None:
+    """Предупредить, если один признак доминирует в importance (как AutoMVP.show_importances)."""
+    importances = model.get_feature_importance()
+    frame = pd.DataFrame({"feature": feature_names, "importance": importances})
+    suspicious = frame[frame["importance"] > leak_level]
+    if not suspicious.empty:
+        logger.warning(
+            "Возможная утечка frequency: признаки с importance > %s:\n%s",
+            leak_level,
+            suspicious.to_string(index=False),
+        )
+        return suspicious
+    return None
+
+
+def _select_frequency_features(
+    config: TrainingConfig,
+    train_pool: object,
+    test_pool: object,
+    feature_count: int,
+    CatBoostClassifier: type,
+    EFeaturesSelectionAlgorithm: type,
+    EShapCalcType: type,
+) -> tuple[list[str], dict[str, object]]:
+    """Отбор признаков CatBoost RecursiveByShapValues (как model_learn.py)."""
+    selector = CatBoostClassifier(
+        iterations=config.frequency_select_iterations,
+        early_stopping_rounds=config.frequency_select_early_stopping_rounds,
+        random_state=config.frequency_random_state,
+        auto_class_weights="Balanced",
+        logging_level="Silent",
+    )
+    summary = selector.select_features(
+        train_pool,
+        eval_set=test_pool,
+        features_for_select=f"0-{feature_count - 1}",
+        num_features_to_select=config.frequency_num_features_to_select,
+        steps=feature_count,
+        algorithm=EFeaturesSelectionAlgorithm.RecursiveByShapValues,
+        shap_calc_type=EShapCalcType.Regular,
+        train_final_model=False,
+        logging_level="Silent",
+        plot=False,
+    )
+    selected = list(summary["selected_features_names"])
+    return selected, summary
+
+
+def _fit_frequency_calibrator(
+    model: object,
+    x_train: pd.DataFrame,
+    y_train: pd.Series,
+    *,
+    method: str,
+) -> object:
+    """Пост-калибровка вероятностей поверх обученного CatBoost."""
+    from sklearn.calibration import CalibratedClassifierCV
+
+    calibrator = CalibratedClassifierCV(model, method=method, cv="prefit")
+    calibrator.fit(x_train, y_train.astype(int))
+    return calibrator
+
+
+def frequency_predict_proba(
+    training: "TrainingArtifacts",
+    features: pd.DataFrame,
+) -> np.ndarray:
+    """Вероятность класса 1 с учётом калибратора, если он обучен."""
+    cat_features = [
+        column
+        for column in training.frequency_categorical_features
+        if column in features.columns
+    ]
+    if training.frequency_calibrator is not None:
+        return np.asarray(
+            training.frequency_calibrator.predict_proba(features)[:, 1],
+            dtype=float,
+        )
+    if cat_features:
+        from catboost import Pool
+
+        pool = Pool(features, cat_features=cat_features)
+        return np.asarray(training.frequency_model.predict_proba(pool)[:, 1], dtype=float)
+    return np.asarray(training.frequency_model.predict_proba(features)[:, 1], dtype=float)
 
 
 def _diagnostics_metrics(
@@ -513,7 +616,9 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         "severity",
     )
 
-    CatBoostClassifier, CatBoostRegressor, Pool = _require_catboost()
+    CatBoostClassifier, CatBoostRegressor, Pool, EFeaturesSelectionAlgorithm, EShapCalcType = (
+        _require_catboost()
+    )
     ModelDiagnostics = _require_model_diagnostics(config)
 
     frequency_split = _split_by_date(data, config.frequency_target, frequency_features, config)
@@ -524,7 +629,13 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         config,
         full_frame=True,
     )
-    frequency_pool = Pool(
+    frequency_test_pool = Pool(
+        frequency_split.x_test,
+        frequency_split.y_test.astype(int),
+        cat_features=frequency_cat_features,
+        feature_names=frequency_features,
+    )
+    frequency_train_pool = Pool(
         frequency_split.x_train,
         frequency_split.y_train.astype(int),
         cat_features=frequency_cat_features,
@@ -535,6 +646,36 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         "random_state": config.frequency_random_state,
         **config.frequency_classifier_params,
     }
+    frequency_feature_selection_summary: dict[str, object] | None = None
+
+    if config.frequency_select_features and len(frequency_features) > config.frequency_num_features_to_select:
+        frequency_features, frequency_feature_selection_summary = _select_frequency_features(
+            config,
+            frequency_train_pool,
+            frequency_test_pool,
+            len(frequency_features),
+            CatBoostClassifier,
+            EFeaturesSelectionAlgorithm,
+            EShapCalcType,
+        )
+        frequency_cat_features = [
+            column for column in frequency_cat_features if column in frequency_features
+        ]
+        frequency_hyperparameters["num_features_to_select"] = config.frequency_num_features_to_select
+        frequency_hyperparameters["feature_selection"] = "RecursiveByShapValues"
+        frequency_train_pool = Pool(
+            frequency_split.x_train[frequency_features],
+            frequency_split.y_train.astype(int),
+            cat_features=frequency_cat_features,
+            feature_names=frequency_features,
+        )
+        frequency_test_pool = Pool(
+            frequency_split.x_test[frequency_features],
+            frequency_split.y_test.astype(int),
+            cat_features=frequency_cat_features,
+            feature_names=frequency_features,
+        )
+
     severity_hyperparameters = {
         "iterations": config.severity_iterations,
         "random_state": config.severity_random_state,
@@ -550,10 +691,24 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         **config.frequency_classifier_params,
     )
     frequency_model.fit(
-        frequency_pool,
-        eval_set=(frequency_split.x_test, frequency_split.y_test.astype(int)),
+        frequency_train_pool,
+        eval_set=frequency_test_pool,
         plot=False,
     )
+    _check_frequency_leakage(
+        frequency_model,
+        frequency_features,
+        leak_level=config.frequency_leak_importance_level,
+    )
+
+    frequency_calibrator = None
+    if config.frequency_calibration_enabled:
+        frequency_calibrator = _fit_frequency_calibrator(
+            frequency_model,
+            frequency_split.x_train[frequency_features],
+            frequency_split.y_train,
+            method=config.frequency_calibration_method,
+        )
 
     severity_split = _split_by_date(
         data,
@@ -653,4 +808,6 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         frequency_importance=_importance_frame(frequency_model, frequency_features),
         severity_importance=_importance_frame(severity_model, severity_features),
         feature_frame=data,
+        frequency_calibrator=frequency_calibrator,
+        frequency_feature_selection_summary=frequency_feature_selection_summary,
     )

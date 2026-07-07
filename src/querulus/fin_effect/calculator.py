@@ -27,6 +27,17 @@ class ThresholdMetrics:
 
 
 @dataclass
+class ThresholdStrategyResult:
+    """Результат подбора порога по одной стратегии."""
+
+    strategy: str
+    threshold: float
+    net_effect: float
+    average_precision: float
+    f1: float
+
+
+@dataclass
 class FinEffectResult:
     """Результат полного расчёта фин. эффекта."""
 
@@ -34,6 +45,9 @@ class FinEffectResult:
     best_threshold: float
     threshold_metrics: dict[float, ThresholdMetrics]
     net_effect: float
+    baseline_fact_total: float
+    net_effect_vs_baseline: float
+    threshold_strategies: dict[str, ThresholdStrategyResult] | None = None
 
 
 def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
@@ -188,6 +202,86 @@ def search_best_threshold(
     return best_threshold, results
 
 
+def _baseline_fact_total(base_sum: np.ndarray) -> float:
+    """Эталон: суммарный fin_effect_fact (текущий бизнес-процесс)."""
+    return float(np.asarray(base_sum, dtype=float).sum())
+
+
+def _f1_score(precision: float, recall: float) -> float:
+    if precision + recall <= 0:
+        return 0.0
+    return 2 * precision * recall / (precision + recall)
+
+
+def search_best_threshold_by_f1(
+    y_proba_freq: np.ndarray,
+    y_true_freq: np.ndarray,
+    y_pred_sev: np.ndarray,
+    y_true_sev: np.ndarray,
+    base_sum: np.ndarray,
+    config: FinEffectConfig | None = None,
+) -> tuple[float, dict[float, ThresholdMetrics]]:
+    """Подбор порога по максимальному F1 на сетке."""
+    config = config or FinEffectConfig()
+    best_threshold = float(config.threshold_start)
+    best_f1 = -1.0
+    results: dict[float, ThresholdMetrics] = {}
+    for threshold in _threshold_grid(config):
+        metrics = evaluate_threshold(
+            threshold, y_proba_freq, y_true_freq, y_pred_sev, y_true_sev, base_sum
+        )
+        results[metrics.threshold] = metrics
+        f1 = _f1_score(metrics.precision, metrics.recall)
+        if f1 > best_f1:
+            best_f1 = f1
+            best_threshold = metrics.threshold
+    return best_threshold, results
+
+
+def search_threshold_strategies(
+    y_proba_freq: np.ndarray,
+    y_true_freq: np.ndarray,
+    y_pred_sev: np.ndarray,
+    y_true_sev: np.ndarray,
+    base_sum: np.ndarray,
+    config: FinEffectConfig | None = None,
+) -> dict[str, ThresholdStrategyResult]:
+    """Сравнить пороги: net_effect (primary), F1, average precision."""
+    from sklearn.metrics import average_precision_score
+
+    config = config or FinEffectConfig()
+    ap = float(average_precision_score(y_true_freq, y_proba_freq))
+
+    best_net, net_metrics = search_best_threshold(
+        y_proba_freq, y_true_freq, y_pred_sev, y_true_sev, base_sum, config
+    )
+    best_f1, f1_metrics = search_best_threshold_by_f1(
+        y_proba_freq, y_true_freq, y_pred_sev, y_true_sev, base_sum, config
+    )
+
+    strategies: dict[str, ThresholdStrategyResult] = {}
+    for name, threshold, metrics_map in (
+        ("best_net_effect", best_net, net_metrics),
+        ("best_f1", best_f1, f1_metrics),
+    ):
+        metrics = metrics_map[round(float(threshold), 2)]
+        strategies[name] = ThresholdStrategyResult(
+            strategy=name,
+            threshold=float(threshold),
+            net_effect=metrics.net_effect,
+            average_precision=ap,
+            f1=_f1_score(metrics.precision, metrics.recall),
+        )
+    strategies["average_precision"] = ThresholdStrategyResult(
+        strategy="average_precision",
+        threshold=float(best_f1),
+        net_effect=f1_metrics[round(float(best_f1), 2)].net_effect,
+        average_precision=ap,
+        f1=strategies["best_f1"].f1,
+    )
+    return strategies
+
+
 def apply_model_predictions(
     effect_df: pd.DataFrame,
     y_proba_freq: np.ndarray | pd.Series,
@@ -205,6 +299,15 @@ def apply_model_predictions(
     y_true_freq_arr = np.asarray(y_true_freq, dtype=int)
     y_proba_arr = np.asarray(y_proba_freq, dtype=float)
     y_pred_sev_arr = np.asarray(y_pred_sev, dtype=float)
+    baseline_total = _baseline_fact_total(base_sum)
+    threshold_strategies = search_threshold_strategies(
+        y_proba_arr,
+        y_true_freq_arr,
+        y_pred_sev_arr,
+        y_true_sev,
+        base_sum,
+        config,
+    )
 
     if threshold is None:
         best_threshold, threshold_metrics = search_best_threshold(
@@ -245,6 +348,9 @@ def apply_model_predictions(
         best_threshold=best_threshold,
         threshold_metrics=threshold_metrics,
         net_effect=net_effect,
+        baseline_fact_total=baseline_total,
+        net_effect_vs_baseline=net_effect - baseline_total,
+        threshold_strategies=threshold_strategies,
     )
 
 
@@ -264,6 +370,18 @@ def _feature_rows_for_predict(
     )
     cat_features = list(dict.fromkeys(cat_features))
     return _stringify_categorical_columns(effect_frame, cat_features)
+
+
+def _frequency_proba_from_training(training: object, features: pd.DataFrame) -> np.ndarray:
+    """Вероятность ПСР с учётом калибратора, если он есть."""
+    calibrator = getattr(training, "frequency_calibrator", None)
+    if calibrator is not None:
+        return np.asarray(calibrator.predict_proba(features)[:, 1], dtype=float)
+    return _catboost_predict_proba(
+        training.frequency_model,
+        features,
+        getattr(training, "frequency_categorical_features", []),
+    )
 
 
 def _catboost_predict(
@@ -354,11 +472,7 @@ def run_fin_effect_from_training(
     predict_frame = _feature_rows_for_predict(training, effect_index, effect_frame)
 
     freq_proba = pd.Series(
-        _catboost_predict_proba(
-            training.frequency_model,
-            predict_frame[freq_features],
-            getattr(training, "frequency_categorical_features", []),
-        ),
+        _frequency_proba_from_training(training, predict_frame[freq_features]),
         index=effect_index,
     )
     sev_pred = pd.Series(
@@ -390,8 +504,17 @@ def print_best_threshold_report(result: FinEffectResult) -> None:
     print("\n" + "=" * 70)
     print("ОПТИМАЛЬНЫЙ ПОРОГ КЛАССИФИКАЦИИ")
     print("=" * 70)
-    print(f"Порог вероятности       : {result.best_threshold:.2f}")
-    print(f"Чистый финансовый эффект: {result.net_effect:,.2f} ₽")
+    print(f"Порог вероятности (net_effect): {result.best_threshold:.2f}")
+    print(f"Чистый финансовый эффект   : {result.net_effect:,.2f} ₽")
+    print(f"Baseline fin_effect_fact   : {result.baseline_fact_total:,.2f} ₽")
+    print(f"Δ net_effect vs baseline   : {result.net_effect_vs_baseline:,.2f} ₽")
+    if result.threshold_strategies:
+        print("\nСравнение стратегий порога:")
+        for strategy in result.threshold_strategies.values():
+            print(
+                f"  {strategy.strategy:20s} threshold={strategy.threshold:.2f} "
+                f"net_effect={strategy.net_effect:,.0f} F1={strategy.f1:.3f} AP={strategy.average_precision:.3f}"
+            )
 
 
 def prepare_analytics_export(

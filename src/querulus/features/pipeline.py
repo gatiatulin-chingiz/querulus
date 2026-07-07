@@ -31,6 +31,12 @@ def run_features(
     df = cleanup_merge_columns(df, feature_config)
     df = add_derived_features(df, feature_config)
 
+    from querulus.features.incident_pretensions import add_incident_pretension_features
+    from querulus.features.person.loaders import load_pretensions_base
+
+    pret_base = load_pretensions_base(paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint)
+    df = add_incident_pretension_features(df, pret_base, feature_config)
+
     # Person features: история по людям as-of T0 (без legacy enrich).
     from querulus.features.person.pipeline import run_person_features
 

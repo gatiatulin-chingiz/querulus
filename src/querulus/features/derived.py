@@ -409,6 +409,29 @@ def _add_repair_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
     return df
 
 
+def _add_frequency_risk_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Блок K: сигналы ПСР из victim (Losses)."""
+    df["FE_DTPOSAGO_TYPE"] = _pick_column(
+        df,
+        "DTPOSAGO_TYPE",
+        "DTPOSAGOTYPE",
+        "DTPOSAGOType",
+    ).astype("string")
+    df["FE_EVENT_SCHEME"] = _pick_column(
+        df,
+        "EVENT_SCHEME_DESCRIPTION",
+        "EVENTSCHEMEDESCRIPTION",
+        "EventSchemeDescription",
+    ).astype("string")
+    df["FE_REGRESS_FLAG"] = _as_flag(
+        _pick_column(df, "REGRESS", "Regress", "REGRESS_FLAG", "RegressFlag")
+    )
+    df["FE_JOINT_LIABILITY"] = _as_flag(
+        _pick_column(df, "JOINT_LIABILITY", "JointLiability")
+    )
+    return df
+
+
 def _add_loss_history_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
     """Блок J: история убытков (past only)."""
     th = config.thresholds
@@ -444,5 +467,6 @@ def add_derived_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
     out = _add_policy_features(out, config)
     out = _add_process_features(out)
     out = _add_repair_features(out, config)
+    out = _add_frequency_risk_features(out)
     out = _add_loss_history_features(out, config)
     return out
