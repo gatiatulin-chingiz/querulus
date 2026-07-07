@@ -18,6 +18,8 @@ def _prep_pretensions(df_pret: pd.DataFrame) -> pd.DataFrame:
         df["PRETENSION_GET_DATE"] = df["PRETENSIONGETDATE"]
     if "APPLICANTPERSONID" in df.columns and "APPLICANT_PERSON_ID" not in df.columns:
         df["APPLICANT_PERSON_ID"] = df["APPLICANTPERSONID"]
+    if "RECIPIENTPERSONID" in df.columns and "RECIPIENT_PERSON_ID" not in df.columns:
+        df["RECIPIENT_PERSON_ID"] = df["RECIPIENTPERSONID"]
     if "PRETENSIONVALUE" in df.columns and "PRETENSION_VALUE" not in df.columns:
         df["PRETENSION_VALUE"] = df["PRETENSIONVALUE"]
     if "SURCHARGEVALUE" in df.columns and "SURCHARGE_VALUE" not in df.columns:
@@ -36,7 +38,41 @@ def _prep_pretensions(df_pret: pd.DataFrame) -> pd.DataFrame:
     df["PRETENSION_GET_DATE"] = pd.to_datetime(df.get("PRETENSION_GET_DATE"), errors="coerce")
     df[INCIDENT_COLUMN] = pd.to_numeric(df.get(INCIDENT_COLUMN), errors="coerce")
     df["APPLICANT_PERSON_ID"] = normalize_person_id_series(df.get("APPLICANT_PERSON_ID"))
+    df["RECIPIENT_PERSON_ID"] = normalize_person_id_series(df.get("RECIPIENT_PERSON_ID"))
     return df
+
+
+def _pretensions_for_join(
+    df_pret: pd.DataFrame,
+    pretension_person_columns: tuple[str, ...],
+) -> pd.DataFrame:
+    """Long-формат претензий: одна строка на (person_id, претензия) для join."""
+    if not pretension_person_columns:
+        return pd.DataFrame()
+
+    parts: list[pd.DataFrame] = []
+    for person_col in pretension_person_columns:
+        if person_col not in df_pret.columns:
+            continue
+        part = df_pret.dropna(subset=[person_col, "PRETENSION_GET_DATE", INCIDENT_COLUMN]).copy()
+        part["_pid"] = part[person_col]
+        parts.append(part)
+
+    if not parts:
+        return pd.DataFrame()
+
+    pret = pd.concat(parts, ignore_index=True)
+    dedupe_keys = ["_pid", "PRETENSION_GET_DATE", INCIDENT_COLUMN]
+    if "PRETENSION_NUMBER" in pret.columns:
+        dedupe_keys = ["_pid", "PRETENSION_NUMBER", INCIDENT_COLUMN]
+    pret = pret.drop_duplicates(subset=dedupe_keys)
+
+    return pret.rename(
+        columns={
+            "PRETENSION_GET_DATE": "_pret_date",
+            INCIDENT_COLUMN: "_pret_inc",
+        }
+    )
 
 
 def _aggregate_pret_history(
@@ -45,9 +81,9 @@ def _aggregate_pret_history(
     person_id: pd.Series,
     t0: pd.Series,
     current_incident: pd.Series,
+    pretension_person_columns: tuple[str, ...],
 ) -> pd.DataFrame:
     """Return a frame indexed by original df index with aggregated features."""
-    # Expand to row-level join: keep only pretensions for persons present in this batch.
     base = pd.DataFrame(
         {
             "_row": person_id.index,
@@ -57,8 +93,11 @@ def _aggregate_pret_history(
         }
     ).dropna(subset=["_pid"])
 
-    pret = df_pret.dropna(subset=["APPLICANT_PERSON_ID", "PRETENSION_GET_DATE", INCIDENT_COLUMN]).copy()
-    pret = pret.rename(columns={"APPLICANT_PERSON_ID": "_pid", "PRETENSION_GET_DATE": "_pret_date", INCIDENT_COLUMN: "_pret_inc"})
+    pret = _pretensions_for_join(df_pret, pretension_person_columns)
+    if pret.empty:
+        out = pd.DataFrame(index=person_id.index)
+        out[f"{PERSON_PREFIX}PRET_COUNT"] = 0
+        return out
 
     merged = base.merge(pret, on="_pid", how="left")
     # history only: before T0 AND different incident
@@ -66,11 +105,20 @@ def _aggregate_pret_history(
     merged = merged[mask]
 
     # Numeric columns (money): allowed only for previous incidents.
-    money_cols = [c for c in ("PRETENSION_VALUE", "SURCHARGE_VALUE", "UTS_SURCHARGE_VALUE", "PRETENSION_VALUE_PENALTY", "SURCHARGE_VALUE_PENALTY") if c in merged.columns]
+    money_cols = [
+        c
+        for c in (
+            "PRETENSION_VALUE",
+            "SURCHARGE_VALUE",
+            "UTS_SURCHARGE_VALUE",
+            "PRETENSION_VALUE_PENALTY",
+            "SURCHARGE_VALUE_PENALTY",
+        )
+        if c in merged.columns
+    ]
     for col in money_cols:
         merged[col] = pd.to_numeric(merged[col], errors="coerce")
 
-    # Aggregations per row.
     grouped = merged.groupby("_row", dropna=False)
     out = pd.DataFrame(index=person_id.index)
     out[f"{PERSON_PREFIX}PRET_COUNT"] = grouped.size().reindex(out.index).fillna(0).astype(int)
@@ -85,11 +133,15 @@ def _aggregate_pret_history(
         )
     if "PRETENSION_GET_METHOD" in merged.columns:
         out[f"{PERSON_PREFIX}PRET_GET_METHOD_MODE"] = (
-            grouped["PRETENSION_GET_METHOD"].agg(lambda s: s.mode().iloc[0] if not s.mode().empty else pd.NA).reindex(out.index)
+            grouped["PRETENSION_GET_METHOD"]
+            .agg(lambda s: s.mode().iloc[0] if not s.mode().empty else pd.NA)
+            .reindex(out.index)
         )
     if "ANSWER_TYPE" in merged.columns:
         out[f"{PERSON_PREFIX}PRET_ANSWER_TYPE_MODE"] = (
-            grouped["ANSWER_TYPE"].agg(lambda s: s.mode().iloc[0] if not s.mode().empty else pd.NA).reindex(out.index)
+            grouped["ANSWER_TYPE"]
+            .agg(lambda s: s.mode().iloc[0] if not s.mode().empty else pd.NA)
+            .reindex(out.index)
         )
 
     for col in money_cols:
@@ -99,7 +151,7 @@ def _aggregate_pret_history(
 
 
 def add_person_pretension_history(df: pd.DataFrame, df_pretensions: pd.DataFrame) -> pd.DataFrame:
-    """Добавить FE_PERSON_PRET_{ROLE}_* для всех ролей (история как applicant pretensions)."""
+    """Добавить FE_PERSON_PRET_{ROLE}_* для всех ролей (история по Applicant/Recipient)."""
     out = df.copy()
     pret = _prep_pretensions(df_pretensions)
 
@@ -115,10 +167,9 @@ def add_person_pretension_history(df: pd.DataFrame, df_pretensions: pd.DataFrame
             person_id=pid,
             t0=t0,
             current_incident=current_incident,
+            pretension_person_columns=role.pretension_person_columns,
         )
-        # namespace per role
         agg = agg.add_prefix(f"{PERSON_PREFIX}PRET_{role.suffix}_")
         out = out.join(agg)
 
     return out
-
