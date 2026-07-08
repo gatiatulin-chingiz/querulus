@@ -111,8 +111,21 @@ def build_targets(
         save_checkpoint=save_checkpoint,
     )
 
-    for col in target_psr.columns:
-        target_psr[col] = target_psr[col].fillna(0)
+    # В ПСР на 1 инцидент может быть несколько убытков. Если часть сумм на уровне убытка NULL,
+    # а часть заполнена, то merge к "первичному убытку" может потерять заполненные значения.
+    # Поэтому схлопываем ПСР до уровня INCIDENT_NUMBER суммированием по всем убыткам инцидента.
+    incident_key = "Номер_инциндента"
+    if incident_key in target_psr.columns:
+        value_cols = [col for col in target_psr.columns if col != incident_key]
+        if value_cols:
+            target_psr[value_cols] = target_psr[value_cols].apply(
+                pd.to_numeric, errors="coerce"
+            )
+        target_psr = (
+            target_psr.groupby(incident_key, as_index=False)[value_cols]
+            .sum(min_count=1)
+            .reset_index(drop=True)
+        )
 
     df = df.merge(target_psr, how='left', left_on='INCIDENT_NUMBER', right_on='Номер_инциндента')
 
@@ -297,8 +310,10 @@ def build_targets(
     df = df[df['VICTIM_POLICYHOLDER_TYPE'] == 'Физ. Лицо'].reset_index(drop=True)
 
     df['TARGET'] = (
-        df['Сумма_выплат_по_претензиям'] + df['Сумма_взыскано_по_ФУ'] + df['Суммы_взыскано_по_иску']
-    ).fillna(0)
+        df['Сумма_выплат_по_претензиям'].fillna(0)
+        + df['Сумма_взыскано_по_ФУ'].fillna(0)
+        + df['Суммы_взыскано_по_иску'].fillna(0)
+    )
     df['TARGET'] = df['TARGET'].apply(lambda x: 1 if x > 0 else 0).astype(int)
 
     df = ensure_victim_object_type_column(df)
