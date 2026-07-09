@@ -35,10 +35,14 @@ def _prep_pretensions(df_pret: pd.DataFrame) -> pd.DataFrame:
     if "ANSWERTYPE" in df.columns and "ANSWER_TYPE" not in df.columns:
         df["ANSWER_TYPE"] = df["ANSWERTYPE"]
 
-    df["PRETENSION_GET_DATE"] = pd.to_datetime(df.get("PRETENSION_GET_DATE"), errors="coerce")
-    df[INCIDENT_COLUMN] = pd.to_numeric(df.get(INCIDENT_COLUMN), errors="coerce")
-    df["APPLICANT_PERSON_ID"] = normalize_person_id_series(df.get("APPLICANT_PERSON_ID"))
-    df["RECIPIENT_PERSON_ID"] = normalize_person_id_series(df.get("RECIPIENT_PERSON_ID"))
+    if "PRETENSION_GET_DATE" in df.columns:
+        df["PRETENSION_GET_DATE"] = pd.to_datetime(df["PRETENSION_GET_DATE"], errors="coerce")
+    if INCIDENT_COLUMN in df.columns:
+        df[INCIDENT_COLUMN] = pd.to_numeric(df[INCIDENT_COLUMN], errors="coerce")
+    if "APPLICANT_PERSON_ID" in df.columns:
+        df["APPLICANT_PERSON_ID"] = normalize_person_id_series(df["APPLICANT_PERSON_ID"])
+    if "RECIPIENT_PERSON_ID" in df.columns:
+        df["RECIPIENT_PERSON_ID"] = normalize_person_id_series(df["RECIPIENT_PERSON_ID"])
     return df
 
 

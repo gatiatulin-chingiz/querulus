@@ -345,6 +345,9 @@ def normalize_hex_person_id(value: Any) -> str | None:
     return raw.upper() if raw else None
 
 
-def normalize_person_id_series(series: pd.Series) -> pd.Series:
+def normalize_person_id_series(series: pd.Series | None) -> pd.Series:
+    """Нормализовать person_id; для отсутствующей колонки вернуть пустой Series."""
+    if series is None:
+        return pd.Series(dtype="object")
     return series.map(normalize_hex_person_id)
 
