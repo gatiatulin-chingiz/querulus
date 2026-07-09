@@ -9,6 +9,109 @@ from querulus.dataset.filters import claims_sql_predicate, ensure_victim_object_
 from querulus.dataset.io import load_sql_artifact
 from querulus.dataset.paths import DataPaths
 
+_TARGET_FREQ_CLAIMS_GROUP = ("LOSS_NUMBER", "INCOMING_CLAIM_NUMBER")
+_FU_CLAIM_ORIGIN = "Обращение к ФУ"
+
+
+def _is_fu_instance(inst: pd.Series, claim_origin: pd.Series | None) -> pd.Series:
+    """ФУ: InstByOisuu=6 или InstByOisuu=1 при ClaimOrigin='Обращение к ФУ'."""
+    inst_num = pd.to_numeric(inst, errors="coerce")
+    is_fu = inst_num == 6
+    if claim_origin is not None:
+        origin = claim_origin.fillna("").astype(str).str.strip()
+        is_fu = is_fu | ((inst_num == 1) & origin.eq(_FU_CLAIM_ORIGIN))
+    return is_fu.fillna(False)
+
+
+def _pick_last_claim_instances(claims: pd.DataFrame) -> pd.DataFrame:
+    """Последняя инстанция каждого иска на убытке.
+
+    ФУ — первоначальная стадия: если есть судебные инстанции (1..5), берём max InstByOisuu
+    среди судов (пример: 1,2,3,6 → 3, а не 6). Если судов нет — берём строку ФУ.
+    """
+    work = claims.copy()
+    origin = work["CLAIMORIGIN"] if "CLAIMORIGIN" in work.columns else None
+    inst = pd.to_numeric(work["INSTBYOISUU"], errors="coerce")
+    is_fu = _is_fu_instance(inst, origin)
+    is_court = (~is_fu) & inst.between(1, 5, inclusive="both")
+
+    group_cols = list(_TARGET_FREQ_CLAIMS_GROUP)
+    court = work[is_court]
+    from_court = (
+        court.sort_values([*group_cols, "INSTBYOISUU"], ascending=[True, True, False])
+        .drop_duplicates(group_cols, keep="first")
+    )
+
+    court_keys = court[group_cols].drop_duplicates()
+    fu = work[is_fu].merge(court_keys, on=group_cols, how="left", indicator=True)
+    fu_only = fu[fu["_merge"] == "left_only"].drop(columns="_merge")
+    from_fu = (
+        fu_only.sort_values([*group_cols, "INSTBYOISUU"], ascending=[True, True, False])
+        .drop_duplicates(group_cols, keep="first")
+    )
+
+    return pd.concat([from_court, from_fu], ignore_index=True)
+
+
+def _build_target_freq_by_incident(
+    claims: pd.DataFrame,
+    pretensions: pd.DataFrame,
+) -> pd.DataFrame:
+    """Собрать TARGET_FREQ на уровне инцидента из исков (без ПСР).
+
+    На каждый убыток: сумма RecoveredValueWithSD по последней судебной инстанции каждого иска
+    (ФУ — первоначальная стадия и не считается «последней», если есть суды).
+    На инцидент: сумма по всем убыткам + доплаты по претензиям (как в TARGET_SEV).
+    """
+    required = {
+        "INCIDENT_NUMBER",
+        "LOSS_NUMBER",
+        "INCOMING_CLAIM_NUMBER",
+        "INSTBYOISUU",
+        "RECOVEREDVALUEWITHSD",
+    }
+    missing = required - set(claims.columns)
+    if missing:
+        raise KeyError(f"Для TARGET_FREQ не хватает колонок: {sorted(missing)}")
+
+    optional_cols = ["CLAIMORIGIN"] if "CLAIMORIGIN" in claims.columns else []
+    work = claims[list(required | set(optional_cols))].copy()
+    work = work[work["INCIDENT_NUMBER"].notna() & work["LOSS_NUMBER"].notna()]
+    work["RECOVEREDVALUEWITHSD"] = pd.to_numeric(work["RECOVEREDVALUEWITHSD"], errors="coerce").fillna(0)
+
+    last_per_claim = _pick_last_claim_instances(work)
+    per_loss = (
+        last_per_claim.groupby(["INCIDENT_NUMBER", "LOSS_NUMBER"], as_index=False)["RECOVEREDVALUEWITHSD"]
+        .sum()
+    )
+    claims_amount = (
+        per_loss.groupby("INCIDENT_NUMBER", as_index=False)["RECOVEREDVALUEWITHSD"]
+        .sum()
+        .rename(columns={"RECOVEREDVALUEWITHSD": "TARGET_FREQ_CLAIMS_AMOUNT"})
+    )
+
+    pret_cols = [
+        "INCIDENT_NUMBER",
+        "SurchargeValue_cumsum_by_incident",
+        "UTSSurchargeValue_cumsum_by_incident",
+    ]
+    pret = pretensions[pret_cols].copy()
+    pret["TARGET_FREQ_PRET_AMOUNT"] = (
+        pret["SurchargeValue_cumsum_by_incident"].fillna(0)
+        + pret["UTSSurchargeValue_cumsum_by_incident"].fillna(0)
+    )
+
+    out = claims_amount.merge(
+        pret[["INCIDENT_NUMBER", "TARGET_FREQ_PRET_AMOUNT"]],
+        on="INCIDENT_NUMBER",
+        how="outer",
+    )
+    out["TARGET_FREQ_CLAIMS_AMOUNT"] = out["TARGET_FREQ_CLAIMS_AMOUNT"].fillna(0)
+    out["TARGET_FREQ_PRET_AMOUNT"] = out["TARGET_FREQ_PRET_AMOUNT"].fillna(0)
+    out["TARGET_FREQ_AMOUNT"] = out["TARGET_FREQ_CLAIMS_AMOUNT"] + out["TARGET_FREQ_PRET_AMOUNT"]
+    out["TARGET_FREQ"] = (out["TARGET_FREQ_AMOUNT"] > 0).astype(int)
+    return out
+
 
 def build_targets(
     paths: DataPaths,
@@ -18,7 +121,7 @@ def build_targets(
     save_checkpoint: bool = True,
     use_sql: bool = False,
 ):
-    """Добавить TARGET (ПСР) и TARGET_SEV (сумма взыскания) к victim-фрейму."""
+    """Добавить TARGET (ПСР), TARGET_FREQ (иски) и TARGET_SEV к victim-фрейму."""
     # Первичный убыток на инцидент: max LOSS_NUMBER
     df = select_primary_loss_per_incident(df)
 
@@ -255,6 +358,21 @@ def build_targets(
     target_3_claims.columns = target_3_claims.columns.str.upper()
     target_3_claims = target_3_claims.rename(columns=RENAME_DICT)
 
+    target_freq = _build_target_freq_by_incident(target_3_claims, target_3_pretensions)
+    df = df.merge(
+        target_freq[
+            [
+                "INCIDENT_NUMBER",
+                "TARGET_FREQ",
+                "TARGET_FREQ_AMOUNT",
+                "TARGET_FREQ_CLAIMS_AMOUNT",
+                "TARGET_FREQ_PRET_AMOUNT",
+            ]
+        ],
+        how="left",
+        on="INCIDENT_NUMBER",
+    )
+
     df_base = target_3_claims[
         ['INCIDENT_NUMBER', 'LOSS_ID', 'LOSS_NUMBER', 'INCOMINGCLAIMID', 'INCOMING_CLAIM_NUMBER', 'LINK_LOSS_NUMBER']
     ].drop_duplicates(['INCOMING_CLAIM_NUMBER'])
@@ -320,6 +438,9 @@ def build_targets(
         + df['Суммы_взыскано_по_иску'].fillna(0)
     )
     df['TARGET'] = df['TARGET'].apply(lambda x: 1 if x > 0 else 0).astype(int)
+    df["TARGET_FREQ"] = df["TARGET_FREQ"].fillna(0).astype(int)
+    for col in ("TARGET_FREQ_AMOUNT", "TARGET_FREQ_CLAIMS_AMOUNT", "TARGET_FREQ_PRET_AMOUNT"):
+        df[col] = df[col].fillna(0)
 
     df = ensure_victim_object_type_column(df)
 
