@@ -396,16 +396,33 @@ def _add_repair_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
         ("low", "mid", "high"),
     )
 
-    amount_repair = pd.to_numeric(_series(df, "AMOUNT_REPAIR"), errors="coerce")
+    value_without = pd.to_numeric(_series(df, "VALUE_BEFORE_WITHOUT"), errors="coerce")
+    value_with = pd.to_numeric(_series(df, "VALUE_BEFORE_WITH"), errors="coerce")
     share_wearout = pd.to_numeric(_series(df, "SHARE_WEAROUT"), errors="coerce")
-    df["FE_EXPECTED_WEAROUT_RUB"] = amount_repair * share_wearout / 100
 
-    df["FE_AMOUNT_REPAIR_BIN"] = _amount_bins(amount_repair, th.amount_repair_bins)
-    df["FE_HIGH_REPAIR"] = (amount_repair > th.amount_repair_high).astype("Int64")
+    df["FE_VALUE_BEFORE_WITHOUT_BIN"] = _amount_bins(
+        value_without, th.amount_repair_bins
+    )
+    df["FE_HIGH_VALUE_BEFORE_WITHOUT"] = (
+        value_without > th.amount_repair_high
+    ).astype("Int64")
+
+    wearout_from_values = (value_without - value_with).where(
+        (value_without > 0) & (value_with >= 0)
+    )
+    wearout_from_share = value_without * share_wearout / 100
+    df["FE_WEAROUT_RUB_FROM_VALUES"] = wearout_from_values.fillna(wearout_from_share)
+
+    both_values_positive = (value_without > 0) & (value_with > 0)
+    df["FE_VALUE_WITH_TO_WITHOUT_RATIO"] = _safe_div(
+        value_with, value_without
+    ).where(both_values_positive)
 
     repair_value = pd.to_numeric(_series(df, "REPAIR_VALUE"), errors="coerce")
-    both_positive = (amount_repair > 0) & (repair_value > 0)
-    df["FE_REPAIR_TO_VALUE_RATIO"] = _safe_div(repair_value, amount_repair).where(both_positive)
+    both_repair_positive = (value_without > 0) & (repair_value > 0)
+    df["FE_REPAIR_TO_VALUE_BEFORE_RATIO"] = _safe_div(
+        repair_value, value_without
+    ).where(both_repair_positive)
     return df
 
 

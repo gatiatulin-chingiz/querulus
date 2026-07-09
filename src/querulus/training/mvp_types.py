@@ -79,7 +79,11 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': ['LONGITUDE', 'LATIT
              'EMR_VALUE',
              'Взысканный_износ_ФУ',
              'REPAIR_VALUE',
-             # REPAIR_VALUE-derived signal (leakage / post-calc ratio)
+             'AMOUNT_REPAIR',
+             # AMOUNT_REPAIR-derived FE (заменены на VALUE_BEFORE_*)
+             'FE_AMOUNT_REPAIR_BIN',
+             'FE_HIGH_REPAIR',
+             'FE_EXPECTED_WEAROUT_RUB',
              'FE_REPAIR_TO_VALUE_RATIO',
              'Выплаченный_износ_инцидент',
              # VALUE_BEFORE_WITH / VALUE_AFTER_WITH разрешаем (временно) для обучения
