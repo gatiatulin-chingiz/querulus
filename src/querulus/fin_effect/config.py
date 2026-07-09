@@ -18,8 +18,8 @@ class FinEffectConfig:
     fu_recovery_column: str = "Сумма_взыскано_по_ФУ"
     court_recovery_column: str = "Суммы_взыскано_по_иску"
     premiums_column: str = "Взносы"
-    surcharge_column: str = "SurchargeValue_cumsum_by_incident"
-    uts_surcharge_column: str = "UTSSurchargeValue_cumsum_by_incident"
+    surcharge_column: str = "SurchargeValue_cumsum_by_incident_all"
+    uts_surcharge_column: str = "UTSSurchargeValue_cumsum_by_incident_all"
     fu_fee_amount: float = 100_000.0
     court_fee_amount: float = 15_000.0
     apply_court_fee: bool = False

@@ -11,6 +11,8 @@ from querulus.dataset.paths import DataPaths
 
 _TARGET_FREQ_CLAIMS_GROUP = ("LOSS_NUMBER", "INCOMING_CLAIM_NUMBER")
 _FU_CLAIM_ORIGIN = "Обращение к ФУ"
+_SURCHARGE_INCIDENT_COL = "SurchargeValue_cumsum_by_incident_all"
+_UTS_SURCHARGE_INCIDENT_COL = "UTSSurchargeValue_cumsum_by_incident_all"
 
 
 def _is_fu_instance(inst: pd.Series, claim_origin: pd.Series | None) -> pd.Series:
@@ -61,7 +63,7 @@ def _build_target_freq_by_incident(
 
     На каждый убыток: сумма RecoveredValueWithSD по последней судебной инстанции каждого иска
     (ФУ — первоначальная стадия и не считается «последней», если есть суды).
-    На инцидент: сумма по всем убыткам + доплаты по претензиям (как в TARGET_SEV).
+    На инцидент: сумма по всем убыткам + доплаты по претензиям (все типы ОСАГО, *_all).
     """
     required = {
         "INCIDENT_NUMBER",
@@ -92,13 +94,13 @@ def _build_target_freq_by_incident(
 
     pret_cols = [
         "INCIDENT_NUMBER",
-        "SurchargeValue_cumsum_by_incident",
-        "UTSSurchargeValue_cumsum_by_incident",
+        _SURCHARGE_INCIDENT_COL,
+        _UTS_SURCHARGE_INCIDENT_COL,
     ]
     pret = pretensions[pret_cols].copy()
     pret["TARGET_FREQ_PRET_AMOUNT"] = (
-        pret["SurchargeValue_cumsum_by_incident"].fillna(0)
-        + pret["UTSSurchargeValue_cumsum_by_incident"].fillna(0)
+        pret[_SURCHARGE_INCIDENT_COL].fillna(0)
+        + pret[_UTS_SURCHARGE_INCIDENT_COL].fillna(0)
     )
 
     out = claims_amount.merge(
@@ -358,7 +360,7 @@ def build_targets(
     target_3_claims.columns = target_3_claims.columns.str.upper()
     target_3_claims = target_3_claims.rename(columns=RENAME_DICT)
 
-    target_freq = _build_target_freq_by_incident(target_3_claims, target_3_pretensions)
+    target_freq = _build_target_freq_by_incident(target_3_claims, target_3_pretensions_all)
     df = df.merge(
         target_freq[
             [
@@ -418,13 +420,13 @@ def build_targets(
         return np.nan
 
     df['TARGET_SEV'] = df.apply(get_last_nonzero_or_valid, axis=1)
-    df[['TARGET_SEV', 'SurchargeValue_cumsum_by_incident', 'UTSSurchargeValue_cumsum_by_incident']] = df[
-        ['TARGET_SEV', 'SurchargeValue_cumsum_by_incident', 'UTSSurchargeValue_cumsum_by_incident']
+    df[['TARGET_SEV', _SURCHARGE_INCIDENT_COL, _UTS_SURCHARGE_INCIDENT_COL]] = df[
+        ['TARGET_SEV', _SURCHARGE_INCIDENT_COL, _UTS_SURCHARGE_INCIDENT_COL]
     ].fillna(0)
     df['TARGET_SEV'] = (
         df['TARGET_SEV']
-        + df['SurchargeValue_cumsum_by_incident']
-        + df['UTSSurchargeValue_cumsum_by_incident']
+        + df[_SURCHARGE_INCIDENT_COL]
+        + df[_UTS_SURCHARGE_INCIDENT_COL]
     )
 
     if 'VICTIM_VEHICLE_IS_JAPAN' in df.columns:
