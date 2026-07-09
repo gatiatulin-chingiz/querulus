@@ -1,7 +1,7 @@
 """MVP feature types from model_learn.py."""
 from __future__ import annotations
 
-# Колонки из build_targets: pivot взысканий по текущему инциденту → TARGET_SEV (утечка).
+# Исторические pivot-колонки RECOVERED*_{1..5} (если попадут в датасет — утечка).
 _TARGET_SEV_RECOVERED_COLS: tuple[str, ...] = tuple(
     f"{prefix}_{instance}"
     for prefix in (
@@ -106,4 +106,5 @@ DEFAULT_OTHER_COLS: tuple[str, ...] = (
     'TARGET_FREQ_AMOUNT',
     'TARGET_FREQ_CLAIMS_AMOUNT',
     'TARGET_FREQ_PRET_AMOUNT',
+    'TARGET_SEV_CLAIMS_AMOUNT',
 )

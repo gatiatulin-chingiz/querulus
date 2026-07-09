@@ -1,7 +1,6 @@
 """Шаг пайплайна: targets."""
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from querulus.dataset.constants import RENAME_DICT
@@ -14,6 +13,11 @@ _FU_CLAIM_ORIGIN = "Обращение к ФУ"
 _CLAIM_PERIOD_COL = "CLAIMEDVALUEPERIOD"
 _SURCHARGE_INCIDENT_COL = "SurchargeValue_cumsum_by_incident_all"
 _UTS_SURCHARGE_INCIDENT_COL = "UTSSurchargeValue_cumsum_by_incident_all"
+_TARGET_SEV_CLAIM_AMOUNT_COLS = (
+    "RECOVEREDMAINDEBT",
+    "RECOVEREDWEAROUT",
+    "RECOVEREDLOSSCOMMODYVALUE",
+)
 
 
 def _is_fu_instance(inst: pd.Series, claim_origin: pd.Series | None) -> pd.Series:
@@ -61,6 +65,44 @@ def _pick_last_claim_instances(claims: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([from_court, from_fu], ignore_index=True)
 
 
+def _sum_last_claim_instances_by_incident(
+    claims: pd.DataFrame,
+    *,
+    amount_cols: tuple[str, ...],
+    output_col: str,
+) -> pd.DataFrame:
+    """Сумма amount_cols по последней инстанции каждого иска, агрегат на инцидент."""
+    required = {
+        "INCIDENT_NUMBER",
+        "LOSS_NUMBER",
+        "INCOMING_CLAIM_NUMBER",
+        "INSTBYOISUU",
+        _CLAIM_PERIOD_COL,
+        *amount_cols,
+    }
+    missing = required - set(claims.columns)
+    if missing:
+        raise KeyError(f"Для {output_col} не хватает колонок: {sorted(missing)}")
+
+    optional_cols = ["CLAIMORIGIN"] if "CLAIMORIGIN" in claims.columns else []
+    work = claims[list(required | set(optional_cols))].copy()
+    work = work[work["INCIDENT_NUMBER"].notna() & work["LOSS_NUMBER"].notna()]
+    for col in amount_cols:
+        work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0)
+
+    last_per_claim = _pick_last_claim_instances(work)
+    if len(amount_cols) == 1:
+        last_per_claim[output_col] = last_per_claim[amount_cols[0]]
+    else:
+        last_per_claim[output_col] = last_per_claim[list(amount_cols)].sum(axis=1)
+
+    per_loss = (
+        last_per_claim.groupby(["INCIDENT_NUMBER", "LOSS_NUMBER"], as_index=False)[output_col]
+        .sum()
+    )
+    return per_loss.groupby("INCIDENT_NUMBER", as_index=False)[output_col].sum()
+
+
 def _build_target_freq_by_incident(
     claims: pd.DataFrame,
     pretensions: pd.DataFrame,
@@ -71,32 +113,10 @@ def _build_target_freq_by_incident(
     (ФУ — первоначальная стадия и не считается «последней», если есть суды).
     На инцидент: сумма по всем убыткам + доплаты по претензиям (все типы ОСАГО, *_all).
     """
-    required = {
-        "INCIDENT_NUMBER",
-        "LOSS_NUMBER",
-        "INCOMING_CLAIM_NUMBER",
-        "INSTBYOISUU",
-        _CLAIM_PERIOD_COL,
-        "RECOVEREDVALUEWITHSD",
-    }
-    missing = required - set(claims.columns)
-    if missing:
-        raise KeyError(f"Для TARGET_FREQ не хватает колонок: {sorted(missing)}")
-
-    optional_cols = ["CLAIMORIGIN"] if "CLAIMORIGIN" in claims.columns else []
-    work = claims[list(required | set(optional_cols))].copy()
-    work = work[work["INCIDENT_NUMBER"].notna() & work["LOSS_NUMBER"].notna()]
-    work["RECOVEREDVALUEWITHSD"] = pd.to_numeric(work["RECOVEREDVALUEWITHSD"], errors="coerce").fillna(0)
-
-    last_per_claim = _pick_last_claim_instances(work)
-    per_loss = (
-        last_per_claim.groupby(["INCIDENT_NUMBER", "LOSS_NUMBER"], as_index=False)["RECOVEREDVALUEWITHSD"]
-        .sum()
-    )
-    claims_amount = (
-        per_loss.groupby("INCIDENT_NUMBER", as_index=False)["RECOVEREDVALUEWITHSD"]
-        .sum()
-        .rename(columns={"RECOVEREDVALUEWITHSD": "TARGET_FREQ_CLAIMS_AMOUNT"})
+    claims_amount = _sum_last_claim_instances_by_incident(
+        claims,
+        amount_cols=("RECOVEREDVALUEWITHSD",),
+        output_col="TARGET_FREQ_CLAIMS_AMOUNT",
     )
 
     pret_cols = [
@@ -120,6 +140,15 @@ def _build_target_freq_by_incident(
     out["TARGET_FREQ_AMOUNT"] = out["TARGET_FREQ_CLAIMS_AMOUNT"] + out["TARGET_FREQ_PRET_AMOUNT"]
     out["TARGET_FREQ"] = (out["TARGET_FREQ_AMOUNT"] > 0).astype(int)
     return out
+
+
+def _build_target_sev_claims_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
+    """Сумма взысканий (ОД + износ + УТС) по последней инстанции каждого иска на инциденте."""
+    return _sum_last_claim_instances_by_incident(
+        claims,
+        amount_cols=_TARGET_SEV_CLAIM_AMOUNT_COLS,
+        output_col="TARGET_SEV_CLAIMS_AMOUNT",
+    )
 
 
 def build_targets(
@@ -382,58 +411,15 @@ def build_targets(
         on="INCIDENT_NUMBER",
     )
 
-    df_base = target_3_claims[
-        ['INCIDENT_NUMBER', 'LOSS_ID', 'LOSS_NUMBER', 'INCOMINGCLAIMID', 'INCOMING_CLAIM_NUMBER', 'LINK_LOSS_NUMBER']
-    ].drop_duplicates(['INCOMING_CLAIM_NUMBER'])
+    target_sev_claims = _build_target_sev_claims_by_incident(target_3_claims)
+    df = df.merge(target_sev_claims, how="left", on="INCIDENT_NUMBER")
+    df = df.merge(target_3_pretensions, how="left", on="INCIDENT_NUMBER")
+    df = df.merge(target_3_pretensions_all, how="left", on="INCIDENT_NUMBER")
 
-    df_sorted = target_3_claims.loc[:, ['LOSS_NUMBER'] + list(target_3_claims.iloc[:, 6:].columns)]
-    df_sorted = df_sorted.drop(['INSTID', 'LINK_LOSS_NUMBER'], axis=1)
-    df_sorted = df_sorted.sort_values(by=['INCOMING_CLAIM_NUMBER', 'CLAIMEDVALUEPERIOD']).reset_index(drop=True)
-    df_sorted['Instance'] = df_sorted.groupby(['INCOMING_CLAIM_NUMBER']).cumcount() + 1
-    df_pivot = df_sorted.pivot(index=['INCOMING_CLAIM_NUMBER'], columns='Instance')
-    df_pivot.columns = [f'{col[0]}_{int(col[1])}' for col in df_pivot.columns]
-    df_pivot = df_pivot.reset_index()
-
-    target_3_claims = df_base.merge(df_pivot, how='left', on=['INCOMING_CLAIM_NUMBER'])
-    target_3_claims = target_3_claims[
-        ['INCIDENT_NUMBER',
-         'RECOVEREDMAINDEBT_1', 'RECOVEREDWEAROUT_1', 'RECOVEREDLOSSCOMMODYVALUE_1',
-         'RECOVEREDMAINDEBT_2', 'RECOVEREDWEAROUT_2', 'RECOVEREDLOSSCOMMODYVALUE_2',
-         'RECOVEREDMAINDEBT_3', 'RECOVEREDWEAROUT_3', 'RECOVEREDLOSSCOMMODYVALUE_3',
-         'RECOVEREDMAINDEBT_4', 'RECOVEREDWEAROUT_4', 'RECOVEREDLOSSCOMMODYVALUE_4',
-         'RECOVEREDMAINDEBT_5', 'RECOVEREDWEAROUT_5', 'RECOVEREDLOSSCOMMODYVALUE_5',
-         'RECOVEREDVALUEWITHSD_1', 'RECOVEREDVALUEWITHSD_2', 'RECOVEREDVALUEWITHSD_3',
-         'RECOVEREDVALUEWITHSD_4', 'RECOVEREDVALUEWITHSD_5']
-    ].fillna(0)
-    target_3_claims = target_3_claims.groupby('INCIDENT_NUMBER').sum().reset_index(drop=False)
-
-    df = df.merge(target_3_claims, how='left', on='INCIDENT_NUMBER')
-    df = df.merge(target_3_pretensions, how='left', on='INCIDENT_NUMBER')
-    df = df.merge(target_3_pretensions_all, how='left', on='INCIDENT_NUMBER')
-
-    severity_cols = [
-        'RECOVEREDMAINDEBT_1', 'RECOVEREDWEAROUT_1', 'RECOVEREDLOSSCOMMODYVALUE_1',
-        'RECOVEREDMAINDEBT_2', 'RECOVEREDWEAROUT_2', 'RECOVEREDLOSSCOMMODYVALUE_2',
-        'RECOVEREDMAINDEBT_3', 'RECOVEREDWEAROUT_3', 'RECOVEREDLOSSCOMMODYVALUE_3',
-        'RECOVEREDMAINDEBT_4', 'RECOVEREDWEAROUT_4', 'RECOVEREDLOSSCOMMODYVALUE_4',
-        'RECOVEREDMAINDEBT_5', 'RECOVEREDWEAROUT_5', 'RECOVEREDLOSSCOMMODYVALUE_5',
-    ]
-
-    def get_last_nonzero_or_valid(row):
-        for col in reversed(severity_cols):
-            val = row[col]
-            if pd.notna(val) and val != 0:
-                return val
-        return np.nan
-
-    df['TARGET_SEV'] = df.apply(get_last_nonzero_or_valid, axis=1)
-    df[['TARGET_SEV', _SURCHARGE_INCIDENT_COL, _UTS_SURCHARGE_INCIDENT_COL]] = df[
-        ['TARGET_SEV', _SURCHARGE_INCIDENT_COL, _UTS_SURCHARGE_INCIDENT_COL]
-    ].fillna(0)
-    df['TARGET_SEV'] = (
-        df['TARGET_SEV']
-        + df[_SURCHARGE_INCIDENT_COL]
-        + df[_UTS_SURCHARGE_INCIDENT_COL]
+    df["TARGET_SEV"] = (
+        df["TARGET_SEV_CLAIMS_AMOUNT"].fillna(0)
+        + df[_SURCHARGE_INCIDENT_COL].fillna(0)
+        + df[_UTS_SURCHARGE_INCIDENT_COL].fillna(0)
     )
 
     if 'VICTIM_VEHICLE_IS_JAPAN' in df.columns:
@@ -448,7 +434,7 @@ def build_targets(
     )
     df['TARGET'] = df['TARGET'].apply(lambda x: 1 if x > 0 else 0).astype(int)
     df["TARGET_FREQ"] = df["TARGET_FREQ"].fillna(0).astype(int)
-    for col in ("TARGET_FREQ_AMOUNT", "TARGET_FREQ_CLAIMS_AMOUNT", "TARGET_FREQ_PRET_AMOUNT"):
+    for col in ("TARGET_FREQ_AMOUNT", "TARGET_FREQ_CLAIMS_AMOUNT", "TARGET_FREQ_PRET_AMOUNT", "TARGET_SEV_CLAIMS_AMOUNT"):
         df[col] = df[col].fillna(0)
 
     df = ensure_victim_object_type_column(df)
