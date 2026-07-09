@@ -58,11 +58,12 @@ def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
 
 
 def payments_fee(row: pd.Series, config: FinEffectConfig) -> float:
-    """Судебные взносы по строке (как payments_fee в Litigant)."""
+    """Судебные взносы: ФУ — boolean-триггер из ПСР; суд — по исковой сумме icnl."""
     payments = 0.0
-    if row.get(config.fu_recovery_column, 0) > 0:
+    if row.get(config.fu_fee_trigger_column, 0) > 0:
         payments += config.fu_fee_amount
-    if config.apply_court_fee and row.get(config.court_recovery_column, 0) > 0:
+    claims_amount = row.get(config.freq_claims_amount_column, 0)
+    if config.apply_court_fee and claims_amount > 0:
         payments += config.court_fee_amount
     return payments
 
@@ -74,19 +75,11 @@ def add_premiums_column(df: pd.DataFrame, config: FinEffectConfig | None = None)
 
 
 def compute_fin_effect_fact(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.Series:
-    """Фактический фин. эффект до финального negate."""
+    """Фактический фин. эффект: исковая сумма (icnl) + взносы."""
     config = config or FinEffectConfig()
-    total = (
-        _numeric_series(df, config.pretension_payments_column)
-        + _numeric_series(df, config.fu_recovery_column)
-        + _numeric_series(df, config.court_recovery_column)
-        + _numeric_series(df, config.premiums_column)
+    return _numeric_series(df, config.fact_amount_column) + _numeric_series(
+        df, config.premiums_column
     )
-    if config.include_surcharge_in_fact:
-        total = total + _numeric_series(df, config.surcharge_column) + _numeric_series(
-            df, config.uts_surcharge_column
-        )
-    return total
 
 
 def prepare_effect_frame(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.DataFrame:
@@ -94,13 +87,7 @@ def prepare_effect_frame(df: pd.DataFrame, config: FinEffectConfig | None = None
     config = config or FinEffectConfig()
     result = df.copy()
 
-    for column in (
-        config.pretension_payments_column,
-        config.fu_recovery_column,
-        config.court_recovery_column,
-        config.surcharge_column,
-        config.uts_surcharge_column,
-    ):
+    for column in config.fill_zero_columns:
         if column in result.columns:
             result[column] = _numeric_series(result, column)
 
@@ -381,7 +368,7 @@ def _feature_rows_for_predict(
 
 
 def _frequency_proba_from_training(training: object, features: pd.DataFrame) -> np.ndarray:
-    """Вероятность ПСР с учётом калибратора, если он есть."""
+    """Вероятность frequency с учётом калибратора, если он есть."""
     calibrator = getattr(training, "frequency_calibrator", None)
     if calibrator is not None:
         return np.asarray(calibrator.predict_proba(features)[:, 1], dtype=float)

@@ -1,4 +1,4 @@
-"""Сводная таблица финансового эффекта по квадрантам TARGET × pred_freq."""
+"""Сводная таблица финансового эффекта по квадрантам TARGET_FREQ × pred_freq."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,7 +19,7 @@ def create_summary_table(
     effect_df: pd.DataFrame,
     config: FinEffectConfig | None = None,
 ) -> pd.DataFrame:
-    """Сводная таблица по комбинациям TARGET и pred_freq (Litigant)."""
+    """Сводная таблица по комбинациям frequency_target и pred_freq."""
     config = config or FinEffectConfig()
     masks = {
         "1_1": (effect_df[config.frequency_target_column] == 1)
@@ -35,25 +35,26 @@ def create_summary_table(
     rows: list[dict[str, float | int]] = []
     for mask_name, mask in masks.items():
         group = effect_df.loc[mask]
-        target_2, pred_freq = map(int, mask_name.split("_"))
+        target_fact, pred_freq = map(int, mask_name.split("_"))
 
         count = int(group.shape[0])
         payout_main = _neg_column_sum(group, config.base_payment_column)
         sum_od_uts = _neg_column_sum(group, config.severity_target_column)
         regression = _neg_column_sum(group, "pred_sev")
-        sum_claims = _neg_column_sum(group, config.pretension_payments_column)
-        sum_fu = _neg_column_sum(group, config.fu_recovery_column)
-        sum_lawsuit = _neg_column_sum(group, config.court_recovery_column)
+        sum_claims = _neg_column_sum(group, config.freq_claims_amount_column)
+        sum_pret = _neg_column_sum(group, config.freq_pret_amount_column)
         contributions = _neg_column_sum(group, config.premiums_column)
 
         fin_effect_model = float(group["fin_effect_model"].sum())
-        fin_effect_fact = float(sum_claims + sum_fu + sum_lawsuit + contributions)
+        fin_effect_fact = float(
+            _neg_column_sum(group, config.fact_amount_column) + contributions
+        )
 
-        if target_2 == 1 and pred_freq == 1:
+        if target_fact == 1 and pred_freq == 1:
             total = fin_effect_model
-        elif target_2 == 1 and pred_freq == 0:
+        elif target_fact == 1 and pred_freq == 0:
             total = fin_effect_fact
-        elif target_2 == 0 and pred_freq == 1:
+        elif target_fact == 0 and pred_freq == 1:
             total = fin_effect_model - fin_effect_fact
         else:
             total = 0.0
@@ -61,14 +62,13 @@ def create_summary_table(
         rows.append(
             {
                 "Количество инцидентов с иными взысканиями": count,
-                "Факт": target_2,
+                "Факт": target_fact,
                 "Классификация": pred_freq,
                 "Выплата по основному убытку": payout_main,
                 "Сумма ОД+УТС+Износ": sum_od_uts,
                 "Регрессия": regression,
-                "Сумма выплат по претензиям": sum_claims,
-                "Сумма взыскано по ФУ": sum_fu,
-                "Суммы взыскано по иску": sum_lawsuit,
+                "Иски (TARGET_FREQ_CLAIMS)": sum_claims,
+                "Претензии (TARGET_FREQ_PRET)": sum_pret,
                 "Взносы": contributions,
                 "ФИН. ЭФФЕКТ МОДЕЛЬ": fin_effect_model,
                 "ФИН. ЭФФЕКТ ФАКТ": fin_effect_fact,
@@ -102,9 +102,8 @@ def color_excel_table(writer, sheet_name: str, summary_df: pd.DataFrame) -> None
         "Выплата по основному убытку": colors["yellow"],
         "Сумма ОД+УТС+Износ": colors["blue"],
         "Регрессия": colors["purple"],
-        "Сумма выплат по претензиям": colors["pink"],
-        "Сумма взыскано по ФУ": colors["pink"],
-        "Суммы взыскано по иску": colors["pink"],
+        "Иски (TARGET_FREQ_CLAIMS)": colors["pink"],
+        "Претензии (TARGET_FREQ_PRET)": colors["pink"],
         "Взносы": colors["pink"],
         "ФИН. ЭФФЕКТ МОДЕЛЬ": colors["green"],
         "ФИН. ЭФФЕКТ ФАКТ": colors["red"],
@@ -147,9 +146,8 @@ def color_excel_table(writer, sheet_name: str, summary_df: pd.DataFrame) -> None
         "Выплата по основному убытку": 20,
         "Сумма ОД+УТС+Износ": 20,
         "Регрессия": 15,
-        "Сумма выплат по претензиям": 22,
-        "Сумма взыскано по ФУ": 18,
-        "Суммы взыскано по иску": 20,
+        "Иски (TARGET_FREQ_CLAIMS)": 22,
+        "Претензии (TARGET_FREQ_PRET)": 22,
         "Взносы": 12,
         "ФИН. ЭФФЕКТ МОДЕЛЬ": 18,
         "ФИН. ЭФФЕКТ ФАКТ": 18,

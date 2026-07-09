@@ -10,6 +10,13 @@ import pandas as pd
 from querulus.fin_effect.config import FinEffectConfig
 
 
+def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
+    """Числовая колонка или нули."""
+    if column not in df.columns:
+        return pd.Series(0.0, index=df.index, dtype=float)
+    return pd.to_numeric(df[column], errors="coerce").fillna(0.0)
+
+
 def _plot_deps():
     """Отложенный импорт matplotlib / seaborn / sklearn."""
     import matplotlib.pyplot as plt
@@ -159,9 +166,7 @@ def _build_severity_bins(
     if mask_actual_claim is None:
         mask_actual_claim = pd.Series(True, index=effect_df.index)
     mask_actual_claim = pd.Series(mask_actual_claim, index=effect_df.index).fillna(False)
-    base_sum = effect_df["fin_effect_fact"].abs() if "fin_effect_fact" in effect_df.columns else effect_df.get(
-        "base_sum", 0
-    )
+    base_sum = _numeric_series(effect_df, config.fact_amount_column)
 
     plot_data = pd.DataFrame(
         {
@@ -248,7 +253,7 @@ def plot_severity_fact_vs_pred_binned(
                 x=grouped["fact_sev_bin"],
                 y=grouped["base_sum"] + grouped["fact_surcharge"],
                 mode="lines+markers",
-                name="ПСР",
+                name="Исковая сумма (TARGET_FREQ_AMOUNT)",
                 line=dict(color="#9B5DE5", width=3),
             ),
             secondary_y=False,
@@ -309,7 +314,7 @@ def plot_severity_fact_vs_pred_binned(
         marker="s",
         linewidth=2,
         markersize=6,
-        label="ПСР",
+        label="Исковая сумма (TARGET_FREQ_AMOUNT)",
     )
     ax1.set_xlabel("Сумма (бин, руб)", fontsize=12)
     ax1.set_ylabel("Сумма (руб)", fontsize=12)
@@ -342,7 +347,7 @@ def plot_target_monthly_share(
     *,
     config: FinEffectConfig | None = None,
 ) -> None:
-    """Доля TARGET = 1 по месяцам."""
+    """Доля положительных frequency по месяцам."""
     plt, _, _, _, _, _ = _plot_deps()
     config = config or FinEffectConfig()
     data = df.copy()
@@ -361,7 +366,7 @@ def plot_target_monthly_share(
     plt.bar(monthly["MONTH_START"], monthly["target_share"] * 100, width=25, alpha=0.8)
     plt.xlabel("Месяц")
     plt.ylabel("Доля положительных случаев, %")
-    plt.title("Доля TARGET = 1 в общем объёме (помесячно)")
+    plt.title(f"Доля {config.frequency_target_column} = 1 в общем объёме (помесячно)")
     plt.grid(axis="y", alpha=0.3, linestyle="--")
     plt.xticks(rotation=45)
     plt.tight_layout()
@@ -373,7 +378,7 @@ def plot_positive_cases_by_month(
     *,
     config: FinEffectConfig | None = None,
 ) -> None:
-    """Количество положительных TARGET по месяцам."""
+    """Количество положительных frequency по месяцам."""
     plt, _, _, _, _, _ = _plot_deps()
     config = config or FinEffectConfig()
     data = df.copy()
@@ -390,7 +395,7 @@ def plot_positive_cases_by_month(
     plt.figure(figsize=(12, 5))
     plt.bar(positive["MONTH_START"], positive["positive_count"], width=25, alpha=0.8)
     plt.xlabel("Месяц")
-    plt.ylabel("Количество положительных случаев (TARGET = 1)")
+    plt.ylabel(f"Количество положительных случаев ({config.frequency_target_column} = 1)")
     plt.title("Положительные случаи по месяцам")
     plt.grid(axis="y", alpha=0.3)
     plt.xticks(rotation=45)

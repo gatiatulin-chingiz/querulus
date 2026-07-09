@@ -11,9 +11,14 @@ class FinEffectConfig:
     incident_column: str = "INCIDENT_NUMBER"
     filial_column: str = "FILIAL"
     date_column: str = "LOSS_DATE_TIME"
-    frequency_target_column: str = "TARGET"
+    frequency_target_column: str = "TARGET_FREQ"
     severity_target_column: str = "TARGET_SEV"
+    fact_amount_column: str = "TARGET_FREQ_AMOUNT"
+    freq_claims_amount_column: str = "TARGET_FREQ_CLAIMS_AMOUNT"
+    freq_pret_amount_column: str = "TARGET_FREQ_PRET_AMOUNT"
     base_payment_column: str = "Выплата_по_основному_убытку"
+    # Только boolean-триггер взноса ФУ (сумма в fact не входит).
+    fu_fee_trigger_column: str = "Сумма_взыскано_по_ФУ"
     pretension_payments_column: str = "Сумма_выплат_по_претензиям"
     fu_recovery_column: str = "Сумма_взыскано_по_ФУ"
     court_recovery_column: str = "Суммы_взыскано_по_иску"
@@ -35,12 +40,13 @@ class FinEffectConfig:
             "INCIDENT_NUMBER",
             "FILIAL",
             "Выплата_по_основному_убытку",
-            "Сумма_выплат_по_претензиям",
-            "Сумма_взыскано_по_ФУ",
-            "Суммы_взыскано_по_иску",
+            "TARGET_FREQ_AMOUNT",
+            "TARGET_FREQ_CLAIMS_AMOUNT",
+            "TARGET_FREQ_PRET_AMOUNT",
             "Взносы",
             "fin_effect_fact",
             "TARGET_SEV",
+            "TARGET_FREQ",
             "TARGET",
             "pred_freq",
             "pred_sev",
@@ -51,29 +57,27 @@ class FinEffectConfig:
     @property
     def fill_zero_columns(self) -> tuple[str, ...]:
         """Колонки, которые заполняются нулями перед расчётом."""
-        columns = [
-            self.pretension_payments_column,
-            self.fu_recovery_column,
-            self.court_recovery_column,
-            self.surcharge_column,
-            self.uts_surcharge_column,
-        ]
-        if self.include_surcharge_in_fact:
-            return tuple(columns)
-        return tuple(columns[:3] + columns[3:])
+        return (
+            self.fact_amount_column,
+            self.freq_claims_amount_column,
+            self.freq_pret_amount_column,
+            self.fu_fee_trigger_column,
+            self.base_payment_column,
+        )
 
 
 ANALYTICS_RENAME_DICT: dict[str, str] = {
     "INCIDENT_NUMBER": "НОМЕР ИНЦИДЕНТА",
     "FILIAL": "ФИЛИАЛ",
     "Выплата_по_основному_убытку": "ВЫПЛАТА ПО ОСНОВНОМУ УБЫТКУ",
-    "Сумма_выплат_по_претензиям": "СУММА ВЫПЛАТ ПО ПРЕТЕНЗИЯМ",
-    "Сумма_взыскано_по_ФУ": "СУММА ВЗЫСКАННАЯ У ФУ",
-    "Суммы_взыскано_по_иску": "СУММА ВЗЫСКАННАЯ В СУДЕ",
+    "TARGET_FREQ_AMOUNT": "ИСКОВАЯ СУММА (TARGET_FREQ_AMOUNT)",
+    "TARGET_FREQ_CLAIMS_AMOUNT": "ИСКИ (TARGET_FREQ_CLAIMS)",
+    "TARGET_FREQ_PRET_AMOUNT": "ПРЕТЕНЗИИ (TARGET_FREQ_PRET)",
     "Взносы": "ВЗНОСЫ",
     "fin_effect_fact": "ФАКТ ФИН. ЭФФЕКТ ",
     "TARGET_SEV": "ФАКТ СУММА ВЗЫСКАНИЯ ОСНОВНОГО ДОЛГА/УТС/ИЗНОСА",
-    "TARGET": "БЫЛ ПСР",
+    "TARGET_FREQ": "БЫЛ ИСК (TARGET_FREQ)",
+    "TARGET": "БЫЛ ПСР (legacy)",
     "pred_freq": "МОДЕЛЬ БУДЕТ ЛИ ВЗЫСКАНИЕ ОСНОВНОГО ДОЛГА/УТС/ИЗНОСА",
     "pred_sev": "МОДЕЛЬ СУММА ВЗЫСКАНИЯ ОСНОВНОГО ДОЛГА/УТС/ИЗНОСА",
     "fin_effect_model": "МОДЕЛЬ ФИН. ЭФФЕКТ",
