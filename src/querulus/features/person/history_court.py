@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import gc
+
 import pandas as pd
 
 from querulus.features.person.config import INCIDENT_COLUMN, PERSON_PREFIX, ROLES, T0_COLUMN
 from querulus.features.person.loaders import normalize_person_id_series, normalize_person_id_series as _norm_pid
+from querulus.features.person.utils import collect_person_ids
 
 
 def _prep_claims_persons(df_persons: pd.DataFrame) -> pd.DataFrame:
@@ -34,9 +37,34 @@ def _prep_claims_incoming(df_claims: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _aggregate_court_history(
+def _prep_court_claims_by_person(
     df_claims: pd.DataFrame,
     df_persons: pd.DataFrame,
+    *,
+    person_ids: frozenset[str] | None = None,
+) -> pd.DataFrame:
+    """Иски с person_id; опционально только по id из текущего датасета."""
+    claims = _prep_claims_incoming(df_claims)
+    persons = _prep_claims_persons(df_persons)
+    joined = claims.merge(
+        persons[["INCOMING_CLAIM_NUMBER", "PERSON_ID"]],
+        on="INCOMING_CLAIM_NUMBER",
+        how="inner",
+    ).rename(
+        columns={
+            "PERSON_ID": "_pid",
+            "INCOMING_CLAIM_GET_DATE": "_claim_date",
+            INCIDENT_COLUMN: "_claim_inc",
+        }
+    )
+    joined = joined.dropna(subset=["_pid", "_claim_date", "_claim_inc"])
+    if person_ids is not None:
+        joined = joined[joined["_pid"].isin(person_ids)]
+    return joined
+
+
+def _aggregate_court_history(
+    claims: pd.DataFrame,
     *,
     person_id: pd.Series,
     t0: pd.Series,
@@ -50,20 +78,6 @@ def _aggregate_court_history(
             "_inc": pd.to_numeric(current_incident, errors="coerce").values,
         }
     ).dropna(subset=["_pid"])
-
-    claims = df_claims.merge(
-        df_persons[["INCOMING_CLAIM_NUMBER", "PERSON_ID"]],
-        on="INCOMING_CLAIM_NUMBER",
-        how="inner",
-    )
-    claims = claims.rename(
-        columns={
-            "PERSON_ID": "_pid",
-            "INCOMING_CLAIM_GET_DATE": "_claim_date",
-            INCIDENT_COLUMN: "_claim_inc",
-        }
-    )
-    claims = claims.dropna(subset=["_pid", "_claim_date", "_claim_inc"])
 
     merged = base.merge(claims, on="_pid", how="left")
     mask = (merged["_claim_date"] < merged["_t0"]) & (merged["_claim_inc"] != merged["_inc"])
@@ -104,9 +118,14 @@ def _aggregate_court_history(
 
 def add_person_court_history(df: pd.DataFrame, df_claims_incoming: pd.DataFrame, df_claims_persons: pd.DataFrame) -> pd.DataFrame:
     """Добавить FE_PERSON_COURT_{ROLE}_* для всех ролей."""
-    out = df.copy()
-    claims = _prep_claims_incoming(df_claims_incoming)
-    persons = _prep_claims_persons(df_claims_persons)
+    out = df
+    person_ids = collect_person_ids(out)
+    claims = _prep_court_claims_by_person(
+        df_claims_incoming,
+        df_claims_persons,
+        person_ids=person_ids,
+    )
+    del df_claims_incoming, df_claims_persons
 
     t0 = out.get(T0_COLUMN)
     current_incident = out.get(INCIDENT_COLUMN)
@@ -117,13 +136,14 @@ def add_person_court_history(df: pd.DataFrame, df_claims_incoming: pd.DataFrame,
         pid = normalize_person_id_series(out[role.person_id_column])
         agg = _aggregate_court_history(
             claims,
-            persons,
             person_id=pid,
             t0=t0,
             current_incident=current_incident,
         )
         agg = agg.add_prefix(f"{PERSON_PREFIX}COURT_{role.suffix}_")
         out = out.join(agg)
+        del agg
+        gc.collect()
 
     return out
 

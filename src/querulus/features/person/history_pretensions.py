@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import gc
+
 import pandas as pd
 
-from querulus.features.person.config import INCIDENT_COLUMN, PERSON_PREFIX, ROLES, T0_COLUMN
+from querulus.features.person.config import (
+    INCIDENT_COLUMN,
+    PERSON_PREFIX,
+    PRETENSION_APPLICANT_COL,
+    PRETENSION_RECIPIENT_COL,
+    ROLES,
+    T0_COLUMN,
+)
 from querulus.features.person.loaders import normalize_person_id_series
+from querulus.features.person.utils import collect_person_ids
 
 
 def _prep_pretensions(df_pret: pd.DataFrame) -> pd.DataFrame:
@@ -154,10 +164,26 @@ def _aggregate_pret_history(
     return out
 
 
+def _filter_pretensions_by_person_ids(
+    pret: pd.DataFrame,
+    person_ids: frozenset[str],
+) -> pd.DataFrame:
+    """Оставить претензии только по person_id из victim-датасета."""
+    if not person_ids:
+        return pret.iloc[0:0].copy()
+    mask = pd.Series(False, index=pret.index)
+    for column in (PRETENSION_APPLICANT_COL, PRETENSION_RECIPIENT_COL):
+        if column in pret.columns:
+            mask = mask | pret[column].isin(person_ids)
+    return pret.loc[mask]
+
+
 def add_person_pretension_history(df: pd.DataFrame, df_pretensions: pd.DataFrame) -> pd.DataFrame:
     """Добавить FE_PERSON_PRET_{ROLE}_* для всех ролей (история по Applicant/Recipient)."""
-    out = df.copy()
+    out = df
     pret = _prep_pretensions(df_pretensions)
+    pret = _filter_pretensions_by_person_ids(pret, collect_person_ids(out))
+    del df_pretensions
 
     t0 = out.get(T0_COLUMN)
     current_incident = out.get(INCIDENT_COLUMN)
@@ -175,5 +201,7 @@ def add_person_pretension_history(df: pd.DataFrame, df_pretensions: pd.DataFrame
         )
         agg = agg.add_prefix(f"{PERSON_PREFIX}PRET_{role.suffix}_")
         out = out.join(agg)
+        del agg
+        gc.collect()
 
     return out
