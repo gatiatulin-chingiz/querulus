@@ -11,6 +11,7 @@ from querulus.dataset.paths import DataPaths
 
 _TARGET_FREQ_CLAIMS_GROUP = ("LOSS_NUMBER", "INCOMING_CLAIM_NUMBER")
 _FU_CLAIM_ORIGIN = "Обращение к ФУ"
+_CLAIM_PERIOD_COL = "CLAIMEDVALUEPERIOD"
 _SURCHARGE_INCIDENT_COL = "SurchargeValue_cumsum_by_incident_all"
 _UTS_SURCHARGE_INCIDENT_COL = "UTSSurchargeValue_cumsum_by_incident_all"
 
@@ -28,9 +29,12 @@ def _is_fu_instance(inst: pd.Series, claim_origin: pd.Series | None) -> pd.Serie
 def _pick_last_claim_instances(claims: pd.DataFrame) -> pd.DataFrame:
     """Последняя инстанция каждого иска на убытке.
 
-    ФУ — первоначальная стадия: если есть судебные инстанции (1..5), берём max InstByOisuu
-    среди судов (пример: 1,2,3,6 → 3, а не 6). Если судов нет — берём строку ФУ.
+    Порядок инстанций: IncomingClaimNumber, ClaimedValuePeriod (хронология).
+    ФУ — первоначальная стадия: если есть судебные инстанции (1..5), ФУ не берём.
     """
+    if _CLAIM_PERIOD_COL not in claims.columns:
+        raise KeyError(f"Для выбора инстанции не хватает колонки: {_CLAIM_PERIOD_COL}")
+
     work = claims.copy()
     origin = work["CLAIMORIGIN"] if "CLAIMORIGIN" in work.columns else None
     inst = pd.to_numeric(work["INSTBYOISUU"], errors="coerce")
@@ -38,18 +42,20 @@ def _pick_last_claim_instances(claims: pd.DataFrame) -> pd.DataFrame:
     is_court = (~is_fu) & inst.between(1, 5, inclusive="both")
 
     group_cols = list(_TARGET_FREQ_CLAIMS_GROUP)
+    sort_cols = [*group_cols, _CLAIM_PERIOD_COL]
+
     court = work[is_court]
     from_court = (
-        court.sort_values([*group_cols, "INSTBYOISUU"], ascending=[True, True, False])
-        .drop_duplicates(group_cols, keep="first")
+        court.sort_values(sort_cols, ascending=[True, True, True], na_position="first")
+        .drop_duplicates(group_cols, keep="last")
     )
 
     court_keys = court[group_cols].drop_duplicates()
     fu = work[is_fu].merge(court_keys, on=group_cols, how="left", indicator=True)
     fu_only = fu[fu["_merge"] == "left_only"].drop(columns="_merge")
     from_fu = (
-        fu_only.sort_values([*group_cols, "INSTBYOISUU"], ascending=[True, True, False])
-        .drop_duplicates(group_cols, keep="first")
+        fu_only.sort_values(sort_cols, ascending=[True, True, True], na_position="first")
+        .drop_duplicates(group_cols, keep="last")
     )
 
     return pd.concat([from_court, from_fu], ignore_index=True)
@@ -70,6 +76,7 @@ def _build_target_freq_by_incident(
         "LOSS_NUMBER",
         "INCOMING_CLAIM_NUMBER",
         "INSTBYOISUU",
+        _CLAIM_PERIOD_COL,
         "RECOVEREDVALUEWITHSD",
     }
     missing = required - set(claims.columns)
