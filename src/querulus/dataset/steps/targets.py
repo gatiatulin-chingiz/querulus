@@ -41,7 +41,12 @@ def build_targets(
     		_Fld14787	НомерРасчета	,
     		cast(_Fld14788 as INT)	СканыКалькуляцииОбработаны	,
     		_Fld15038	ДатаРасчета,
-    		ROW_NUMBER() over (partition by itl.IncidentNumber order by l.LossNumber desc) as rn
+    		-- Внутри одного убытка могут быть несколько расчётов AMOUNT_REPAIR.
+    		-- Нам нужен "последний" расчёт по Период.
+    		ROW_NUMBER() over (
+                partition by itl.IncidentNumber
+                order by l.LossNumber desc, _Period desc
+            ) as rn
     	from oisuu81.dbo._InfoRg14746 i
     	left join oisuu81_t_losses l on l.LossID = _Fld14747RRef
     	LEFT JOIN [OISUU_report].[dbo].[oisuu81_t_IncidentToLoss] AS itl on l.LossID=itl.LossID

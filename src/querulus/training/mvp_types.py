@@ -79,9 +79,14 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': ['LONGITUDE', 'LATIT
              'EMR_VALUE',
              'Взысканный_износ_ФУ',
              'REPAIR_VALUE',
+             # REPAIR_VALUE-derived signal (leakage / post-calc ratio)
+             'FE_REPAIR_TO_VALUE_RATIO',
              'Выплаченный_износ_инцидент',
              # VALUE_BEFORE_WITH / VALUE_AFTER_WITH разрешаем (временно) для обучения
              'CHECK',
+             # CPM/With related signals (leakage)
+             'CPM_RATIO_RUB',
+             'VALUE_AFTER_WITH',
              # refund / payment leakage (post-T0)
              'REFUND_FORM_BY_PAYMENT_ORDER',
              'FACT_AMOUNT_WITHOUT_OUTRUN',
