@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import logging
 
 import pandas as pd
 
@@ -16,6 +17,19 @@ from querulus.features.person.config import (
 )
 from querulus.features.person.loaders import normalize_person_id_series
 from querulus.features.person.utils import collect_person_ids
+
+logger = logging.getLogger("querulus.features.person")
+
+# Чанки base-строк при merge с историей претензий (снижение пика ОЗУ).
+_AGG_CHUNK_SIZE = 8_000
+
+_MONEY_COLS = (
+    "PRETENSION_VALUE",
+    "SURCHARGE_VALUE",
+    "UTS_SURCHARGE_VALUE",
+    "PRETENSION_VALUE_PENALTY",
+    "SURCHARGE_VALUE_PENALTY",
+)
 
 
 def _prep_pretensions(df_pret: pd.DataFrame) -> pd.DataFrame:
@@ -64,11 +78,24 @@ def _pretensions_for_join(
     if not pretension_person_columns:
         return pd.DataFrame()
 
+    keep_cols = {
+        INCIDENT_COLUMN,
+        "PRETENSION_GET_DATE",
+        "PRETENSION_NUMBER",
+        "PRETENSION_TYPES",
+        "PRETENSION_GET_METHOD",
+        "ANSWER_TYPE",
+        *_MONEY_COLS,
+    }
+    keep_cols.update(pretension_person_columns)
+
     parts: list[pd.DataFrame] = []
     for person_col in pretension_person_columns:
         if person_col not in df_pret.columns:
             continue
-        part = df_pret.dropna(subset=[person_col, "PRETENSION_GET_DATE", INCIDENT_COLUMN]).copy()
+        cols = [c for c in keep_cols if c in df_pret.columns]
+        part = df_pret.loc[df_pret[person_col].notna(), cols].copy()
+        part = part.dropna(subset=[person_col, "PRETENSION_GET_DATE", INCIDENT_COLUMN])
         part["_pid"] = part[person_col]
         parts.append(part)
 
@@ -87,6 +114,43 @@ def _pretensions_for_join(
             INCIDENT_COLUMN: "_pret_inc",
         }
     )
+
+
+def _aggregate_grouped_pret_history(
+    grouped: pd.core.groupby.DataFrameGroupBy,
+    *,
+    money_cols: list[str],
+    index: pd.Index,
+) -> pd.DataFrame:
+    """Собрать агрегаты по сгруппированной истории претензий."""
+    out = pd.DataFrame(index=index)
+    out[f"{PERSON_PREFIX}PRET_COUNT"] = grouped.size().reindex(index).fillna(0).astype(int)
+
+    if "PRETENSION_NUMBER" in grouped.obj.columns:
+        out[f"{PERSON_PREFIX}PRET_PRETENSION_NUMBER_NUNIQUE"] = (
+            grouped["PRETENSION_NUMBER"].nunique().reindex(index).fillna(0).astype(int)
+        )
+    if "PRETENSION_TYPES" in grouped.obj.columns:
+        out[f"{PERSON_PREFIX}PRET_TYPES_NUNIQUE"] = (
+            grouped["PRETENSION_TYPES"].nunique().reindex(index).fillna(0).astype(int)
+        )
+    if "PRETENSION_GET_METHOD" in grouped.obj.columns:
+        out[f"{PERSON_PREFIX}PRET_GET_METHOD_MODE"] = (
+            grouped["PRETENSION_GET_METHOD"]
+            .agg(lambda s: s.mode().iloc[0] if not s.mode().empty else pd.NA)
+            .reindex(index)
+        )
+    if "ANSWER_TYPE" in grouped.obj.columns:
+        out[f"{PERSON_PREFIX}PRET_ANSWER_TYPE_MODE"] = (
+            grouped["ANSWER_TYPE"]
+            .agg(lambda s: s.mode().iloc[0] if not s.mode().empty else pd.NA)
+            .reindex(index)
+        )
+
+    for col in money_cols:
+        out[f"{PERSON_PREFIX}PRET_{col}_SUM"] = grouped[col].sum(min_count=1).reindex(index)
+
+    return out
 
 
 def _aggregate_pret_history(
@@ -113,53 +177,45 @@ def _aggregate_pret_history(
         out[f"{PERSON_PREFIX}PRET_COUNT"] = 0
         return out
 
-    merged = base.merge(pret, on="_pid", how="left")
-    # history only: before T0 AND different incident
-    mask = (merged["_pret_date"] < merged["_t0"]) & (merged["_pret_inc"] != merged["_inc"])
-    merged = merged[mask]
+    needed_pids = frozenset(base["_pid"].astype(str))
+    pret = pret[pret["_pid"].astype(str).isin(needed_pids)]
 
-    # Numeric columns (money): allowed only for previous incidents.
-    money_cols = [
-        c
-        for c in (
-            "PRETENSION_VALUE",
-            "SURCHARGE_VALUE",
-            "UTS_SURCHARGE_VALUE",
-            "PRETENSION_VALUE_PENALTY",
-            "SURCHARGE_VALUE_PENALTY",
+    money_cols = [c for c in _MONEY_COLS if c in pret.columns]
+    chunk_parts: list[pd.DataFrame] = []
+
+    for start in range(0, len(base), _AGG_CHUNK_SIZE):
+        base_chunk = base.iloc[start : start + _AGG_CHUNK_SIZE]
+        chunk_pids = base_chunk["_pid"].unique()
+        pret_chunk = pret[pret["_pid"].isin(chunk_pids)]
+        if pret_chunk.empty:
+            continue
+
+        merged = base_chunk.merge(pret_chunk, on="_pid", how="left")
+        mask = (merged["_pret_date"] < merged["_t0"]) & (merged["_pret_inc"] != merged["_inc"])
+        merged = merged.loc[mask]
+        if merged.empty:
+            continue
+
+        for col in money_cols:
+            merged[col] = pd.to_numeric(merged[col], errors="coerce")
+
+        grouped = merged.groupby("_row", dropna=False)
+        chunk_index = pd.Index(base_chunk["_row"].unique())
+        chunk_parts.append(
+            _aggregate_grouped_pret_history(grouped, money_cols=money_cols, index=chunk_index)
         )
-        if c in merged.columns
-    ]
-    for col in money_cols:
-        merged[col] = pd.to_numeric(merged[col], errors="coerce")
+        del merged, pret_chunk, grouped
+        gc.collect()
 
-    grouped = merged.groupby("_row", dropna=False)
     out = pd.DataFrame(index=person_id.index)
-    out[f"{PERSON_PREFIX}PRET_COUNT"] = grouped.size().reindex(out.index).fillna(0).astype(int)
-
-    if "PRETENSION_NUMBER" in merged.columns:
-        out[f"{PERSON_PREFIX}PRET_PRETENSION_NUMBER_NUNIQUE"] = (
-            grouped["PRETENSION_NUMBER"].nunique().reindex(out.index).fillna(0).astype(int)
-        )
-    if "PRETENSION_TYPES" in merged.columns:
-        out[f"{PERSON_PREFIX}PRET_TYPES_NUNIQUE"] = (
-            grouped["PRETENSION_TYPES"].nunique().reindex(out.index).fillna(0).astype(int)
-        )
-    if "PRETENSION_GET_METHOD" in merged.columns:
-        out[f"{PERSON_PREFIX}PRET_GET_METHOD_MODE"] = (
-            grouped["PRETENSION_GET_METHOD"]
-            .agg(lambda s: s.mode().iloc[0] if not s.mode().empty else pd.NA)
-            .reindex(out.index)
-        )
-    if "ANSWER_TYPE" in merged.columns:
-        out[f"{PERSON_PREFIX}PRET_ANSWER_TYPE_MODE"] = (
-            grouped["ANSWER_TYPE"]
-            .agg(lambda s: s.mode().iloc[0] if not s.mode().empty else pd.NA)
-            .reindex(out.index)
-        )
-
-    for col in money_cols:
-        out[f"{PERSON_PREFIX}PRET_{col}_SUM"] = grouped[col].sum(min_count=1).reindex(out.index)
+    out[f"{PERSON_PREFIX}PRET_COUNT"] = 0
+    if chunk_parts:
+        combined = pd.concat(chunk_parts)
+        out = combined.reindex(person_id.index)
+        out[f"{PERSON_PREFIX}PRET_COUNT"] = out[f"{PERSON_PREFIX}PRET_COUNT"].fillna(0).astype(int)
+        for col in out.columns:
+            if col.endswith("_NUNIQUE"):
+                out[col] = out[col].fillna(0).astype(int)
 
     return out
 
@@ -174,7 +230,7 @@ def _filter_pretensions_by_person_ids(
     mask = pd.Series(False, index=pret.index)
     for column in (PRETENSION_APPLICANT_COL, PRETENSION_RECIPIENT_COL):
         if column in pret.columns:
-            mask = mask | pret[column].isin(person_ids)
+            mask = mask | pret[column].astype(str).isin(person_ids)
     return pret.loc[mask]
 
 
@@ -182,8 +238,14 @@ def add_person_pretension_history(df: pd.DataFrame, df_pretensions: pd.DataFrame
     """Добавить FE_PERSON_PRET_{ROLE}_* для всех ролей (история по Applicant/Recipient)."""
     out = df
     pret = _prep_pretensions(df_pretensions)
-    pret = _filter_pretensions_by_person_ids(pret, collect_person_ids(out))
+    person_ids = collect_person_ids(out)
+    pret = _filter_pretensions_by_person_ids(pret, person_ids)
     del df_pretensions
+    logger.info(
+        "Person pretension history: pret_rows=%s, person_ids=%s",
+        len(pret),
+        len(person_ids),
+    )
 
     t0 = out.get(T0_COLUMN)
     current_incident = out.get(INCIDENT_COLUMN)
@@ -192,6 +254,7 @@ def add_person_pretension_history(df: pd.DataFrame, df_pretensions: pd.DataFrame
         if role.person_id_column not in out.columns:
             continue
         pid = normalize_person_id_series(out[role.person_id_column])
+        logger.info("Person pretension history: role=%s", role.suffix)
         agg = _aggregate_pret_history(
             pret,
             person_id=pid,

@@ -24,7 +24,7 @@ def run_pipeline(
     use_sql: bool = False,
     save_checkpoint: bool = True,
     include_enrich: bool = False,
-    include_person_features: bool = True,
+    include_person_features: bool = False,
     resume_from_targets: bool = False,
 ) -> pd.DataFrame:
     """Собрать обучающий датасет.
@@ -35,7 +35,7 @@ def run_pipeline(
     используются из-за утечки ПСР в колонках *_FTRS_*.
 
     resume_from_targets=True: пропустить victim/targets, загрузить df_after_targets.parquet.
-    include_person_features=False: без FE_PERSON_* (экономия ОЗУ).
+    include_person_features=False: без FE_PERSON_* (экономия ОЗУ, по умолчанию).
     """
     setup_notebook_logging()
 
