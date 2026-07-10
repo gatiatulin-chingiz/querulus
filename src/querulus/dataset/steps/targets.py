@@ -1,6 +1,7 @@
 """Шаг пайплайна: targets."""
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from querulus.dataset.constants import RENAME_DICT
@@ -17,6 +18,12 @@ _TARGET_SEV_CLAIM_AMOUNT_COLS = (
     "RECOVEREDMAINDEBT",
     "RECOVEREDWEAROUT",
     "RECOVEREDLOSSCOMMODYVALUE",
+)
+_TARGET_SEV_OLD_RECOVERED_COLS = _TARGET_SEV_CLAIM_AMOUNT_COLS + ("RECOVEREDVALUEWITHSD",)
+_TARGET_SEV_OLD_SEVERITY_COLS: tuple[str, ...] = tuple(
+    f"{col}_{instance}"
+    for instance in range(1, 6)
+    for col in _TARGET_SEV_CLAIM_AMOUNT_COLS
 )
 
 
@@ -149,6 +156,92 @@ def _build_target_sev_claims_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
         amount_cols=_TARGET_SEV_CLAIM_AMOUNT_COLS,
         output_col="TARGET_SEV_CLAIMS_AMOUNT",
     )
+
+
+def _last_nonzero_severity_value(row: pd.Series) -> float:
+    """Последнее ненулевое значение среди RECOVERED*_{1..5} (legacy TARGET_SEV)."""
+    for col in reversed(_TARGET_SEV_OLD_SEVERITY_COLS):
+        val = row[col]
+        if pd.notna(val) and val != 0:
+            return float(val)
+    return np.nan
+
+
+def _build_target_sev_old_by_incident(
+    claims: pd.DataFrame,
+    pretensions: pd.DataFrame,
+) -> pd.DataFrame:
+    """Legacy TARGET_SEV: pivot по инстанциям иска + последний ненулевой RECOVERED* + претензии *_all."""
+    required = {
+        "INCIDENT_NUMBER",
+        "INCOMING_CLAIM_NUMBER",
+        _CLAIM_PERIOD_COL,
+        *_TARGET_SEV_OLD_RECOVERED_COLS,
+    }
+    missing = required - set(claims.columns)
+    if missing:
+        raise KeyError(f"Для TARGET_SEV_OLD не хватает колонок: {sorted(missing)}")
+
+    work = claims[list(required)].copy()
+    work = work[work["INCIDENT_NUMBER"].notna() & work["INCOMING_CLAIM_NUMBER"].notna()]
+    for col in _TARGET_SEV_OLD_RECOVERED_COLS:
+        work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0)
+
+    work = work.sort_values(
+        ["INCOMING_CLAIM_NUMBER", _CLAIM_PERIOD_COL],
+        ascending=[True, True],
+        na_position="first",
+    )
+    work["Instance"] = work.groupby("INCOMING_CLAIM_NUMBER").cumcount() + 1
+
+    pivot_index = ["INCOMING_CLAIM_NUMBER", "INCIDENT_NUMBER"]
+    wide = work.pivot_table(
+        index=pivot_index,
+        columns="Instance",
+        values=list(_TARGET_SEV_OLD_RECOVERED_COLS),
+        aggfunc="sum",
+        fill_value=0,
+    )
+    wide.columns = [f"{col}_{int(instance)}" for col, instance in wide.columns]
+    wide = wide.reset_index()
+
+    pivot_cols = [col for col in wide.columns if col not in pivot_index]
+    incident_pivot = wide.groupby("INCIDENT_NUMBER", as_index=False)[pivot_cols].sum()
+    incident_pivot["TARGET_SEV_OLD_CLAIMS_AMOUNT"] = incident_pivot.apply(
+        _last_nonzero_severity_value,
+        axis=1,
+    )
+
+    pret_cols = [
+        "INCIDENT_NUMBER",
+        _SURCHARGE_INCIDENT_COL,
+        _UTS_SURCHARGE_INCIDENT_COL,
+    ]
+    pret = pretensions[pret_cols].copy()
+    pret["TARGET_SEV_OLD_PRET_AMOUNT"] = (
+        pret[_SURCHARGE_INCIDENT_COL].fillna(0)
+        + pret[_UTS_SURCHARGE_INCIDENT_COL].fillna(0)
+    )
+
+    out = incident_pivot[["INCIDENT_NUMBER", "TARGET_SEV_OLD_CLAIMS_AMOUNT"]].merge(
+        pret[["INCIDENT_NUMBER", "TARGET_SEV_OLD_PRET_AMOUNT"]],
+        on="INCIDENT_NUMBER",
+        how="outer",
+    )
+    out["TARGET_SEV_OLD_CLAIMS_AMOUNT"] = out["TARGET_SEV_OLD_CLAIMS_AMOUNT"].fillna(0)
+    out["TARGET_SEV_OLD_PRET_AMOUNT"] = out["TARGET_SEV_OLD_PRET_AMOUNT"].fillna(0)
+    out["TARGET_SEV_OLD"] = (
+        out["TARGET_SEV_OLD_CLAIMS_AMOUNT"].fillna(0)
+        + out["TARGET_SEV_OLD_PRET_AMOUNT"]
+    )
+    return out[
+        [
+            "INCIDENT_NUMBER",
+            "TARGET_SEV_OLD",
+            "TARGET_SEV_OLD_CLAIMS_AMOUNT",
+            "TARGET_SEV_OLD_PRET_AMOUNT",
+        ]
+    ]
 
 
 def build_targets(
@@ -412,7 +505,20 @@ def build_targets(
     )
 
     target_sev_claims = _build_target_sev_claims_by_incident(target_3_claims)
+    target_sev_old = _build_target_sev_old_by_incident(target_3_claims, target_3_pretensions_all)
     df = df.merge(target_sev_claims, how="left", on="INCIDENT_NUMBER")
+    df = df.merge(
+        target_sev_old[
+            [
+                "INCIDENT_NUMBER",
+                "TARGET_SEV_OLD",
+                "TARGET_SEV_OLD_CLAIMS_AMOUNT",
+                "TARGET_SEV_OLD_PRET_AMOUNT",
+            ]
+        ],
+        how="left",
+        on="INCIDENT_NUMBER",
+    )
     df = df.merge(target_3_pretensions, how="left", on="INCIDENT_NUMBER")
     df = df.merge(target_3_pretensions_all, how="left", on="INCIDENT_NUMBER")
 
@@ -434,7 +540,15 @@ def build_targets(
     )
     df['TARGET'] = df['TARGET'].apply(lambda x: 1 if x > 0 else 0).astype(int)
     df["TARGET_FREQ"] = df["TARGET_FREQ"].fillna(0).astype(int)
-    for col in ("TARGET_FREQ_AMOUNT", "TARGET_FREQ_CLAIMS_AMOUNT", "TARGET_FREQ_PRET_AMOUNT", "TARGET_SEV_CLAIMS_AMOUNT"):
+    for col in (
+        "TARGET_FREQ_AMOUNT",
+        "TARGET_FREQ_CLAIMS_AMOUNT",
+        "TARGET_FREQ_PRET_AMOUNT",
+        "TARGET_SEV_CLAIMS_AMOUNT",
+        "TARGET_SEV_OLD",
+        "TARGET_SEV_OLD_CLAIMS_AMOUNT",
+        "TARGET_SEV_OLD_PRET_AMOUNT",
+    ):
         df[col] = df[col].fillna(0)
 
     df = ensure_victim_object_type_column(df)
