@@ -24,6 +24,13 @@ from querulus.fin_effect.calculator import (
     search_threshold_strategies,
 )
 from querulus.fin_effect.config import ANALYTICS_RENAME_DICT, FinEffectConfig
+from querulus.fin_effect.resolve import (
+    LEGACY_FREQUENCY_TARGETS,
+    LEGACY_SEVERITY_TARGETS,
+    infer_legacy_dataset,
+    resolve_fact_mode,
+    resolve_fin_effect_config,
+)
 from querulus.fin_effect.export import export_analytics_excel
 from querulus.fin_effect.summary import (
     color_excel_table,
@@ -75,6 +82,11 @@ __all__ = [
     "prepare_analytics_export",
     "prepare_effect_frame",
     "print_best_threshold_report",
+    "infer_legacy_dataset",
+    "LEGACY_FREQUENCY_TARGETS",
+    "LEGACY_SEVERITY_TARGETS",
+    "resolve_fact_mode",
+    "resolve_fin_effect_config",
     "run_fin_effect_from_training",
     "run_fin_effect_pipeline",
     "search_best_threshold",

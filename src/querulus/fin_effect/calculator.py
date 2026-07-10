@@ -75,11 +75,17 @@ def add_premiums_column(df: pd.DataFrame, config: FinEffectConfig | None = None)
 
 
 def compute_fin_effect_fact(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.Series:
-    """Фактический фин. эффект: исковая сумма (icnl) + взносы."""
+    """Фактический фин. эффект: icnl (TARGET_FREQ_AMOUNT) или legacy ПСР."""
     config = config or FinEffectConfig()
-    return _numeric_series(df, config.fact_amount_column) + _numeric_series(
-        df, config.premiums_column
-    )
+    premiums = _numeric_series(df, config.premiums_column)
+    if config.uses_legacy_psr_fact:
+        return (
+            _numeric_series(df, config.pretension_payments_column)
+            + _numeric_series(df, config.fu_recovery_column)
+            + _numeric_series(df, config.court_recovery_column)
+            + premiums
+        )
+    return _numeric_series(df, config.fact_amount_column) + premiums
 
 
 def prepare_effect_frame(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.DataFrame:

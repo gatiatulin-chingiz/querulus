@@ -46,9 +46,12 @@ def create_summary_table(
         contributions = _neg_column_sum(group, config.premiums_column)
 
         fin_effect_model = float(group["fin_effect_model"].sum())
-        fin_effect_fact = float(
-            _neg_column_sum(group, config.fact_amount_column) + contributions
-        )
+        if config.uses_legacy_psr_fact:
+            fin_effect_fact = float(group["fin_effect_fact"].sum())
+        else:
+            fin_effect_fact = float(
+                _neg_column_sum(group, config.fact_amount_column) + contributions
+            )
 
         if target_fact == 1 and pred_freq == 1:
             total = fin_effect_model

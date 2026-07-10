@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
+
+FactMode = Literal["icnl", "legacy_psr"]
 
 
 @dataclass(frozen=True)
 class FinEffectConfig:
     """Имена колонок и параметры расчёта."""
 
+    fact_mode: FactMode = "icnl"
     incident_column: str = "INCIDENT_NUMBER"
     filial_column: str = "FILIAL"
     date_column: str = "LOSS_DATE_TIME"
@@ -55,8 +59,20 @@ class FinEffectConfig:
     )
 
     @property
+    def uses_legacy_psr_fact(self) -> bool:
+        return self.fact_mode == "legacy_psr"
+
+    @property
     def fill_zero_columns(self) -> tuple[str, ...]:
         """Колонки, которые заполняются нулями перед расчётом."""
+        if self.uses_legacy_psr_fact:
+            return (
+                self.pretension_payments_column,
+                self.fu_recovery_column,
+                self.court_recovery_column,
+                self.fu_fee_trigger_column,
+                self.base_payment_column,
+            )
         return (
             self.fact_amount_column,
             self.freq_claims_amount_column,
@@ -78,6 +94,8 @@ ANALYTICS_RENAME_DICT: dict[str, str] = {
     "TARGET_SEV": "ФАКТ СУММА ВЗЫСКАНИЯ ОСНОВНОГО ДОЛГА/УТС/ИЗНОСА",
     "TARGET_FREQ": "БЫЛ ИСК (TARGET_FREQ)",
     "TARGET": "БЫЛ ПСР (legacy)",
+    "TARGET_2": "БЫЛ ПСР (TARGET_2)",
+    "TARGET_3_SEV": "ФАКТ СУММА (TARGET_3_SEV)",
     "pred_freq": "МОДЕЛЬ БУДЕТ ЛИ ВЗЫСКАНИЕ ОСНОВНОГО ДОЛГА/УТС/ИЗНОСА",
     "pred_sev": "МОДЕЛЬ СУММА ВЗЫСКАНИЯ ОСНОВНОГО ДОЛГА/УТС/ИЗНОСА",
     "fin_effect_model": "МОДЕЛЬ ФИН. ЭФФЕКТ",
