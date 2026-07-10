@@ -7,16 +7,15 @@ import logging
 
 import pandas as pd
 
-from querulus.dataset.filters import claims_sql_predicate
 from querulus.dataset.io import LazyOisuuConnection
 from querulus.dataset.paths import DataPaths
 from querulus.features.person.history_court import add_person_court_history
 from querulus.features.person.history_pretensions import add_person_pretension_history
 from querulus.features.person.loaders import (
-    load_claims_incoming,
     load_claims_persons,
     load_pretensions_base,
     load_pretensions_penalty_surcharge,
+    load_target_claims_for_features,
 )
 from querulus.features.person.static import add_person_static_features
 
@@ -55,14 +54,12 @@ def run_person_features(
     del pret
     gc.collect()
 
-    # Court: incoming claims + persons
-    claims_where = claims_sql_predicate(icnl_alias="icnl", loss_alias="l")
-    df_claims_incoming = load_claims_incoming(
+    # Court: target_3_claims (кэш targets) + persons
+    df_claims_incoming = load_target_claims_for_features(
         paths,
         conn,
         use_sql=use_sql,
         save_checkpoint=save_checkpoint,
-        claims_where_sql=claims_where,
     )
     df_claims_persons = load_claims_persons(paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint)
     out = add_person_court_history(out, df_claims_incoming, df_claims_persons)

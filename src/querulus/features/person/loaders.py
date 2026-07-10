@@ -10,9 +10,58 @@ from typing import Any
 
 import pandas as pd
 
-from querulus.dataset.io import LazyOisuuConnection, load_sql_artifact
+from querulus.dataset.filters import claims_sql_predicate
+from querulus.dataset.io import LazyOisuuConnection, load_sql_artifact, read_artifact
 from querulus.dataset.paths import DataPaths
 from querulus.dataset.pretension_utils import dedupe_pretension_rows
+
+TARGET_CLAIMS_ARTIFACT = "target_3_claims.parquet"
+
+_PRETENSION_HISTORY_COLUMNS = (
+    "INCIDENTNUMBER",
+    "INCIDENT_NUMBER",
+    "PRETENSIONNUMBER",
+    "PRETENSION_NUMBER",
+    "PRETENSIONGETDATE",
+    "PRETENSION_GET_DATE",
+    "APPLICANTPERSONID",
+    "APPLICANT_PERSON_ID",
+    "RECIPIENTPERSONID",
+    "RECIPIENT_PERSON_ID",
+    "PRETENSIONVALUE",
+    "PRETENSION_VALUE",
+    "SURCHARGEVALUE",
+    "SURCHARGE_VALUE",
+    "UTSSURCHARGEVALUE",
+    "UTS_SURCHARGE_VALUE",
+    "PRETENSIONTYPES",
+    "PRETENSION_TYPES",
+    "PRETENSIONGETMETHOD",
+    "PRETENSION_GET_METHOD",
+    "ANSWERTYPE",
+    "ANSWER_TYPE",
+    "PRETENSION_VALUE_PENALTY",
+    "SURCHARGE_VALUE_PENALTY",
+)
+
+
+def _subset_columns(df: pd.DataFrame, preferred: Iterable[str]) -> pd.DataFrame:
+    """Оставить только нужные колонки, если они есть в датасете."""
+    keep = [col for col in preferred if col in df.columns]
+    if not keep:
+        return df
+    extra = [
+        col
+        for col in df.columns
+        if col.startswith("CLAIMED") or col.startswith("RECOVERED")
+    ]
+    for col in ("INCIDENT_NUMBER", "INCOMING_CLAIM_NUMBER", "INCOMING_CLAIM_GET_DATE", "CLAIMITEM", "CLAIMORIGIN"):
+        if col in df.columns and col not in keep:
+            keep.append(col)
+    for col in extra:
+        if col not in keep:
+            keep.append(col)
+    return df[keep]
 
 
 def _require_conn(conn: LazyOisuuConnection | None, use_sql: bool) -> LazyOisuuConnection:
@@ -45,7 +94,31 @@ def load_pretensions_base(
         save_checkpoint=save_checkpoint,
     )
     df.columns = df.columns.str.upper()
+    df = _subset_columns(df, _PRETENSION_HISTORY_COLUMNS)
     return dedupe_pretension_rows(df)
+
+
+def load_target_claims_for_features(
+    paths: DataPaths,
+    conn: LazyOisuuConnection | None,
+    *,
+    use_sql: bool,
+    save_checkpoint: bool,
+) -> pd.DataFrame:
+    """Иски icnl из кэша build_targets (без повторной выгрузки df_claims_incoming)."""
+    _conn = _require_conn(conn, use_sql)
+    try:
+        df = read_artifact(paths, paths.raw_dir, TARGET_CLAIMS_ARTIFACT)
+    except FileNotFoundError:
+        claims_where = claims_sql_predicate(icnl_alias="icnl", loss_alias="l")
+        return load_claims_incoming(
+            paths,
+            _conn,
+            use_sql=use_sql,
+            save_checkpoint=save_checkpoint,
+            claims_where_sql=claims_where,
+        )
+    return _subset_columns(df, ())
 
 
 def load_pretensions_penalty_surcharge(
