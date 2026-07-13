@@ -11,7 +11,7 @@ from querulus.fin_effect.config import FinEffectConfig
 
 FactMode = Literal["icnl", "legacy_psr"]
 
-LEGACY_FREQUENCY_TARGETS: frozenset[str] = frozenset({"TARGET", "TARGET_2"})
+LEGACY_FREQUENCY_TARGETS: frozenset[str] = frozenset({"TARGET_2"})
 LEGACY_SEVERITY_TARGETS: frozenset[str] = frozenset({"TARGET_3_SEV"})
 
 _PSR_FACT_COLUMNS: tuple[str, ...] = (
@@ -99,7 +99,6 @@ def _legacy_config(
             "fin_effect_fact",
             severity_target,
             frequency_target,
-            "TARGET",
             "TARGET_2",
             "pred_freq",
             "pred_sev",

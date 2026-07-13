@@ -104,7 +104,7 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': ['LONGITUDE', 'LATIT
 DEFAULT_OTHER_COLS: tuple[str, ...] = (
     'INCIDENT_NUMBER',
     'LOSS_NUMBER',
-    'TARGET',
+    'TARGET_2',
     'TARGET_FREQ',
     'TARGET_SEV',
     'TARGET_3_SEV',

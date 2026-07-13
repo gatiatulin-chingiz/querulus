@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 expsoure = "expos"
-damage_count = "TARGET"
+damage_count = "TARGET_2"
 damage_sum = "TARGET_SEV"
 
 

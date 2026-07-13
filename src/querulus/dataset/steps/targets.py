@@ -215,7 +215,7 @@ def build_targets(
     save_checkpoint: bool = True,
     use_sql: bool = False,
 ):
-    """Добавить TARGET (ПСР), TARGET_FREQ (иски) и TARGET_SEV к victim-фрейму."""
+    """Добавить TARGET_2 (ПСР), TARGET_3_SEV, TARGET_FREQ и TARGET_SEV к victim-фрейму."""
     # Первичный убыток на инцидент: max LOSS_NUMBER
     df = select_primary_loss_per_incident(df)
 
@@ -485,12 +485,12 @@ def build_targets(
 
     df = df[df['VICTIM_POLICYHOLDER_TYPE'] == 'Физ. Лицо'].reset_index(drop=True)
 
-    df['TARGET'] = (
-        df['Сумма_выплат_по_претензиям'].fillna(0)
-        + df['Сумма_взыскано_по_ФУ'].fillna(0)
-        + df['Суммы_взыскано_по_иску'].fillna(0)
+    df["TARGET_2"] = (
+        df["Сумма_выплат_по_претензиям"].fillna(0)
+        + df["Сумма_взыскано_по_ФУ"].fillna(0)
+        + df["Суммы_взыскано_по_иску"].fillna(0)
     )
-    df['TARGET'] = df['TARGET'].apply(lambda x: 1 if x > 0 else 0).astype(int)
+    df["TARGET_2"] = df["TARGET_2"].apply(lambda x: 1 if x > 0 else 0).astype(int)
     df["TARGET_FREQ"] = df["TARGET_FREQ"].fillna(0).astype(int)
     for col in (
         "TARGET_FREQ_AMOUNT",

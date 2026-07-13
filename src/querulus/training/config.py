@@ -32,7 +32,7 @@ class TrainingConfig:
     date_column: str = "LOSS_DATE_TIME"
     train_period: tuple[str, str] = ("2022-01-01", "2024-05-31")
     test_period: tuple[str, str] = ("2024-06-01", "2025-06-01")
-    frequency_target: str = "TARGET"
+    frequency_target: str = "TARGET_FREQ"
     severity_target: str = "TARGET_SEV"
     severity_range: tuple[float, float] = (1.0, 1_500_000.0)
     frequency_iterations: int = 375
