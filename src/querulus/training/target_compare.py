@@ -36,20 +36,26 @@ PAIRS_OLD_VS_NEW: list[tuple[str, str]] = [
     ("TARGET_2", "TARGET_FREQ"),
     ("TARGET_3_SEV", "TARGET_SEV"),
 ]
-REGRESSION_PAIR: tuple[str, str] = ("TARGET_3_SEV", "TARGET_SEV")
-CLASSIFICATION_PAIR: tuple[str, str] = ("TARGET_2", "TARGET_FREQ")
 
 _QUERULUS_ROOT = Path(__file__).resolve().parents[3]
 
 
 @dataclass(frozen=True)
 class TargetComparisonResult:
-    """Результат сверки таргетов."""
+    """Результат одной сверки: отчёт + топ расхождений."""
 
     merged: pd.DataFrame
     report: pd.DataFrame
     top_regression: pd.DataFrame
     top_classification: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class TargetComparisonSuite:
+    """Полная сверка: Litigant vs Querulus (опц.) + legacy vs icnl на Querulus."""
+
+    litigant: TargetComparisonResult | None
+    old_vs_new: TargetComparisonResult
 
 
 def compare_target_pairs(
@@ -64,6 +70,7 @@ def compare_target_pairs(
     float_rtol: float = 0.0,
     float_atol: float = 0.0,
     float_pct_threshold: float = 0.01,
+    quiet: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Сверка пар (col_reference, col_candidate) по ключу инцидента."""
     if not pairs:
@@ -98,11 +105,12 @@ def compare_target_pairs(
     )
     merged = ref_k.merge(cnd_k, on=key, how="outer", indicator=True)
 
-    print(f"=== {reference_name} vs {candidate_name} (key={key}) ===")
-    print(f"  всего ключей: {len(merged):,}")
-    print(f"  только {reference_name}: {int((merged['_merge'] == 'left_only').sum()):,}")
-    print(f"  только {candidate_name}: {int((merged['_merge'] == 'right_only').sum()):,}")
-    print(f"  в обоих: {int((merged['_merge'] == 'both').sum()):,}\n")
+    if not quiet:
+        print(f"=== {reference_name} vs {candidate_name} (key={key}) ===")
+        print(f"  всего ключей: {len(merged):,}")
+        print(f"  только {reference_name}: {int((merged['_merge'] == 'left_only').sum()):,}")
+        print(f"  только {candidate_name}: {int((merged['_merge'] == 'right_only').sum()):,}")
+        print(f"  в обоих: {int((merged['_merge'] == 'both').sum()):,}\n")
 
     both = merged[merged["_merge"] == "both"].copy()
     report_rows: list[dict] = []
@@ -145,14 +153,15 @@ def compare_target_pairs(
                 else round(100 * float(pct_ok.mean()), 4),
             }
         )
-        print(f"--- {pair_label} ({'binary' if is_binary else 'float'}) ---")
-        print(f"  точное совпадение: {int(exact.sum()):,} / {n:,} ({100 * exact.mean():.2f}%)")
-        print(f"  расхождения:       {int((~exact).sum()):,} ({100 * (1 - exact.mean()):.2f}%)")
-        if not is_binary:
-            print(f"  ≤{float_pct_threshold:.0%} от candidate: {100 * pct_ok.mean():.2f}%")
-        print()
+        if not quiet:
+            print(f"--- {pair_label} ({'binary' if is_binary else 'float'}) ---")
+            print(f"  точное совпадение: {int(exact.sum()):,} / {n:,} ({100 * exact.mean():.2f}%)")
+            print(f"  расхождения:       {int((~exact).sum()):,} ({100 * (1 - exact.mean()):.2f}%)")
+            if not is_binary:
+                print(f"  ≤{float_pct_threshold:.0%} от candidate: {100 * pct_ok.mean():.2f}%")
+            print()
 
-    if pair_masks:
+    if pair_masks and not quiet:
         all_ok = pd.concat(pair_masks, axis=1).all(axis=1)
         print("--- ВСЕ указанные пары ---")
         print(
@@ -260,37 +269,66 @@ def top_pair_mismatches(
     return out[ordered]
 
 
+def _build_comparison_result(
+    merged: pd.DataFrame,
+    report: pd.DataFrame,
+    *,
+    pairs: list[tuple[str, str]],
+    df_reference: pd.DataFrame,
+    df_candidate: pd.DataFrame,
+    key: str,
+    top_n: int,
+) -> TargetComparisonResult:
+    """Собрать отчёт и топ расхождений по первой (класс.) и второй (регр.) паре."""
+    return TargetComparisonResult(
+        merged=merged,
+        report=report,
+        top_classification=top_pair_mismatches(
+            merged,
+            *pairs[0],
+            df_reference=df_reference,
+            df_candidate=df_candidate,
+            key=key,
+            n=top_n,
+        ),
+        top_regression=top_pair_mismatches(
+            merged,
+            *pairs[1],
+            df_reference=df_reference,
+            df_candidate=df_candidate,
+            key=key,
+            n=top_n,
+        ),
+    )
+
+
 def compare_old_vs_new_targets(
     df: pd.DataFrame,
     *,
     pairs: list[tuple[str, str]] | None = None,
-    top_n: int = 50,
+    top_n: int = 20,
     key: str = "INCIDENT_NUMBER",
+    quiet: bool = True,
 ) -> TargetComparisonResult:
-    """Сверка legacy vs new таргетов на одном датасете."""
+    """Сверка legacy vs icnl таргетов на одном датасете Querulus."""
     pairs = pairs or PAIRS_OLD_VS_NEW
     merged, report = compare_target_pairs(
-        df, df, pairs, key=key, reference_name="old", candidate_name="new"
+        df,
+        df,
+        pairs,
+        key=key,
+        reference_name="old",
+        candidate_name="new",
+        quiet=quiet,
     )
-    return TargetComparisonResult(
-        merged=merged,
-        report=report,
-        top_regression=top_pair_mismatches(
-            merged,
-            *REGRESSION_PAIR,
-            df_reference=df,
-            df_candidate=df,
-            key=key,
-            n=top_n,
-        ),
-        top_classification=top_pair_mismatches(
-            merged,
-            *CLASSIFICATION_PAIR,
-            df_reference=df,
-            df_candidate=df,
-            key=key,
-            n=top_n,
-        ),
+    return _build_comparison_result(
+        merged,
+        report,
+        pairs=pairs,
+        df_reference=df,
+        df_candidate=df,
+        key=key,
+        top_n=top_n,
     )
 
 
@@ -299,39 +337,64 @@ def compare_litigant_vs_querulus(
     df_querulus: pd.DataFrame,
     *,
     pairs: list[tuple[str, str]] | None = None,
-    top_n: int = 50,
+    top_n: int = 20,
     key: str = "INCIDENT_NUMBER",
+    quiet: bool = True,
 ) -> TargetComparisonResult:
-    """Сверка Litigant parquet vs Querulus."""
+    """Сверка Litigant (old) vs пересборка Querulus (new) по legacy-таргетам."""
     pairs = pairs or PAIRS_LEGACY
     merged, report = compare_target_pairs(
         df_litigant,
         df_querulus,
         pairs,
         key=key,
-        reference_name="litigant",
-        candidate_name="querulus",
+        reference_name="old",
+        candidate_name="new",
+        quiet=quiet,
     )
-    return TargetComparisonResult(
-        merged=merged,
-        report=report,
-        top_regression=top_pair_mismatches(
-            merged,
-            *pairs[1],
-            df_reference=df_litigant,
-            df_candidate=df_querulus,
-            key=key,
-            n=top_n,
-        ),
-        top_classification=top_pair_mismatches(
-            merged,
-            *pairs[0],
-            df_reference=df_litigant,
-            df_candidate=df_querulus,
-            key=key,
-            n=top_n,
-        ),
+    return _build_comparison_result(
+        merged,
+        report,
+        pairs=pairs,
+        df_reference=df_litigant,
+        df_candidate=df_querulus,
+        key=key,
+        top_n=top_n,
     )
+
+
+def run_target_comparison_suite(
+    df: pd.DataFrame,
+    *,
+    df_litigant: pd.DataFrame | None = None,
+    litigant_path: Path | str | None = None,
+    top_n: int = 20,
+    key: str = "INCIDENT_NUMBER",
+    quiet: bool = True,
+) -> TargetComparisonSuite:
+    """Две сверки подряд: Litigant vs Querulus, затем legacy vs icnl на Querulus."""
+    litigant_result: TargetComparisonResult | None = None
+    if df_litigant is not None:
+        litigant_result = compare_litigant_vs_querulus(
+            df_litigant,
+            df,
+            top_n=top_n,
+            key=key,
+            quiet=quiet,
+        )
+    elif litigant_path is not None:
+        path = Path(litigant_path)
+        if path.exists():
+            litigant_result = compare_litigant_vs_querulus(
+                pd.read_parquet(path),
+                df,
+                top_n=top_n,
+                key=key,
+                quiet=quiet,
+            )
+
+    old_vs_new = compare_old_vs_new_targets(df, top_n=top_n, key=key, quiet=quiet)
+    return TargetComparisonSuite(litigant=litigant_result, old_vs_new=old_vs_new)
 
 
 def default_litigant_dataset_path(project_root: Path | str | None = None) -> Path:
