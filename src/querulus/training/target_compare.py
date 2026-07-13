@@ -317,8 +317,8 @@ def compare_old_vs_new_targets(
         df,
         pairs,
         key=key,
-        reference_name="old",
-        candidate_name="new",
+        reference_name="legacy",
+        candidate_name="icnl",
         quiet=quiet,
     )
     return _build_comparison_result(
