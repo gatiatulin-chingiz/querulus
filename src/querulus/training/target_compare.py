@@ -317,7 +317,7 @@ def compare_litigant_vs_querulus(
         report=report,
         top_regression=top_pair_mismatches(
             merged,
-            *REGRESSION_PAIR,
+            *pairs[1],
             df_reference=df_litigant,
             df_candidate=df_querulus,
             key=key,
@@ -325,7 +325,7 @@ def compare_litigant_vs_querulus(
         ),
         top_classification=top_pair_mismatches(
             merged,
-            *CLASSIFICATION_PAIR,
+            *pairs[0],
             df_reference=df_litigant,
             df_candidate=df_querulus,
             key=key,
