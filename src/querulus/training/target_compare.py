@@ -8,6 +8,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from querulus.dataset.steps.targets import (
+    TARGET_3_SEV_COMPONENT_COLS,
+    TARGET_FREQ_COMPONENT_COLS,
+    TARGET_SEV_COMPONENT_COLS,
+)
+
 DEFAULT_BINARY_TARGETS: frozenset[str] = frozenset({"TARGET", "TARGET_2", "TARGET_FREQ"})
 
 # Слагаемые таргетов в df_final_3 (если колонка есть — попадёт в top_pair_mismatches)
@@ -17,16 +23,9 @@ TARGET_COMPONENTS: dict[str, tuple[str, ...]] = {
         "Сумма_взыскано_по_ФУ",
         "Суммы_взыскано_по_иску",
     ),
-    "TARGET_FREQ": ("TARGET_FREQ_CLAIMS_AMOUNT", "TARGET_FREQ_PRET_AMOUNT"),
-    "TARGET_3_SEV": (
-        "SurchargeValue_cumsum_by_incident",
-        "UTSSurchargeValue_cumsum_by_incident",
-    ),
-    "TARGET_SEV": (
-        "TARGET_SEV_CLAIMS_AMOUNT",
-        "SurchargeValue_cumsum_by_incident_all",
-        "UTSSurchargeValue_cumsum_by_incident_all",
-    ),
+    "TARGET_FREQ": TARGET_FREQ_COMPONENT_COLS,
+    "TARGET_3_SEV": TARGET_3_SEV_COMPONENT_COLS,
+    "TARGET_SEV": TARGET_SEV_COMPONENT_COLS,
 }
 
 PAIRS_LEGACY: list[tuple[str, str]] = [

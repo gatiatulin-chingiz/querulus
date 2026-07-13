@@ -24,6 +24,17 @@ _TARGET_3_SEV_SEVERITY_COLS: tuple[str, ...] = tuple(
     for instance in range(1, 6)
     for col in _TARGET_SEV_CLAIM_AMOUNT_COLS
 )
+_TARGET_FREQ_PRET_COMPONENT_COLS = (
+    _SURCHARGE_INCIDENT_COL,
+    _UTS_SURCHARGE_INCIDENT_COL,
+)
+TARGET_FREQ_CLAIMS_COMPONENT_COLS = ("RECOVEREDVALUEWITHSD_LAST_INST_SUM",)
+TARGET_FREQ_COMPONENT_COLS = TARGET_FREQ_CLAIMS_COMPONENT_COLS + _TARGET_FREQ_PRET_COMPONENT_COLS
+TARGET_SEV_CLAIMS_COMPONENT_COLS = tuple(
+    f"{col}_LAST_INST_SUM" for col in _TARGET_SEV_CLAIM_AMOUNT_COLS
+)
+TARGET_SEV_COMPONENT_COLS = TARGET_SEV_CLAIMS_COMPONENT_COLS + _TARGET_FREQ_PRET_COMPONENT_COLS
+TARGET_3_SEV_COMPONENT_COLS = _TARGET_3_SEV_SEVERITY_COLS
 
 
 def _is_fu_instance(inst: pd.Series, claim_origin: pd.Series | None) -> pd.Series:
@@ -109,6 +120,41 @@ def _sum_last_claim_instances_by_incident(
     return per_loss.groupby("INCIDENT_NUMBER", as_index=False)[output_col].sum()
 
 
+def _sum_last_claim_components_by_incident(
+    claims: pd.DataFrame,
+    amount_cols: tuple[str, ...],
+    *,
+    suffix: str = "",
+) -> pd.DataFrame:
+    """Сумма amount_cols по последней инстанции каждого иска, отдельно по каждой колонке."""
+    required = {
+        "INCIDENT_NUMBER",
+        "LOSS_NUMBER",
+        "INCOMING_CLAIM_NUMBER",
+        "INSTBYOISUU",
+        _CLAIM_PERIOD_COL,
+        *amount_cols,
+    }
+    missing = required - set(claims.columns)
+    if missing:
+        raise KeyError(f"Для компонентов иска не хватает колонок: {sorted(missing)}")
+
+    optional_cols = ["CLAIMORIGIN"] if "CLAIMORIGIN" in claims.columns else []
+    work = claims[list(required | set(optional_cols))].copy()
+    work = work[work["INCIDENT_NUMBER"].notna() & work["LOSS_NUMBER"].notna()]
+    for col in amount_cols:
+        work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0)
+
+    last_per_claim = _pick_last_claim_instances(work)
+    output_cols = [f"{col}{suffix}" for col in amount_cols]
+    per_loss = (
+        last_per_claim.groupby(["INCIDENT_NUMBER", "LOSS_NUMBER"], as_index=False)[list(amount_cols)]
+        .sum()
+        .rename(columns=dict(zip(amount_cols, output_cols, strict=True)))
+    )
+    return per_loss.groupby("INCIDENT_NUMBER", as_index=False)[output_cols].sum()
+
+
 def _build_target_freq_by_incident(
     claims: pd.DataFrame,
     pretensions: pd.DataFrame,
@@ -122,8 +168,9 @@ def _build_target_freq_by_incident(
     claims_amount = _sum_last_claim_instances_by_incident(
         claims,
         amount_cols=("RECOVEREDVALUEWITHSD",),
-        output_col="TARGET_FREQ_CLAIMS_AMOUNT",
+        output_col="RECOVEREDVALUEWITHSD_LAST_INST_SUM",
     )
+    claims_amount["TARGET_FREQ_CLAIMS_AMOUNT"] = claims_amount["RECOVEREDVALUEWITHSD_LAST_INST_SUM"]
 
     pret_cols = [
         "INCIDENT_NUMBER",
@@ -150,11 +197,13 @@ def _build_target_freq_by_incident(
 
 def _build_target_sev_claims_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
     """Сумма взысканий (ОД + износ + УТС) по последней инстанции каждого иска на инциденте."""
-    return _sum_last_claim_instances_by_incident(
+    out = _sum_last_claim_components_by_incident(
         claims,
-        amount_cols=_TARGET_SEV_CLAIM_AMOUNT_COLS,
-        output_col="TARGET_SEV_CLAIMS_AMOUNT",
+        _TARGET_SEV_CLAIM_AMOUNT_COLS,
+        suffix="_LAST_INST_SUM",
     )
+    out["TARGET_SEV_CLAIMS_AMOUNT"] = out[list(TARGET_SEV_CLAIMS_COMPONENT_COLS)].sum(axis=1)
+    return out
 
 
 def _last_nonzero_target_3_sev(row: pd.Series) -> float:
@@ -204,7 +253,7 @@ def _build_target_3_sev_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
     pivot_cols = [col for col in wide.columns if col not in pivot_index]
     incident_pivot = wide.groupby("INCIDENT_NUMBER", as_index=False)[pivot_cols].sum()
     incident_pivot["TARGET_3_SEV"] = incident_pivot.apply(_last_nonzero_target_3_sev, axis=1)
-    return incident_pivot[["INCIDENT_NUMBER", "TARGET_3_SEV"]]
+    return incident_pivot
 
 
 def build_targets(
@@ -459,6 +508,7 @@ def build_targets(
                 "INCIDENT_NUMBER",
                 "TARGET_FREQ",
                 "TARGET_FREQ_AMOUNT",
+                "RECOVEREDVALUEWITHSD_LAST_INST_SUM",
                 "TARGET_FREQ_CLAIMS_AMOUNT",
                 "TARGET_FREQ_PRET_AMOUNT",
             ]
@@ -494,12 +544,16 @@ def build_targets(
     df["TARGET_FREQ"] = df["TARGET_FREQ"].fillna(0).astype(int)
     for col in (
         "TARGET_FREQ_AMOUNT",
+        "RECOVEREDVALUEWITHSD_LAST_INST_SUM",
         "TARGET_FREQ_CLAIMS_AMOUNT",
         "TARGET_FREQ_PRET_AMOUNT",
+        *TARGET_SEV_CLAIMS_COMPONENT_COLS,
         "TARGET_SEV_CLAIMS_AMOUNT",
         "TARGET_3_SEV",
+        *TARGET_3_SEV_COMPONENT_COLS,
     ):
-        df[col] = df[col].fillna(0)
+        if col in df.columns:
+            df[col] = df[col].fillna(0)
 
     df = ensure_victim_object_type_column(df)
 
