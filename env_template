@@ -4,6 +4,8 @@
 # Путь к victim: VICTIM_PARQUET или configs/dataset_sources.json → artifact_paths.victim
 # Фильтры victim/исков: configs/dataset_filters.json
 VICTIM_PARQUET=
+# Legacy parquet Litigant для сверки таргетов (target_compare)
+LITIGANT_DATASET_PATH=
 
 # OISUU (pymssql), нужен при USE_SQL=True
 OISUU_DB_SERVER=

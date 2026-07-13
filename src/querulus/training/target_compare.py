@@ -1,6 +1,7 @@
 """Сверка legacy/new таргетов между датасетами или внутри одного df."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -213,20 +214,32 @@ def top_pair_mismatches(
         diff = (a - b).abs()
 
     mismatch = both.loc[diff > 0].copy()
-    mismatch["_abs_diff"] = diff[diff > 0]
-    mismatch["_pct_diff"] = np.where(
-        b[diff > 0].abs() > 0,
-        mismatch["_abs_diff"] / b[diff > 0].abs(),
-        np.where(mismatch["_abs_diff"] > 0, 1.0, 0.0),
+    abs_diff = diff.loc[mismatch.index]
+    pct_diff = np.where(
+        b.loc[mismatch.index].abs() > 0,
+        abs_diff / b.loc[mismatch.index].abs(),
+        np.where(abs_diff > 0, 1.0, 0.0),
     )
-    mismatch = mismatch.sort_values(["_abs_diff", "_pct_diff"], ascending=False).head(n)
+    mismatch = (
+        mismatch.assign(_abs_diff=abs_diff, _pct_diff=pct_diff)
+        .sort_values(["_abs_diff", "_pct_diff"], ascending=False)
+        .head(n)
+        .reset_index(drop=True)
+    )
 
     ref_target_col, cnd_target_col = _target_column_names(col_reference, col_candidate)
     ref_components = [c for c in component_map.get(col_reference, ()) if c in df_reference.columns]
     cnd_components = [c for c in component_map.get(col_candidate, ()) if c in df_candidate.columns]
 
+    ref_values = pd.to_numeric(mismatch[a_col], errors="coerce")
+    cnd_values = pd.to_numeric(mismatch[b_col], errors="coerce")
+    if is_binary:
+        ref_values = ref_values.fillna(0).astype(int)
+        cnd_values = cnd_values.fillna(0).astype(int)
+
     out = mismatch[[key]].copy()
-    occupied = {key}
+    out[ref_target_col] = ref_values.to_numpy()
+    occupied = {key, ref_target_col}
     ref_rename: dict[str, str] = {}
     cnd_rename: dict[str, str] = {}
 
@@ -235,19 +248,12 @@ def top_pair_mismatches(
         ref_rename = _component_column_names(ref_components, occupied=occupied, side_suffix="__ref")
         out = out.merge(ref_comp.rename(columns=ref_rename), on=key, how="left")
 
-    out[ref_target_col] = pd.to_numeric(mismatch[a_col], errors="coerce")
-    if is_binary:
-        out[ref_target_col] = out[ref_target_col].fillna(0).astype(int)
-    occupied.add(ref_target_col)
-
     if cnd_components:
         cnd_comp = df_candidate[[key, *cnd_components]].drop_duplicates(key)
         cnd_rename = _component_column_names(cnd_components, occupied=occupied, side_suffix="__cnd")
         out = out.merge(cnd_comp.rename(columns=cnd_rename), on=key, how="left")
 
-    out[cnd_target_col] = pd.to_numeric(mismatch[b_col], errors="coerce")
-    if is_binary:
-        out[cnd_target_col] = out[cnd_target_col].fillna(0).astype(int)
+    out[cnd_target_col] = cnd_values.to_numpy()
 
     ordered = [key, *[ref_rename[c] for c in ref_components], ref_target_col]
     ordered.extend(cnd_rename[c] for c in cnd_components)
@@ -331,5 +337,8 @@ def compare_litigant_vs_querulus(
 
 def default_litigant_dataset_path(project_root: Path | str | None = None) -> Path:
     """Путь к legacy parquet Litigant."""
+    override = os.getenv("LITIGANT_DATASET_PATH")
+    if override:
+        return Path(override)
     root = _QUERULUS_ROOT if project_root is None else project_root
     return Path(root) / "data" / "processed" / "df_final_3_litigant.parquet"
