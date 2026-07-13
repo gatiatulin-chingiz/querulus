@@ -39,6 +39,8 @@ PAIRS_OLD_VS_NEW: list[tuple[str, str]] = [
 REGRESSION_PAIR: tuple[str, str] = ("TARGET_3_SEV", "TARGET_SEV")
 CLASSIFICATION_PAIR: tuple[str, str] = ("TARGET_2", "TARGET_FREQ")
 
+_QUERULUS_ROOT = Path(__file__).resolve().parents[3]
+
 
 @dataclass(frozen=True)
 class TargetComparisonResult:
@@ -161,23 +163,26 @@ def compare_target_pairs(
     return merged, pd.DataFrame(report_rows)
 
 
-def attach_target_components(
-    out: pd.DataFrame,
+def _target_column_names(col_reference: str, col_candidate: str) -> tuple[str, str]:
+    """Имена колонок таргетов в top_pair_mismatches (без __ref/__cnd, если имена разные)."""
+    if col_reference == col_candidate:
+        return f"{col_reference}__ref", f"{col_candidate}__cnd"
+    return col_reference, col_candidate
+
+
+def _component_column_names(
+    cols: list[str],
     *,
-    key: str,
-    target: str,
-    side: str,
-    df: pd.DataFrame,
-    component_map: dict[str, tuple[str, ...]] | None = None,
-) -> pd.DataFrame:
-    """Добавить слагаемые таргета с суффиксом __ref / __cnd."""
-    component_map = component_map or TARGET_COMPONENTS
-    cols = [c for c in component_map.get(target, ()) if c in df.columns]
-    if not cols:
-        return out
-    comp = df[[key, *cols]].drop_duplicates(key)
-    comp = comp.rename(columns={c: f"{c}__{side}" for c in cols})
-    return out.merge(comp, on=key, how="left")
+    occupied: set[str],
+    side_suffix: str,
+) -> dict[str, str]:
+    """Имена слагаемых: без суффикса, если имя ещё не занято."""
+    rename: dict[str, str] = {}
+    for col in cols:
+        name = f"{col}{side_suffix}" if col in occupied else col
+        rename[col] = name
+        occupied.add(name)
+    return rename
 
 
 def top_pair_mismatches(
@@ -192,7 +197,7 @@ def top_pair_mismatches(
     component_map: dict[str, tuple[str, ...]] | None = None,
     n: int = 50,
 ) -> pd.DataFrame:
-    """Топ расхождений по паре таргетов + слагаемые обеих сторон."""
+    """Топ расхождений: слагаемые старого/нового таргета и сами таргеты."""
     component_map = component_map or TARGET_COMPONENTS
     both = merged[merged["_merge"] == "both"].copy()
     a_col, b_col = f"{col_reference}__ref", f"{col_candidate}__cnd"
@@ -207,27 +212,47 @@ def top_pair_mismatches(
     else:
         diff = (a - b).abs()
 
-    out = pd.DataFrame(
-        {
-            key: both[key],
-            f"{col_reference}__ref": a,
-            f"{col_candidate}__cnd": b,
-            "abs_diff": diff,
-            "pct_diff_vs_candidate": np.where(
-                b.abs() > 0,
-                diff / b.abs(),
-                np.where(diff > 0, 1.0, 0.0),
-            ),
-        }
+    mismatch = both.loc[diff > 0].copy()
+    mismatch["_abs_diff"] = diff[diff > 0]
+    mismatch["_pct_diff"] = np.where(
+        b[diff > 0].abs() > 0,
+        mismatch["_abs_diff"] / b[diff > 0].abs(),
+        np.where(mismatch["_abs_diff"] > 0, 1.0, 0.0),
     )
-    out = out.loc[diff > 0].sort_values(["abs_diff", "pct_diff_vs_candidate"], ascending=False).head(n)
-    out = attach_target_components(
-        out, key=key, target=col_reference, side="ref", df=df_reference, component_map=component_map
-    )
-    out = attach_target_components(
-        out, key=key, target=col_candidate, side="cnd", df=df_candidate, component_map=component_map
-    )
-    return out
+    mismatch = mismatch.sort_values(["_abs_diff", "_pct_diff"], ascending=False).head(n)
+
+    ref_target_col, cnd_target_col = _target_column_names(col_reference, col_candidate)
+    ref_components = [c for c in component_map.get(col_reference, ()) if c in df_reference.columns]
+    cnd_components = [c for c in component_map.get(col_candidate, ()) if c in df_candidate.columns]
+
+    out = mismatch[[key]].copy()
+    occupied = {key}
+    ref_rename: dict[str, str] = {}
+    cnd_rename: dict[str, str] = {}
+
+    if ref_components:
+        ref_comp = df_reference[[key, *ref_components]].drop_duplicates(key)
+        ref_rename = _component_column_names(ref_components, occupied=occupied, side_suffix="__ref")
+        out = out.merge(ref_comp.rename(columns=ref_rename), on=key, how="left")
+
+    out[ref_target_col] = pd.to_numeric(mismatch[a_col], errors="coerce")
+    if is_binary:
+        out[ref_target_col] = out[ref_target_col].fillna(0).astype(int)
+    occupied.add(ref_target_col)
+
+    if cnd_components:
+        cnd_comp = df_candidate[[key, *cnd_components]].drop_duplicates(key)
+        cnd_rename = _component_column_names(cnd_components, occupied=occupied, side_suffix="__cnd")
+        out = out.merge(cnd_comp.rename(columns=cnd_rename), on=key, how="left")
+
+    out[cnd_target_col] = pd.to_numeric(mismatch[b_col], errors="coerce")
+    if is_binary:
+        out[cnd_target_col] = out[cnd_target_col].fillna(0).astype(int)
+
+    ordered = [key, *[ref_rename[c] for c in ref_components], ref_target_col]
+    ordered.extend(cnd_rename[c] for c in cnd_components)
+    ordered.append(cnd_target_col)
+    return out[ordered]
 
 
 def compare_old_vs_new_targets(
@@ -304,6 +329,7 @@ def compare_litigant_vs_querulus(
     )
 
 
-def default_litigant_dataset_path(project_root: Path) -> Path:
+def default_litigant_dataset_path(project_root: Path | str | None = None) -> Path:
     """Путь к legacy parquet Litigant."""
-    return project_root / "data" / "processed" / "df_final_3_litigant.parquet"
+    root = _QUERULUS_ROOT if project_root is None else project_root
+    return Path(root) / "data" / "processed" / "df_final_3_litigant.parquet"
