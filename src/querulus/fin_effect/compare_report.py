@@ -330,13 +330,18 @@ def summary_itogo_breakdown(
     result: FinEffectResult,
     config: FinEffectConfig,
 ) -> pd.DataFrame:
-    """Таблица Факт × Pred → ИТОГО (как в create_summary_table)."""
+    """Таблица pred × fact → ИТОГО (как в create_summary_table).
+
+    Порядок строк/колонок совпадает с model_quadrant_breakdown:
+    pred, fact; строки (0,0) → (0,1) → (1,0) → (1,1).
+    """
     summary = create_summary_table(result.frame, config)
+    # Ключ (pred, fact) — как в model_quadrant_breakdown.
     mapping = {
-        (1, 1): "fin_effect_model",
-        (1, 0): "fin_effect_fact",
-        (0, 1): "model − fact",
         (0, 0): "0",
+        (0, 1): "fin_effect_fact",
+        (1, 0): "model − fact",
+        (1, 1): "fin_effect_model",
     }
     out = summary.rename(
         columns={
@@ -348,12 +353,15 @@ def summary_itogo_breakdown(
             "Количество инцидентов с иными взысканиями": "n",
         }
     )
+    out["pred"] = out["pred"].astype(int)
+    out["fact"] = out["fact"].astype(int)
+    out = out.sort_values(["pred", "fact"], kind="mergesort").reset_index(drop=True)
     out["formula_itogo"] = [
-        mapping[(int(r.fact), int(r.pred))] for r in out.itertuples(index=False)
+        mapping[(int(r.pred), int(r.fact))] for r in out.itertuples(index=False)
     ]
     cols = [
-        "fact",
         "pred",
+        "fact",
         "formula_itogo",
         "n",
         "fin_effect_model",
