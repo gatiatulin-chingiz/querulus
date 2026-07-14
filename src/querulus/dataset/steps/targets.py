@@ -8,6 +8,7 @@ from querulus.dataset.constants import RENAME_DICT
 from querulus.dataset.filters import claims_sql_predicate, ensure_victim_object_type_column, select_primary_loss_per_incident
 from querulus.dataset.io import load_sql_artifact
 from querulus.dataset.paths import DataPaths
+from querulus.dataset.pretension_utils import pretension_surcharge_by_incident_sql
 
 _TARGET_FREQ_CLAIMS_GROUP = ("LOSS_NUMBER", "INCOMING_CLAIM_NUMBER")
 _FU_CLAIM_ORIGIN = "Обращение к ФУ"
@@ -380,18 +381,16 @@ def build_targets(
 
     df = df.merge(target_psr, how='left', left_on='INCIDENT_NUMBER', right_on='Номер_инциндента')
 
-    target_3_pretensions_sql = \
-    """
-    SELECT 
-           itl.IncidentNumber
-          ,sum(p.[SurchargeValue]) as SurchargeValue_cumsum_by_incident
-          ,sum(p.[UTSSurchargeValue]) as UTSSurchargeValue_cumsum_by_incident
-      FROM [OISUU_report].[dbo].[oisuu81_t_Pretensions] AS p
-      LEFT JOIN [OISUU_report].[dbo].[oisuu81_t_IncidentToLoss] AS itl on itl.LossID=p.LossID
-      WHERE InsuranceTypeGroups = 'ОСАГО'
-      and PretensionType in ('Несогласие с суммой выплаты','Претензия на принятое решение')
-      group by IncidentNumber
-    """
+    # Доплаты претензий → инцидент: AnswerType=выплата/частичная,
+    # дедуп по PretensionNumber, затем sum (см. pretension_utils).
+    target_3_pretensions_sql = pretension_surcharge_by_incident_sql(
+        surcharge_alias="SurchargeValue_cumsum_by_incident",
+        uts_alias="UTSSurchargeValue_cumsum_by_incident",
+        pretension_types=(
+            "Несогласие с суммой выплаты",
+            "Претензия на принятое решение",
+        ),
+    )
     target_3_pretensions = load_sql_artifact(
         paths,
         conn,
@@ -403,17 +402,11 @@ def build_targets(
     )
     target_3_pretensions = target_3_pretensions.rename(columns=RENAME_DICT)
 
-    target_3_pretensions_all_sql = \
-    """
-    SELECT 
-           itl.IncidentNumber
-          ,sum(p.[SurchargeValue]) as SurchargeValue_cumsum_by_incident_all
-          ,sum(p.[UTSSurchargeValue]) as UTSSurchargeValue_cumsum_by_incident_all
-      FROM [OISUU_report].[dbo].[oisuu81_t_Pretensions] AS p
-      LEFT JOIN [OISUU_report].[dbo].[oisuu81_t_IncidentToLoss] AS itl on itl.LossID=p.LossID
-      WHERE InsuranceTypeGroups = 'ОСАГО'
-      group by IncidentNumber
-    """
+    target_3_pretensions_all_sql = pretension_surcharge_by_incident_sql(
+        surcharge_alias="SurchargeValue_cumsum_by_incident_all",
+        uts_alias="UTSSurchargeValue_cumsum_by_incident_all",
+        pretension_types=None,
+    )
     target_3_pretensions_all = load_sql_artifact(
         paths,
         conn,
