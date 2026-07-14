@@ -9,14 +9,14 @@ import numpy as np
 import pandas as pd
 
 from querulus.dataset.steps.targets import (
-    TARGET_3_SEV_COMPONENT_COLS,
     TARGET_FREQ_COMPONENT_COLS,
     TARGET_SEV_COMPONENT_COLS,
 )
 
 DEFAULT_BINARY_TARGETS: frozenset[str] = frozenset({"TARGET", "TARGET_2", "TARGET_FREQ"})
 
-# Слагаемые таргетов в df_final_3 (если колонка есть — попадёт в top_pair_mismatches)
+# Слагаемые в top_*: только листовые суммы (без pivot RECOVERED*_1..5).
+# TARGET_3_SEV — last-nonzero по pivot, аддитивных слагаемых нет.
 TARGET_COMPONENTS: dict[str, tuple[str, ...]] = {
     "TARGET_2": (
         "Сумма_выплат_по_претензиям",
@@ -24,7 +24,7 @@ TARGET_COMPONENTS: dict[str, tuple[str, ...]] = {
         "Суммы_взыскано_по_иску",
     ),
     "TARGET_FREQ": TARGET_FREQ_COMPONENT_COLS,
-    "TARGET_3_SEV": TARGET_3_SEV_COMPONENT_COLS,
+    "TARGET_3_SEV": (),
     "TARGET_SEV": TARGET_SEV_COMPONENT_COLS,
 }
 
