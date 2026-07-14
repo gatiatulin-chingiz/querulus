@@ -38,13 +38,17 @@ def _legacy_targets_selected(frequency_target: str, severity_target: str) -> boo
 
 
 def infer_legacy_dataset(df: pd.DataFrame) -> bool:
-    """Эвристика: старый parquet с ПСР-суммами без icnl-факта."""
+    """Эвристика: старый parquet с ПСР без содержательного icnl-факта.
+
+    Новый querulus-датасет тоже содержит колонки ПСР (merge target_psr),
+    поэтому наличие ПСР + ненулевой TARGET_FREQ_AMOUNT → не legacy.
+    """
     has_psr = _has_psr_fact_columns(df)
     icnl_signal = _icnl_amount_signal(df)
+    if icnl_signal >= 0.01:
+        return False
     if has_psr and icnl_signal < 0.01:
         return True
-    if icnl_signal >= 0.01 and not has_psr:
-        return False
     return has_psr
 
 
@@ -59,9 +63,11 @@ def resolve_fact_mode(
 ) -> FactMode:
     """Выбрать режим расчёта fin_effect_fact.
 
-    - Старый датасет (legacy_dataset / эвристика) → legacy_psr.
-    - Новый датасет + новые таргеты → icnl.
-    - Новый датасет + legacy-таргеты → legacy_psr.
+    - Явный fact_mode → как передали.
+    - legacy_dataset=True → legacy_psr; False → по таргетам.
+    - Выбраны TARGET_2 / TARGET_3_SEV → legacy_psr.
+    - Иначе → icnl (если есть TARGET_FREQ_AMOUNT или датасет только что собран),
+      либо эвристика по колонкам при загрузке checkpoint.
     """
     if fact_mode in ("icnl", "legacy_psr"):
         return fact_mode
@@ -73,6 +79,11 @@ def resolve_fact_mode(
 
     if _legacy_targets_selected(frequency_target, severity_target):
         return "legacy_psr"
+
+    # Новые таргеты → icnl, даже если в df есть колонки ПСР.
+    if frequency_target == "TARGET_FREQ" and severity_target == "TARGET_SEV":
+        return "icnl"
+
     if not loaded_from_checkpoint:
         return "icnl"
     return "legacy_psr" if infer_legacy_dataset(df) else "icnl"
