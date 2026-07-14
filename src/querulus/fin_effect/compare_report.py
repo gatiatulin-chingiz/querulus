@@ -17,6 +17,16 @@ from querulus.fin_effect.resolve import resolve_fin_effect_config
 from querulus.fin_effect.summary import create_summary_table
 
 
+def plain_floats(df: pd.DataFrame | None, decimals: int = 2) -> pd.DataFrame | None:
+    """Округлить числовые колонки — без scientific notation в display."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    for col in out.select_dtypes(include=["number"]).columns:
+        out[col] = pd.to_numeric(out[col], errors="coerce").round(decimals)
+    return out
+
+
 @dataclass(frozen=True)
 class StackCompareReport:
     """Набор таблиц сравнения двух связок таргетов."""
@@ -77,7 +87,8 @@ def compare_severity_targets(
         }
     )
     top = top.loc[abs_diff > 1e-6].sort_values("abs_diff", ascending=False).head(top_n)
-    summary.attrs["top_mismatches"] = top
+    summary = plain_floats(summary)
+    summary.attrs["top_mismatches"] = plain_floats(top)
     return summary
 
 
@@ -144,7 +155,7 @@ def compare_severity_predictions(
             },
         ]
     )
-    return pd.DataFrame(rows)
+    return plain_floats(pd.DataFrame(rows))
 
 
 def compare_fact_bases(df: pd.DataFrame) -> pd.DataFrame:
@@ -207,7 +218,7 @@ def compare_fact_bases(df: pd.DataFrame) -> pd.DataFrame:
             },
         ]
     )
-    return pd.DataFrame(rows)
+    return plain_floats(pd.DataFrame(rows))
 
 
 def compare_premiums(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.DataFrame:
@@ -219,48 +230,52 @@ def compare_premiums(df: pd.DataFrame, config: FinEffectConfig | None = None) ->
     fu_fee_rows = fu > 0
     court_fee_rows = (claims > 0) & bool(config.apply_court_fee)
 
-    return pd.DataFrame(
-        [
-            {
-                "metric": "fu_trigger_col",
-                "value": config.fu_fee_trigger_column,
-                "note": "и legacy, и icnl используют эту колонку",
-            },
-            {"metric": "fu_fee_amount", "value": config.fu_fee_amount, "note": ""},
-            {"metric": "fu_trigger_n", "value": int(fu_fee_rows.sum()), "note": "Сумма_взыскано_по_ФУ > 0"},
-            {
-                "metric": "fu_fee_total",
-                "value": float(fu_fee_rows.sum() * config.fu_fee_amount),
-                "note": "",
-            },
-            {"metric": "apply_court_fee", "value": int(config.apply_court_fee), "note": "по умолчанию 0"},
-            {"metric": "court_fee_amount", "value": config.court_fee_amount, "note": ""},
-            {"metric": "court_fee_n", "value": int(court_fee_rows.sum()), "note": "если apply_court_fee"},
-            {
-                "metric": "court_fee_total",
-                "value": float(court_fee_rows.sum() * config.court_fee_amount),
-                "note": "",
-            },
-            {"metric": "premiums_sum", "value": float(premiums.sum()), "note": "колонка Взносы"},
-            {
-                "metric": "legacy_fact_with_premiums",
-                "value": float(
-                    (
-                        _col(df, "Сумма_выплат_по_претензиям")
-                        + _col(df, "Сумма_взыскано_по_ФУ")
-                        + _col(df, "Суммы_взыскано_по_иску")
-                        + premiums
-                    ).sum()
-                ),
-                "note": "legacy fin_effect_fact",
-            },
-            {
-                "metric": "icnl_fact_with_premiums",
-                "value": float((_col(df, "TARGET_FREQ_AMOUNT") + premiums).sum()),
-                "note": "icnl fin_effect_fact",
-            },
-        ]
-    )
+    rows = [
+        {
+            "metric": "fu_trigger_col",
+            "value": config.fu_fee_trigger_column,
+            "note": "и legacy, и icnl используют эту колонку",
+        },
+        {"metric": "fu_fee_amount", "value": config.fu_fee_amount, "note": ""},
+        {"metric": "fu_trigger_n", "value": int(fu_fee_rows.sum()), "note": "Сумма_взыскано_по_ФУ > 0"},
+        {
+            "metric": "fu_fee_total",
+            "value": float(fu_fee_rows.sum() * config.fu_fee_amount),
+            "note": "",
+        },
+        {"metric": "apply_court_fee", "value": int(config.apply_court_fee), "note": "по умолчанию 0"},
+        {"metric": "court_fee_amount", "value": config.court_fee_amount, "note": ""},
+        {"metric": "court_fee_n", "value": int(court_fee_rows.sum()), "note": "если apply_court_fee"},
+        {
+            "metric": "court_fee_total",
+            "value": float(court_fee_rows.sum() * config.court_fee_amount),
+            "note": "",
+        },
+        {"metric": "premiums_sum", "value": float(premiums.sum()), "note": "колонка Взносы"},
+        {
+            "metric": "legacy_fact_with_premiums",
+            "value": float(
+                (
+                    _col(df, "Сумма_выплат_по_претензиям")
+                    + _col(df, "Сумма_взыскано_по_ФУ")
+                    + _col(df, "Суммы_взыскано_по_иску")
+                    + premiums
+                ).sum()
+            ),
+            "note": "legacy fin_effect_fact",
+        },
+        {
+            "metric": "icnl_fact_with_premiums",
+            "value": float((_col(df, "TARGET_FREQ_AMOUNT") + premiums).sum()),
+            "note": "icnl fin_effect_fact",
+        },
+    ]
+    for row in rows:
+        if isinstance(row["value"], (int, float, np.integer, np.floating)) and not isinstance(
+            row["value"], (bool, np.bool_)
+        ):
+            row["value"] = round(float(row["value"]), 2)
+    return pd.DataFrame(rows)
 
 
 def model_quadrant_breakdown(
@@ -308,7 +323,7 @@ def model_quadrant_breakdown(
                 "sum_fin_effect_model": float(model.loc[mask].sum()),
             }
         )
-    return pd.DataFrame(rows)
+    return plain_floats(pd.DataFrame(rows))
 
 
 def summary_itogo_breakdown(
@@ -345,7 +360,7 @@ def summary_itogo_breakdown(
         "fin_effect_fact",
         "itogo",
     ]
-    return out[[c for c in cols if c in out.columns]]
+    return plain_floats(out[[c for c in cols if c in out.columns]])
 
 
 def run_dual_stack_compare(
