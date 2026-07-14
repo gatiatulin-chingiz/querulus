@@ -57,12 +57,28 @@ def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(df[column], errors="coerce").fillna(0.0)
 
 
+def _fee_base_amount(row: pd.Series, config: FinEffectConfig) -> float:
+    """Денежная база факта, к которой привязывается взнос ФУ."""
+    if config.uses_legacy_psr_fact:
+        return float(
+            float(row.get(config.pretension_payments_column, 0) or 0)
+            + float(row.get(config.fu_recovery_column, 0) or 0)
+            + float(row.get(config.court_recovery_column, 0) or 0)
+        )
+    return float(row.get(config.fact_amount_column, 0) or 0)
+
+
 def payments_fee(row: pd.Series, config: FinEffectConfig) -> float:
-    """Судебные взносы: ФУ — boolean-триггер из ПСР; суд — по исковой сумме icnl."""
+    """Судебные взносы: ФУ — boolean-триггер из ПСР; суд — по исковой сумме icnl.
+
+    Взнос ФУ только при ненулевой базе факта. Иначе в icnl (TARGET_FREQ без ФУ
+    в amount) взносы «сироты» попадают в квадранты fact=0.
+    """
     payments = 0.0
-    if row.get(config.fu_fee_trigger_column, 0) > 0:
+    fu_trigger = float(row.get(config.fu_fee_trigger_column, 0) or 0) > 0
+    if fu_trigger and _fee_base_amount(row, config) > 0:
         payments += config.fu_fee_amount
-    claims_amount = row.get(config.freq_claims_amount_column, 0)
+    claims_amount = float(row.get(config.freq_claims_amount_column, 0) or 0)
     if config.apply_court_fee and claims_amount > 0:
         payments += config.court_fee_amount
     return payments

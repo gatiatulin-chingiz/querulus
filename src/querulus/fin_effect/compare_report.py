@@ -222,12 +222,21 @@ def compare_fact_bases(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def compare_premiums(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.DataFrame:
-    """Взносы: тот же триггер ФУ из ПСР; суд. взнос по apply_court_fee."""
+    """Взносы: триггер ФУ + ненулевая база факта; суд. взнос по apply_court_fee."""
     config = config or FinEffectConfig()
     fu = _col(df, config.fu_fee_trigger_column)
     claims = _col(df, config.freq_claims_amount_column)
+    if config.uses_legacy_psr_fact:
+        fee_base = (
+            _col(df, config.pretension_payments_column)
+            + _col(df, config.fu_recovery_column)
+            + _col(df, config.court_recovery_column)
+        )
+    else:
+        fee_base = _col(df, config.fact_amount_column)
     premiums = add_premiums_column(df, config)
-    fu_fee_rows = fu > 0
+    fu_trigger_n = int((fu > 0).sum())
+    fu_fee_rows = (fu > 0) & (fee_base > 0)
     court_fee_rows = (claims > 0) & bool(config.apply_court_fee)
 
     rows = [
@@ -237,7 +246,16 @@ def compare_premiums(df: pd.DataFrame, config: FinEffectConfig | None = None) ->
             "note": "и legacy, и icnl используют эту колонку",
         },
         {"metric": "fu_fee_amount", "value": config.fu_fee_amount, "note": ""},
-        {"metric": "fu_trigger_n", "value": int(fu_fee_rows.sum()), "note": "Сумма_взыскано_по_ФУ > 0"},
+        {
+            "metric": "fu_trigger_n",
+            "value": fu_trigger_n,
+            "note": "Сумма_взыскано_по_ФУ > 0 (сырой триггер)",
+        },
+        {
+            "metric": "fu_fee_n",
+            "value": int(fu_fee_rows.sum()),
+            "note": "триггер ФУ и база факта > 0",
+        },
         {
             "metric": "fu_fee_total",
             "value": float(fu_fee_rows.sum() * config.fu_fee_amount),

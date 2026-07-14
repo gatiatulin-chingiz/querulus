@@ -13,6 +13,14 @@ from querulus.dataset.pretension_utils import pretension_surcharge_by_incident_s
 _TARGET_FREQ_CLAIMS_GROUP = ("LOSS_NUMBER", "INCOMING_CLAIM_NUMBER")
 _FU_CLAIM_ORIGIN = "Обращение к ФУ"
 _CLAIM_PERIOD_COL = "CLAIMEDVALUEPERIOD"
+_VOID_DECISION = "не принято"
+# Сигналы взыскания для отсева «пустой» / отменённой инстанции (Null во всех).
+_RECOVERY_SIGNAL_COLS = (
+    "RECOVEREDVALUEWITHSD",
+    "RECOVEREDMAINDEBT",
+    "RECOVEREDWEAROUT",
+    "RECOVEREDLOSSCOMMODYVALUE",
+)
 _SURCHARGE_INCIDENT_COL = "SurchargeValue_cumsum_by_incident_all"
 _UTS_SURCHARGE_INCIDENT_COL = "UTSSurchargeValue_cumsum_by_incident_all"
 _TARGET_SEV_CLAIM_AMOUNT_COLS = (
@@ -48,11 +56,38 @@ def _is_fu_instance(inst: pd.Series, claim_origin: pd.Series | None) -> pd.Serie
     return is_fu.fillna(False)
 
 
-def _pick_last_claim_instances(claims: pd.DataFrame) -> pd.DataFrame:
-    """Последняя инстанция каждого иска на убытке.
+def _is_void_claim_instance(df: pd.DataFrame) -> pd.Series:
+    """Инстанция без принятого взыскания: Decision='Не принято' или все суммы Null.
 
-    Порядок инстанций: IncomingClaimNumber, ClaimedValuePeriod (хронология).
-    ФУ — первоначальная стадия: если есть судебные инстанции (1..5), ФУ не берём.
+    Не опирается на номер инстанции — только Decision и наличие сумм.
+    """
+    void = pd.Series(False, index=df.index)
+    if "DECISION" in df.columns:
+        decision = df["DECISION"].fillna("").astype(str).str.strip().str.casefold()
+        void = void | decision.eq(_VOID_DECISION)
+    signal_cols = [col for col in _RECOVERY_SIGNAL_COLS if col in df.columns]
+    if signal_cols:
+        amounts = df[signal_cols].apply(lambda s: pd.to_numeric(s, errors="coerce"))
+        void = void | amounts.isna().all(axis=1)
+    return void
+
+
+def _optional_claim_meta_cols(claims: pd.DataFrame) -> list[str]:
+    """Опциональные колонки для выбора инстанции (origin, decision, сигналы сумм)."""
+    cols: list[str] = []
+    for col in ("CLAIMORIGIN", "DECISION", *_RECOVERY_SIGNAL_COLS):
+        if col in claims.columns and col not in cols:
+            cols.append(col)
+    return cols
+
+
+def _pick_last_claim_instances(claims: pd.DataFrame) -> pd.DataFrame:
+    """Последняя принятая инстанция каждого иска на убытке.
+
+    Порядок: IncomingClaimNumber, ClaimedValuePeriod (хронология).
+    Пропуск строк Decision='Не принято' и строк со всеми Null-взысканиями —
+    берётся предыдущая принятая по хронологии (без привязки к InstByOisuu).
+    ФУ — первоначальная стадия: если есть принятые судебные инстанции, ФУ не берём.
     """
     if _CLAIM_PERIOD_COL not in claims.columns:
         raise KeyError(f"Для выбора инстанции не хватает колонки: {_CLAIM_PERIOD_COL}")
@@ -62,18 +97,20 @@ def _pick_last_claim_instances(claims: pd.DataFrame) -> pd.DataFrame:
     inst = pd.to_numeric(work["INSTBYOISUU"], errors="coerce")
     is_fu = _is_fu_instance(inst, origin)
     is_court = (~is_fu) & inst.between(1, 5, inclusive="both")
+    is_void = _is_void_claim_instance(work)
 
     group_cols = list(_TARGET_FREQ_CLAIMS_GROUP)
     sort_cols = [*group_cols, _CLAIM_PERIOD_COL]
 
-    court = work[is_court]
+    # Только принятые судебные инстанции (хронология, не номер).
+    court = work[is_court & ~is_void]
     from_court = (
         court.sort_values(sort_cols, ascending=[True, True, True], na_position="first")
         .drop_duplicates(group_cols, keep="last")
     )
 
     court_keys = court[group_cols].drop_duplicates()
-    fu = work[is_fu].merge(court_keys, on=group_cols, how="left", indicator=True)
+    fu = work[is_fu & ~is_void].merge(court_keys, on=group_cols, how="left", indicator=True)
     fu_only = fu[fu["_merge"] == "left_only"].drop(columns="_merge")
     from_fu = (
         fu_only.sort_values(sort_cols, ascending=[True, True, True], na_position="first")
@@ -89,7 +126,7 @@ def _sum_last_claim_instances_by_incident(
     amount_cols: tuple[str, ...],
     output_col: str,
 ) -> pd.DataFrame:
-    """Сумма amount_cols по последней инстанции каждого иска, агрегат на инцидент."""
+    """Сумма amount_cols по последней принятой инстанции каждого иска, агрегат на инцидент."""
     required = {
         "INCIDENT_NUMBER",
         "LOSS_NUMBER",
@@ -102,13 +139,19 @@ def _sum_last_claim_instances_by_incident(
     if missing:
         raise KeyError(f"Для {output_col} не хватает колонок: {sorted(missing)}")
 
-    optional_cols = ["CLAIMORIGIN"] if "CLAIMORIGIN" in claims.columns else []
+    optional_cols = _optional_claim_meta_cols(claims)
     work = claims[list(required | set(optional_cols))].copy()
     work = work[work["INCIDENT_NUMBER"].notna() & work["LOSS_NUMBER"].notna()]
+    # Не fillna до выбора инстанции — иначе Null неотличимы от нуля.
     for col in amount_cols:
-        work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0)
+        work[col] = pd.to_numeric(work[col], errors="coerce")
+    for col in _RECOVERY_SIGNAL_COLS:
+        if col in work.columns and col not in amount_cols:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
 
     last_per_claim = _pick_last_claim_instances(work)
+    for col in amount_cols:
+        last_per_claim[col] = last_per_claim[col].fillna(0)
     if len(amount_cols) == 1:
         last_per_claim[output_col] = last_per_claim[amount_cols[0]]
     else:
@@ -127,7 +170,7 @@ def _sum_last_claim_components_by_incident(
     *,
     suffix: str = "",
 ) -> pd.DataFrame:
-    """Сумма amount_cols по последней инстанции каждого иска, отдельно по каждой колонке."""
+    """Сумма amount_cols по последней принятой инстанции каждого иска, отдельно по каждой колонке."""
     required = {
         "INCIDENT_NUMBER",
         "LOSS_NUMBER",
@@ -140,13 +183,18 @@ def _sum_last_claim_components_by_incident(
     if missing:
         raise KeyError(f"Для компонентов иска не хватает колонок: {sorted(missing)}")
 
-    optional_cols = ["CLAIMORIGIN"] if "CLAIMORIGIN" in claims.columns else []
+    optional_cols = _optional_claim_meta_cols(claims)
     work = claims[list(required | set(optional_cols))].copy()
     work = work[work["INCIDENT_NUMBER"].notna() & work["LOSS_NUMBER"].notna()]
     for col in amount_cols:
-        work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0)
+        work[col] = pd.to_numeric(work[col], errors="coerce")
+    for col in _RECOVERY_SIGNAL_COLS:
+        if col in work.columns and col not in amount_cols:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
 
     last_per_claim = _pick_last_claim_instances(work)
+    for col in amount_cols:
+        last_per_claim[col] = last_per_claim[col].fillna(0)
     output_cols = [f"{col}{suffix}" for col in amount_cols]
     per_loss = (
         last_per_claim.groupby(["INCIDENT_NUMBER", "LOSS_NUMBER"], as_index=False)[list(amount_cols)]
@@ -162,8 +210,8 @@ def _build_target_freq_by_incident(
 ) -> pd.DataFrame:
     """Собрать TARGET_FREQ на уровне инцидента из исков (без ПСР).
 
-    На каждый убыток: сумма RecoveredValueWithSD по последней судебной инстанции каждого иска
-    (ФУ — первоначальная стадия и не считается «последней», если есть суды).
+    На каждый убыток: сумма RecoveredValueWithSD по последней принятой судебной инстанции
+    каждого иска (пропуск Decision='Не принято' и Null-взысканий; ФУ не берём, если есть суды).
     На инцидент: сумма по всем убыткам + доплаты по претензиям (все типы ОСАГО, *_all).
     """
     claims_amount = _sum_last_claim_instances_by_incident(
@@ -197,7 +245,7 @@ def _build_target_freq_by_incident(
 
 
 def _build_target_sev_claims_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
-    """Сумма взысканий (ОД + износ + УТС) по последней инстанции каждого иска на инциденте."""
+    """Сумма взысканий (ОД + износ + УТС) по последней принятой инстанции каждого иска."""
     out = _sum_last_claim_components_by_incident(
         claims,
         _TARGET_SEV_CLAIM_AMOUNT_COLS,
@@ -217,7 +265,7 @@ def _last_nonzero_target_3_sev(row: pd.Series) -> float:
 
 
 def _build_target_3_sev_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
-    """TARGET_3_SEV: pivot по инстанциям иска + последний ненулевой RECOVERED* (без претензий)."""
+    """TARGET_3_SEV: pivot по принятым инстанциям + последний ненулевой RECOVERED* (без претензий)."""
     required = {
         "INCIDENT_NUMBER",
         "INCOMING_CLAIM_NUMBER",
@@ -228,10 +276,18 @@ def _build_target_3_sev_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise KeyError(f"Для TARGET_3_SEV не хватает колонок: {sorted(missing)}")
 
-    work = claims[list(required)].copy()
+    optional_cols = _optional_claim_meta_cols(claims)
+    work = claims[list(required | set(optional_cols))].copy()
     work = work[work["INCIDENT_NUMBER"].notna() & work["INCOMING_CLAIM_NUMBER"].notna()]
     for col in _TARGET_SEV_CLAIM_AMOUNT_COLS:
-        work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0)
+        work[col] = pd.to_numeric(work[col], errors="coerce")
+    for col in _RECOVERY_SIGNAL_COLS:
+        if col in work.columns and col not in _TARGET_SEV_CLAIM_AMOUNT_COLS:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
+    # Отбрасываем «Не принято» / все-Null до pivot (порядок — по дате, не по InstByOisuu).
+    work = work.loc[~_is_void_claim_instance(work)].copy()
+    for col in _TARGET_SEV_CLAIM_AMOUNT_COLS:
+        work[col] = work[col].fillna(0)
 
     work = work.sort_values(
         ["INCOMING_CLAIM_NUMBER", _CLAIM_PERIOD_COL],
@@ -255,6 +311,23 @@ def _build_target_3_sev_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
     incident_pivot = wide.groupby("INCIDENT_NUMBER", as_index=False)[pivot_cols].sum()
     incident_pivot["TARGET_3_SEV"] = incident_pivot.apply(_last_nonzero_target_3_sev, axis=1)
     return incident_pivot
+
+
+def ensure_claims_targets(df: pd.DataFrame) -> pd.DataFrame:
+    """Добавить TARGET_FREQ_CLAIMS / TARGET_SEV_CLAIMS, если есть только *_AMOUNT."""
+    out = df
+    if "TARGET_FREQ_CLAIMS" not in out.columns and "TARGET_FREQ_CLAIMS_AMOUNT" in out.columns:
+        out = out.copy()
+        out["TARGET_FREQ_CLAIMS"] = (
+            pd.to_numeric(out["TARGET_FREQ_CLAIMS_AMOUNT"], errors="coerce").fillna(0) > 0
+        ).astype(int)
+    if "TARGET_SEV_CLAIMS" not in out.columns and "TARGET_SEV_CLAIMS_AMOUNT" in out.columns:
+        if out is df:
+            out = out.copy()
+        out["TARGET_SEV_CLAIMS"] = pd.to_numeric(
+            out["TARGET_SEV_CLAIMS_AMOUNT"], errors="coerce"
+        ).fillna(0)
+    return out
 
 
 def build_targets(
@@ -522,6 +595,9 @@ def build_targets(
         + df[_SURCHARGE_INCIDENT_COL].fillna(0)
         + df[_UTS_SURCHARGE_INCIDENT_COL].fillna(0)
     )
+    # Стек new_claims: только иски, без претензий.
+    df["TARGET_FREQ_CLAIMS"] = (df["TARGET_FREQ_CLAIMS_AMOUNT"].fillna(0) > 0).astype(int)
+    df["TARGET_SEV_CLAIMS"] = df["TARGET_SEV_CLAIMS_AMOUNT"].fillna(0)
 
     if 'VICTIM_VEHICLE_IS_JAPAN' in df.columns:
         df['VICTIM_VEHICLE_IS_JAPAN'] = df['VICTIM_VEHICLE_IS_JAPAN'].astype(str)
@@ -535,6 +611,7 @@ def build_targets(
     )
     df["TARGET_2"] = df["TARGET_2"].apply(lambda x: 1 if x > 0 else 0).astype(int)
     df["TARGET_FREQ"] = df["TARGET_FREQ"].fillna(0).astype(int)
+    df["TARGET_FREQ_CLAIMS"] = df["TARGET_FREQ_CLAIMS"].fillna(0).astype(int)
     for col in (
         "TARGET_FREQ_AMOUNT",
         "RECOVEREDVALUEWITHSD_LAST_INST_SUM",
@@ -542,6 +619,7 @@ def build_targets(
         "TARGET_FREQ_PRET_AMOUNT",
         *TARGET_SEV_CLAIMS_COMPONENT_COLS,
         "TARGET_SEV_CLAIMS_AMOUNT",
+        "TARGET_SEV_CLAIMS",
         "TARGET_3_SEV",
         *TARGET_3_SEV_COMPONENT_COLS,
     ):

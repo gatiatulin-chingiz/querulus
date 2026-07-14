@@ -9,11 +9,15 @@ import numpy as np
 import pandas as pd
 
 from querulus.dataset.steps.targets import (
+    TARGET_FREQ_CLAIMS_COMPONENT_COLS,
     TARGET_FREQ_COMPONENT_COLS,
+    TARGET_SEV_CLAIMS_COMPONENT_COLS,
     TARGET_SEV_COMPONENT_COLS,
 )
 
-DEFAULT_BINARY_TARGETS: frozenset[str] = frozenset({"TARGET", "TARGET_2", "TARGET_FREQ"})
+DEFAULT_BINARY_TARGETS: frozenset[str] = frozenset(
+    {"TARGET", "TARGET_2", "TARGET_FREQ", "TARGET_FREQ_CLAIMS"}
+)
 
 # Слагаемые в top_*: только листовые суммы (без pivot RECOVERED*_1..5).
 # TARGET_3_SEV — last-nonzero по pivot, аддитивных слагаемых нет.
@@ -24,8 +28,10 @@ TARGET_COMPONENTS: dict[str, tuple[str, ...]] = {
         "Суммы_взыскано_по_иску",
     ),
     "TARGET_FREQ": TARGET_FREQ_COMPONENT_COLS,
+    "TARGET_FREQ_CLAIMS": TARGET_FREQ_CLAIMS_COMPONENT_COLS,
     "TARGET_3_SEV": (),
     "TARGET_SEV": TARGET_SEV_COMPONENT_COLS,
+    "TARGET_SEV_CLAIMS": TARGET_SEV_CLAIMS_COMPONENT_COLS,
 }
 
 PAIRS_LEGACY: list[tuple[str, str]] = [
@@ -35,6 +41,10 @@ PAIRS_LEGACY: list[tuple[str, str]] = [
 PAIRS_OLD_VS_NEW: list[tuple[str, str]] = [
     ("TARGET_2", "TARGET_FREQ"),
     ("TARGET_3_SEV", "TARGET_SEV"),
+    ("TARGET_2", "TARGET_FREQ_CLAIMS"),
+    ("TARGET_3_SEV", "TARGET_SEV_CLAIMS"),
+    ("TARGET_FREQ", "TARGET_FREQ_CLAIMS"),
+    ("TARGET_SEV", "TARGET_SEV_CLAIMS"),
 ]
 
 _QUERULUS_ROOT = Path(__file__).resolve().parents[3]
@@ -310,15 +320,15 @@ def compare_old_vs_new_targets(
     key: str = "INCIDENT_NUMBER",
     quiet: bool = True,
 ) -> TargetComparisonResult:
-    """Сверка legacy vs icnl таргетов на одном датасете Querulus."""
+    """Сверка legacy / icnl / claims таргетов на одном датасете Querulus."""
     pairs = pairs or PAIRS_OLD_VS_NEW
     merged, report = compare_target_pairs(
         df,
         df,
         pairs,
         key=key,
-        reference_name="legacy",
-        candidate_name="icnl",
+        reference_name="left",
+        candidate_name="right",
         quiet=quiet,
     )
     return _build_comparison_result(

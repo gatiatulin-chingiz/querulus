@@ -36,6 +36,10 @@ from querulus.fin_effect.compare_report import (
 )
 from querulus.fin_effect.config import ANALYTICS_RENAME_DICT, FinEffectConfig
 from querulus.fin_effect.resolve import (
+    CLAIMS_FREQUENCY_TARGETS,
+    CLAIMS_SEVERITY_TARGETS,
+    ICNL_FREQUENCY_TARGETS,
+    ICNL_SEVERITY_TARGETS,
     LEGACY_FREQUENCY_TARGETS,
     LEGACY_SEVERITY_TARGETS,
     infer_legacy_dataset,
@@ -100,6 +104,10 @@ __all__ = [
     "prepare_effect_frame",
     "print_best_threshold_report",
     "infer_legacy_dataset",
+    "CLAIMS_FREQUENCY_TARGETS",
+    "CLAIMS_SEVERITY_TARGETS",
+    "ICNL_FREQUENCY_TARGETS",
+    "ICNL_SEVERITY_TARGETS",
     "LEGACY_FREQUENCY_TARGETS",
     "LEGACY_SEVERITY_TARGETS",
     "model_quadrant_breakdown",

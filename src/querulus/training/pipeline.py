@@ -14,7 +14,7 @@ import pandas as pd
 
 from querulus import PROJECT_ROOT
 from querulus.features.config import is_fe_categorical
-from querulus.training.config import TrainingConfig
+from querulus.training.config import TrainingConfig, resolve_features_config
 
 logger = logging.getLogger("querulus.training")
 
@@ -598,7 +598,7 @@ def format_metrics_table(table: pd.DataFrame) -> pd.DataFrame:
 
 def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> TrainingArtifacts:
     """Обучить модели частоты и тяжести (таргеты из TrainingConfig)."""
-    config = config or TrainingConfig()
+    config = resolve_features_config(config or TrainingConfig())
     data, features, cat_features = _mvp_features(df, config)
     if config.frequency_target in data.columns:
         data[config.frequency_target] = data[config.frequency_target].astype(int)

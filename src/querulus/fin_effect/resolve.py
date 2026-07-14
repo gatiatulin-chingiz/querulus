@@ -1,4 +1,4 @@
-"""Подбор FinEffectConfig под legacy/new датасет и таргеты."""
+"""Подбор FinEffectConfig под legacy/new/new_claims датасет и таргеты."""
 from __future__ import annotations
 
 from typing import Literal
@@ -13,6 +13,10 @@ FactMode = Literal["icnl", "legacy_psr"]
 
 LEGACY_FREQUENCY_TARGETS: frozenset[str] = frozenset({"TARGET_2"})
 LEGACY_SEVERITY_TARGETS: frozenset[str] = frozenset({"TARGET_3_SEV"})
+ICNL_FREQUENCY_TARGETS: frozenset[str] = frozenset({"TARGET_FREQ", "TARGET_FREQ_CLAIMS"})
+ICNL_SEVERITY_TARGETS: frozenset[str] = frozenset({"TARGET_SEV", "TARGET_SEV_CLAIMS"})
+CLAIMS_FREQUENCY_TARGETS: frozenset[str] = frozenset({"TARGET_FREQ_CLAIMS"})
+CLAIMS_SEVERITY_TARGETS: frozenset[str] = frozenset({"TARGET_SEV_CLAIMS"})
 
 _PSR_FACT_COLUMNS: tuple[str, ...] = (
     "Сумма_выплат_по_претензиям",
@@ -35,6 +39,20 @@ def _has_psr_fact_columns(df: pd.DataFrame) -> bool:
 
 def _legacy_targets_selected(frequency_target: str, severity_target: str) -> bool:
     return frequency_target in LEGACY_FREQUENCY_TARGETS or severity_target in LEGACY_SEVERITY_TARGETS
+
+
+def _claims_targets_selected(frequency_target: str, severity_target: str) -> bool:
+    return (
+        frequency_target in CLAIMS_FREQUENCY_TARGETS
+        or severity_target in CLAIMS_SEVERITY_TARGETS
+    )
+
+
+def _icnl_targets_selected(frequency_target: str, severity_target: str) -> bool:
+    return (
+        frequency_target in ICNL_FREQUENCY_TARGETS
+        or severity_target in ICNL_SEVERITY_TARGETS
+    )
 
 
 def infer_legacy_dataset(df: pd.DataFrame) -> bool:
@@ -65,9 +83,8 @@ def resolve_fact_mode(
 
     - Явный fact_mode → как передали.
     - legacy_dataset=True → legacy_psr; False → по таргетам.
-    - Выбраны TARGET_2 / TARGET_3_SEV → legacy_psr.
-    - Иначе → icnl (если есть TARGET_FREQ_AMOUNT или датасет только что собран),
-      либо эвристика по колонкам при загрузке checkpoint.
+    - TARGET_2 / TARGET_3_SEV → legacy_psr.
+    - TARGET_FREQ* / TARGET_SEV* → icnl.
     """
     if fact_mode in ("icnl", "legacy_psr"):
         return fact_mode
@@ -80,8 +97,7 @@ def resolve_fact_mode(
     if _legacy_targets_selected(frequency_target, severity_target):
         return "legacy_psr"
 
-    # Новые таргеты → icnl, даже если в df есть колонки ПСР.
-    if frequency_target == "TARGET_FREQ" and severity_target == "TARGET_SEV":
+    if _icnl_targets_selected(frequency_target, severity_target):
         return "icnl"
 
     if not loaded_from_checkpoint:
@@ -122,10 +138,36 @@ def _icnl_config(
     frequency_target: str,
     severity_target: str,
 ) -> FinEffectConfig:
+    """icnl: full amount или только claims (без претензий)."""
+    fact_amount = (
+        "TARGET_FREQ_CLAIMS_AMOUNT"
+        if _claims_targets_selected(frequency_target, severity_target)
+        else "TARGET_FREQ_AMOUNT"
+    )
     return FinEffectConfig(
         frequency_target_column=frequency_target,
         severity_target_column=severity_target,
         fact_mode="icnl",
+        fact_amount_column=fact_amount,
+        export_columns=(
+            "INCIDENT_NUMBER",
+            "FILIAL",
+            "Выплата_по_основному_убытку",
+            "TARGET_FREQ_AMOUNT",
+            "TARGET_FREQ_CLAIMS_AMOUNT",
+            "TARGET_FREQ_PRET_AMOUNT",
+            "Взносы",
+            "fin_effect_fact",
+            severity_target,
+            frequency_target,
+            "TARGET_FREQ",
+            "TARGET_FREQ_CLAIMS",
+            "TARGET_2",
+            "TARGET_3_SEV",
+            "pred_freq",
+            "pred_sev",
+            "fin_effect_model",
+        ),
     )
 
 

@@ -1,12 +1,15 @@
 """Конфигурация обучения моделей querulus."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
 from querulus.training.mvp_types import DEFAULT_MVP_INPUT_TYPES, DEFAULT_OTHER_COLS
-from querulus.training.selected_features import DEFAULT_SEVERITY_FEATURES
+from querulus.training.selected_features import (
+    DEFAULT_FREQUENCY_FEATURES,
+    DEFAULT_SEVERITY_FEATURES,
+)
 
 
 def _default_mvp_input_types() -> dict[str, tuple[str, ...]]:
@@ -14,9 +17,16 @@ def _default_mvp_input_types() -> dict[str, tuple[str, ...]]:
     return {key: tuple(value) for key, value in DEFAULT_MVP_INPUT_TYPES.items()}
 
 
+FeaturesSource = Literal["selected", "mvp"]
+
+
 @dataclass(frozen=True)
 class TrainingConfig:
     """Параметры разбиения, целей и обучения CatBoost.
+
+    ``features_source``:
+    - ``selected`` — фичи из ``selected_features.py`` (без frequency select);
+    - ``mvp`` — полный MVP-пул (``frequency_select_features`` по желанию).
 
     Гиперпараметры (как финальные модели в model_learn.py / configs):
     - ``frequency_iterations`` / ``severity_iterations`` — число итераций CatBoost;
@@ -27,13 +37,14 @@ class TrainingConfig:
     пересечение с признаками конкретной модели — как в Litigant.
 
     ``mvp_cutoff_nan``: доля пропусков, выше которой AutoMVP убирает колонку из пула.
-  """
+    """
 
     date_column: str = "LOSS_DATE_TIME"
     train_period: tuple[str, str] = ("2022-01-01", "2024-05-31")
     test_period: tuple[str, str] = ("2024-06-01", "2025-06-01")
     frequency_target: str = "TARGET_FREQ"
     severity_target: str = "TARGET_SEV"
+    features_source: FeaturesSource = "selected"
     severity_range: tuple[float, float] = (1.0, 1_500_000.0)
     frequency_iterations: int = 375
     severity_iterations: int = 100
@@ -42,8 +53,8 @@ class TrainingConfig:
     mvp_cutoff_nan: float = 0.95
     modeldiagnostics_root: Path | str | None = "/home/jovyan/old_home"
     frequency_features: tuple[str, ...] | None = None
-    severity_features: tuple[str, ...] | None = DEFAULT_SEVERITY_FEATURES
-    frequency_select_features: bool = True
+    severity_features: tuple[str, ...] | None = None
+    frequency_select_features: bool = False
     frequency_num_features_to_select: int = 20
     frequency_select_iterations: int = 100
     frequency_select_early_stopping_rounds: int = 50
@@ -69,3 +80,27 @@ class TrainingConfig:
     def drop_columns(self) -> tuple[str, ...]:
         """Колонки other_cols из Litigant (таргеты и ID), исключаемые из признаков."""
         return self.base_drop_columns + self.extra_drop_columns
+
+
+def resolve_features_config(config: TrainingConfig) -> TrainingConfig:
+    """Применить ``features_source``: selected_features или полный MVP."""
+    if config.features_source == "mvp":
+        return replace(
+            config,
+            frequency_features=None,
+            severity_features=None,
+        )
+    return replace(
+        config,
+        frequency_features=(
+            config.frequency_features
+            if config.frequency_features is not None
+            else DEFAULT_FREQUENCY_FEATURES
+        ),
+        severity_features=(
+            config.severity_features
+            if config.severity_features is not None
+            else DEFAULT_SEVERITY_FEATURES
+        ),
+        frequency_select_features=False,
+    )

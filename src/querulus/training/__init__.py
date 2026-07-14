@@ -15,10 +15,21 @@ from querulus.training.plots import (
     run_mvp_frequency_eda,
     run_training_visualizations,
 )
+from querulus.training.triple_stack import (
+    TARGET_STACKS,
+    TripleStackResult,
+    build_metrics_summary,
+    run_triple_fin_effects,
+    run_triple_stack,
+    train_triple_stacks,
+)
 
 __all__ = [
+    "TARGET_STACKS",
     "TrainingArtifacts",
     "TrainingConfig",
+    "TripleStackResult",
+    "build_metrics_summary",
     "format_features_table",
     "format_metrics_table",
     "format_training_summary",
@@ -27,5 +38,8 @@ __all__ = [
     "run_model_diagnostics_visualizations",
     "run_mvp_frequency_eda",
     "run_training_visualizations",
+    "run_triple_fin_effects",
+    "run_triple_stack",
     "train_models",
+    "train_triple_stacks",
 ]

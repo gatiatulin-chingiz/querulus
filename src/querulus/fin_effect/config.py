@@ -21,7 +21,8 @@ class FinEffectConfig:
     freq_claims_amount_column: str = "TARGET_FREQ_CLAIMS_AMOUNT"
     freq_pret_amount_column: str = "TARGET_FREQ_PRET_AMOUNT"
     base_payment_column: str = "Выплата_по_основному_убытку"
-    # Только boolean-триггер взноса ФУ (сумма в fact не входит).
+    # Boolean-триггер взноса ФУ (сумма в icnl-fact не входит).
+    # Сам взнос начисляется только при ненулевой базе факта (см. payments_fee).
     fu_fee_trigger_column: str = "Сумма_взыскано_по_ФУ"
     pretension_payments_column: str = "Сумма_выплат_по_претензиям"
     fu_recovery_column: str = "Сумма_взыскано_по_ФУ"
@@ -93,7 +94,9 @@ ANALYTICS_RENAME_DICT: dict[str, str] = {
     "Взносы": "ВЗНОСЫ",
     "fin_effect_fact": "ФАКТ ФИН. ЭФФЕКТ ",
     "TARGET_SEV": "ФАКТ СУММА ВЗЫСКАНИЯ ОСНОВНОГО ДОЛГА/УТС/ИЗНОСА",
+    "TARGET_SEV_CLAIMS": "ФАКТ СУММА ИСКИ (TARGET_SEV_CLAIMS)",
     "TARGET_FREQ": "БЫЛ ИСК (TARGET_FREQ)",
+    "TARGET_FREQ_CLAIMS": "БЫЛ ИСК БЕЗ ПРЕТЕНЗИЙ (TARGET_FREQ_CLAIMS)",
     "TARGET_2": "БЫЛ ПСР (TARGET_2)",
     "TARGET_3_SEV": "ФАКТ СУММА (TARGET_3_SEV)",
     "pred_freq": "МОДЕЛЬ БУДЕТ ЛИ ВЗЫСКАНИЕ ОСНОВНОГО ДОЛГА/УТС/ИЗНОСА",
