@@ -159,7 +159,7 @@ def compare_severity_predictions(
 
 
 def compare_fact_bases(df: pd.DataFrame) -> pd.DataFrame:
-    """Денежная база факта: legacy ПСР vs icnl TARGET_FREQ_AMOUNT."""
+    """Денежная база факта: legacy / new (icnl) / new_claims."""
     legacy_parts = {
         "Сумма_выплат_по_претензиям": _col(df, "Сумма_выплат_по_претензиям"),
         "Сумма_взыскано_по_ФУ": _col(df, "Сумма_взыскано_по_ФУ"),
@@ -173,12 +173,12 @@ def compare_fact_bases(df: pd.DataFrame) -> pd.DataFrame:
         icnl_amount = icnl_claims + icnl_pret
 
     rows = [
-        {"side": "legacy_psr", "part": name, "sum": float(series.sum()), "nonzero_n": int((series > 0).sum())}
+        {"side": "legacy", "part": name, "sum": float(series.sum()), "nonzero_n": int((series > 0).sum())}
         for name, series in legacy_parts.items()
     ]
     rows.append(
         {
-            "side": "legacy_psr",
+            "side": "legacy",
             "part": "BASE (= pret+FU+court)",
             "sum": float(legacy_base.sum()),
             "nonzero_n": int((legacy_base > 0).sum()),
@@ -187,34 +187,40 @@ def compare_fact_bases(df: pd.DataFrame) -> pd.DataFrame:
     rows.extend(
         [
             {
-                "side": "icnl",
+                "side": "new",
                 "part": "TARGET_FREQ_CLAIMS_AMOUNT",
                 "sum": float(icnl_claims.sum()),
                 "nonzero_n": int((icnl_claims > 0).sum()),
             },
             {
-                "side": "icnl",
+                "side": "new",
                 "part": "TARGET_FREQ_PRET_AMOUNT",
                 "sum": float(icnl_pret.sum()),
                 "nonzero_n": int((icnl_pret > 0).sum()),
             },
             {
-                "side": "icnl",
-                "part": "BASE (= TARGET_FREQ_AMOUNT)",
+                "side": "new",
+                "part": "BASE (= TARGET_FREQ_AMOUNT = claims+pret)",
                 "sum": float(icnl_amount.sum()),
                 "nonzero_n": int((icnl_amount > 0).sum()),
             },
             {
+                "side": "new_claims",
+                "part": "BASE (= TARGET_FREQ_CLAIMS_AMOUNT, без претензий)",
+                "sum": float(icnl_claims.sum()),
+                "nonzero_n": int((icnl_claims > 0).sum()),
+            },
+            {
                 "side": "diff",
-                "part": "icnl_base - legacy_base",
+                "part": "new_base - legacy_base",
                 "sum": float((icnl_amount - legacy_base).sum()),
                 "nonzero_n": int(((icnl_amount - legacy_base).abs() > 1e-6).sum()),
             },
             {
                 "side": "diff",
-                "part": "ratio_icnl_over_legacy",
-                "sum": float(icnl_amount.sum() / legacy_base.sum()) if legacy_base.sum() else np.nan,
-                "nonzero_n": np.nan,
+                "part": "new_claims_base - new_base (= -pret)",
+                "sum": float((icnl_claims - icnl_amount).sum()),
+                "nonzero_n": int(((icnl_claims - icnl_amount).abs() > 1e-6).sum()),
             },
         ]
     )
@@ -222,70 +228,85 @@ def compare_fact_bases(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def compare_premiums(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.DataFrame:
-    """Взносы: триггер ФУ + ненулевая база факта; суд. взнос по apply_court_fee."""
-    config = config or FinEffectConfig()
-    fu = _col(df, config.fu_fee_trigger_column)
-    claims = _col(df, config.freq_claims_amount_column)
-    if config.uses_legacy_psr_fact:
-        fee_base = (
-            _col(df, config.pretension_payments_column)
-            + _col(df, config.fu_recovery_column)
-            + _col(df, config.court_recovery_column)
-        )
-    else:
-        fee_base = _col(df, config.fact_amount_column)
-    premiums = add_premiums_column(df, config)
-    fu_trigger_n = int((fu > 0).sum())
-    fu_fee_rows = (fu > 0) & (fee_base > 0)
-    court_fee_rows = (claims > 0) & bool(config.apply_court_fee)
+    """Взносы для трёх баз факта: legacy / new / new_claims."""
+    cfg_new = config or FinEffectConfig(fact_mode="icnl", fact_amount_column="TARGET_FREQ_AMOUNT")
+    cfg_claims = FinEffectConfig(
+        fact_mode="icnl",
+        fact_amount_column="TARGET_FREQ_CLAIMS_AMOUNT",
+        fu_fee_trigger_column=cfg_new.fu_fee_trigger_column,
+        fu_fee_amount=cfg_new.fu_fee_amount,
+        apply_court_fee=cfg_new.apply_court_fee,
+        court_fee_amount=cfg_new.court_fee_amount,
+    )
+    cfg_legacy = FinEffectConfig(
+        fact_mode="legacy_psr",
+        fu_fee_trigger_column=cfg_new.fu_fee_trigger_column,
+        fu_fee_amount=cfg_new.fu_fee_amount,
+        apply_court_fee=cfg_new.apply_court_fee,
+        court_fee_amount=cfg_new.court_fee_amount,
+    )
+
+    fu = _col(df, cfg_new.fu_fee_trigger_column)
+    legacy_base = (
+        _col(df, "Сумма_выплат_по_претензиям")
+        + _col(df, "Сумма_взыскано_по_ФУ")
+        + _col(df, "Суммы_взыскано_по_иску")
+    )
+    new_base = _col(df, "TARGET_FREQ_AMOUNT")
+    claims_base = _col(df, "TARGET_FREQ_CLAIMS_AMOUNT")
+
+    premiums_legacy = add_premiums_column(df, cfg_legacy)
+    premiums_new = add_premiums_column(df, cfg_new)
+    premiums_claims = add_premiums_column(df, cfg_claims)
 
     rows = [
         {
             "metric": "fu_trigger_col",
-            "value": config.fu_fee_trigger_column,
-            "note": "и legacy, и icnl используют эту колонку",
+            "value": cfg_new.fu_fee_trigger_column,
+            "note": "общий boolean-триггер ФУ",
         },
-        {"metric": "fu_fee_amount", "value": config.fu_fee_amount, "note": ""},
+        {"metric": "fu_fee_amount", "value": cfg_new.fu_fee_amount, "note": ""},
         {
             "metric": "fu_trigger_n",
-            "value": fu_trigger_n,
-            "note": "Сумма_взыскано_по_ФУ > 0 (сырой триггер)",
+            "value": int((fu > 0).sum()),
+            "note": "Сумма_взыскано_по_ФУ > 0 (сырой)",
         },
         {
-            "metric": "fu_fee_n",
-            "value": int(fu_fee_rows.sum()),
-            "note": "триггер ФУ и база факта > 0",
+            "metric": "fu_fee_n_legacy",
+            "value": int(((fu > 0) & (legacy_base > 0)).sum()),
+            "note": "триггер + legacy base > 0",
         },
         {
-            "metric": "fu_fee_total",
-            "value": float(fu_fee_rows.sum() * config.fu_fee_amount),
-            "note": "",
+            "metric": "fu_fee_n_new",
+            "value": int(((fu > 0) & (new_base > 0)).sum()),
+            "note": "триггер + TARGET_FREQ_AMOUNT > 0",
         },
-        {"metric": "apply_court_fee", "value": int(config.apply_court_fee), "note": "по умолчанию 0"},
-        {"metric": "court_fee_amount", "value": config.court_fee_amount, "note": ""},
-        {"metric": "court_fee_n", "value": int(court_fee_rows.sum()), "note": "если apply_court_fee"},
         {
-            "metric": "court_fee_total",
-            "value": float(court_fee_rows.sum() * config.court_fee_amount),
-            "note": "",
+            "metric": "fu_fee_n_new_claims",
+            "value": int(((fu > 0) & (claims_base > 0)).sum()),
+            "note": "триггер + TARGET_FREQ_CLAIMS_AMOUNT > 0",
         },
-        {"metric": "premiums_sum", "value": float(premiums.sum()), "note": "колонка Взносы"},
+        {"metric": "premiums_sum_legacy", "value": float(premiums_legacy.sum()), "note": ""},
+        {"metric": "premiums_sum_new", "value": float(premiums_new.sum()), "note": ""},
+        {
+            "metric": "premiums_sum_new_claims",
+            "value": float(premiums_claims.sum()),
+            "note": "без претензий → меньше сиротских взносов",
+        },
         {
             "metric": "legacy_fact_with_premiums",
-            "value": float(
-                (
-                    _col(df, "Сумма_выплат_по_претензиям")
-                    + _col(df, "Сумма_взыскано_по_ФУ")
-                    + _col(df, "Суммы_взыскано_по_иску")
-                    + premiums
-                ).sum()
-            ),
+            "value": float((legacy_base + premiums_legacy).sum()),
             "note": "legacy fin_effect_fact",
         },
         {
-            "metric": "icnl_fact_with_premiums",
-            "value": float((_col(df, "TARGET_FREQ_AMOUNT") + premiums).sum()),
-            "note": "icnl fin_effect_fact",
+            "metric": "new_fact_with_premiums",
+            "value": float((new_base + premiums_new).sum()),
+            "note": "TARGET_FREQ_AMOUNT + взносы",
+        },
+        {
+            "metric": "new_claims_fact_with_premiums",
+            "value": float((claims_base + premiums_claims).sum()),
+            "note": "TARGET_FREQ_CLAIMS_AMOUNT + взносы",
         },
     ]
     for row in rows:
