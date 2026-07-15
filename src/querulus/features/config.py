@@ -23,7 +23,6 @@ class FeatureThresholds:
     victim_loss_sum_bins: tuple[float, ...] = (50_000.0, 200_000.0)
     kbm_low: float = 1.0
     kbm_mid: float = 1.17
-    share_wearout_bins: tuple[float, ...] = (20.0, 50.0)
     share_work_bins: tuple[float, ...] = (0.3, 0.6)
 
 
@@ -31,7 +30,7 @@ class FeatureThresholds:
 class FeatureConfig:
     """Параметры этапов 0–1 FE."""
 
-    t0_column: str = "PAYMENT_ORDER_DATE_TIME"
+    t0_column: str = "LOSS_DATE_TIME"
     thresholds: FeatureThresholds = field(default_factory=FeatureThresholds)
     vehicle_age_bins: tuple[float, ...] = (3.0, 7.0, 15.0)
     dedup_target: str = "VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR"
@@ -82,13 +81,12 @@ def load_feature_config(path: Path | None = None) -> FeatureConfig:
         victim_loss_sum_bins=tuple(raw_thresholds.get("victim_loss_sum_bins", [50_000, 200_000])),
         kbm_low=float(raw_thresholds.get("kbm_low", 1.0)),
         kbm_mid=float(raw_thresholds.get("kbm_mid", 1.17)),
-        share_wearout_bins=tuple(raw_thresholds.get("share_wearout_bins", [20, 50])),
         share_work_bins=tuple(raw_thresholds.get("share_work_bins", [0.3, 0.6])),
     )
 
     dedup = data.get("dedup_columns", {})
     return FeatureConfig(
-        t0_column=str(data.get("t0_column", "PAYMENT_ORDER_DATE_TIME")),
+        t0_column=str(data.get("t0_column", "LOSS_DATE_TIME")),
         thresholds=thresholds,
         vehicle_age_bins=tuple(data.get("vehicle_age_bins", [3, 7, 15])),
         dedup_target=str(dedup.get("target", "VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR")),

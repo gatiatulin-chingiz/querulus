@@ -1,7 +1,7 @@
 # Каталог признаков датасета querulus
 
 **Гранулярность:** 1 строка = 1 инцидент (victim: min `LOSS_NUMBER`; `AMOUNT_REPAIR` из calc — max `LOSS_NUMBER`).  
-**T0:** `PAYMENT_ORDER_DATE_TIME` — якорь времени для person-history.  
+**T0:** `LOSS_DATE_TIME` — якорь времени для сплита и as-of истории.  
 **Итоговый артефакт:** `data/processed/df_final_3.parquet`.
 
 Формат: **фича** — описание — как собирается.
@@ -27,7 +27,7 @@
 
 | Фича | Описание | Как собирается |
 |------|----------|----------------|
-| `FE_DAYS_LOSS_TO_T0` | Дней от убытка до выплаты | `PAYMENT_ORDER_DATE_TIME − LOSS_DATE_TIME` |
+| `FE_DAYS_LOSS_TO_PAYMENT_ORDER` | Дней от убытка до поручения на выплату | `PAYMENT_ORDER_DATE_TIME − LOSS_DATE_TIME` |
 | `FE_DAYS_EVENT_TO_LOSS` | Дней от ДТП до убытка | `LOSS_DATE_TIME − EVENT_DATE` |
 | `FE_DAYS_TO_PH_CONTRACT_END` | Дней от ДТП до конца полиса PH | `POLICYHOLDER_CONTRACT_END_DATE − EVENT_DATE` |
 | `FE_DAYS_TO_VICTIM_CONTRACT_END` | Дней от ДТП до конца полиса victim | `VICTIM_CONTRACT_END_DATE − EVENT_DATE` |
@@ -113,16 +113,19 @@
 
 > `FE_REFUND_*` в `TO_DROP` при обучении (post-T0 leakage).
 
-### I. Калькуляция / ремонт
+### I. Калькуляция (`VALUE_BEFORE_WITH` / `VALUE_BEFORE_WITHOUT`)
 
 | Фича | Описание | Как собирается |
 |------|----------|----------------|
-| `FE_WEAROUT_TIER` | Tier износа | 0-20 / 20-50 / 50+ из `SHARE_WEAROUT` |
 | `FE_SHARE_WORK_TIER` | Доля работ | low/mid/high из `SHARE_WORK` |
-| `FE_EXPECTED_WEAROUT_RUB` | Ожидаемый износ в руб. | `AMOUNT_REPAIR * SHARE_WEAROUT / 100` |
-| `FE_AMOUNT_REPAIR_BIN` | Бакет суммы ремонта | `<100k / 100-300k / >300k` |
-| `FE_HIGH_REPAIR` | Дорогой ремонт | `AMOUNT_REPAIR > 300000` |
-| `FE_REPAIR_TO_VALUE_RATIO` | Отношение выплаты к калькуляции | `REPAIR_VALUE / AMOUNT_REPAIR` |
+| `FE_VALUE_BEFORE_WITHOUT_BIN` | Бакет калькуляции без износа | `<100k / 100-300k / >300k` |
+| `FE_HIGH_VALUE_BEFORE_WITHOUT` | Дорогая калькуляция без износа | `VALUE_BEFORE_WITHOUT > 300000` |
+| `FE_VALUE_BEFORE_WITH_BIN` | Бакет калькуляции с износом | те же бакеты от `VALUE_BEFORE_WITH` |
+| `FE_HIGH_VALUE_BEFORE_WITH` | Дорогая калькуляция с износом | `VALUE_BEFORE_WITH > 300000` |
+| `FE_WEAROUT_RUB_FROM_VALUES` | Износ в руб. | `VALUE_BEFORE_WITHOUT − VALUE_BEFORE_WITH` |
+| `FE_VALUE_WITH_TO_WITHOUT_RATIO` | Доля «с износом» / «без» | `VALUE_BEFORE_WITH / VALUE_BEFORE_WITHOUT` |
+
+> В обучение не идут: `AMOUNT_REPAIR`, `REPAIR_VALUE`, `SHARE_WEAROUT`, `LATITUDE`/`LONGITUDE` и старые FE от них (`TO_DROP` в `mvp_types.py`).
 
 ### J. История убытков (past only, из victim)
 
@@ -194,8 +197,8 @@
 | Фича | Описание | Как собирается |
 |------|----------|----------------|
 | `SHARE_WORK` | Доля работ в калькуляции | `Работы / СуммаРемонта` из `_InfoRg14746` |
-| `AMOUNT_REPAIR` | Сумма ремонта без износа | `_InfoRg14746` |
-| `SHARE_WEAROUT` | Процент износа (cap 50) | `_InfoRg14746` |
+| `AMOUNT_REPAIR` | Сумма ремонта без износа | `_InfoRg14746` → **TO_DROP** |
+| `SHARE_WEAROUT` | Процент износа (cap 50) | `_InfoRg14746` → **TO_DROP** |
 | `FLAG_APPLICANT_SAME_VICTIM_PH` | Заявитель = PH victim | `APPLICANT_ID == VICTIM_POLICYHOLDER_PERSON_ID` |
 | `RECOVERED*_{1..5}` | Взыскания по инстанциям иска | pivot `target_3_claims` → **TO_DROP** |
 | `SurchargeValue_cumsum_by_incident` | Доплаты по претензиям (тип) | SQL aggregate pretensions → **TO_DROP** |
@@ -219,7 +222,7 @@
 | `EventDate`, `EventYear`, `EVENT_*` | Дата/время/описание ДТП | Losses |
 | `EventCreatedByGIBDDFlag` | Оформлено ГИБДД | Losses |
 | `DTPOSAGOType`, `EventTypeDescription`, `EventSchemeDescription` | Тип/схема ДТП | Losses |
-| `EventLocationRegionName`, `LONGITUDE`, `LATITUDE` | Гео ДТП | Losses |
+| `EventLocationRegionName`, `LONGITUDE`, `LATITUDE` | Гео ДТП | Losses; `LONGITUDE`/`LATITUDE` → **TO_DROP** |
 | `ParticipantsCount` | Участники | Losses → `FE_PARTICIPANTS_BIN` |
 
 ### 5.3 Убыток / процесс

@@ -8,7 +8,7 @@ from querulus.features.config import FeatureConfig
 from querulus.features.derived import _series
 
 INCIDENT_COLUMN = "INCIDENT_NUMBER"
-T0_COLUMN = "PAYMENT_ORDER_DATE_TIME"
+T0_COLUMN = "LOSS_DATE_TIME"
 
 
 def _incident_key(series: pd.Series) -> pd.Series:

@@ -13,7 +13,7 @@ _TARGET_SEV_RECOVERED_COLS: tuple[str, ...] = tuple(
     for instance in range(1, 6)
 )
 
-DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': ['LONGITUDE', 'LATITUDE'],
+DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': [],
  'CATEGORIAL': [],
  'TO_DROP': ['Сумма_взыскано_по_ФУ',
              'Суммы_взыскано_по_иску',
@@ -84,13 +84,18 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': ['LONGITUDE', 'LATIT
              'Взысканный_износ_ФУ',
              'REPAIR_VALUE',
              'AMOUNT_REPAIR',
-             # AMOUNT_REPAIR-derived FE (заменены на VALUE_BEFORE_*)
+             # AMOUNT_REPAIR / REPAIR_VALUE-derived FE (заменены на VALUE_BEFORE_*)
              'FE_AMOUNT_REPAIR_BIN',
              'FE_HIGH_REPAIR',
              'FE_EXPECTED_WEAROUT_RUB',
              'FE_REPAIR_TO_VALUE_RATIO',
+             'FE_REPAIR_TO_VALUE_BEFORE_RATIO',
+             'SHARE_WEAROUT',
+             'FE_WEAROUT_TIER',
+             'LONGITUDE',
+             'LATITUDE',
              'Выплаченный_износ_инцидент',
-             # VALUE_BEFORE_WITH / VALUE_AFTER_WITH разрешаем (временно) для обучения
+             # VALUE_BEFORE_WITH/WITHOUT и их FE_* — в пуле; VALUE_AFTER_WITH — нет
              'CHECK',
              # CPM/With related signals (leakage)
              'CPM_RATIO_RUB',

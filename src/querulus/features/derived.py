@@ -174,11 +174,15 @@ def _pick_column(df: pd.DataFrame, *names: str) -> pd.Series:
 
 
 def _add_timeline_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
-    """Блок A: timeline."""
+    """Блок A: timeline. T0 = LOSS_DATE_TIME (сплит и as-of история)."""
     t0 = _series(df, config.t0_column)
     th = config.thresholds
 
-    df["FE_DAYS_LOSS_TO_T0"] = _days_between(t0, _series(df, "LOSS_DATE_TIME"))
+    # Лаг от даты убытка до поручения на выплату.
+    df["FE_DAYS_LOSS_TO_PAYMENT_ORDER"] = _days_between(
+        _series(df, "PAYMENT_ORDER_DATE_TIME"),
+        _series(df, "LOSS_DATE_TIME"),
+    )
     df["FE_DAYS_EVENT_TO_LOSS"] = _days_between(
         _series(df, "LOSS_DATE_TIME"),
         _series(df, "EVENT_DATE"),
@@ -382,14 +386,9 @@ def _add_process_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _add_repair_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
-    """Блок I: калькуляция / ремонт."""
+    """Блок I: калькуляция от VALUE_BEFORE_WITH/WITHOUT (без AMOUNT_REPAIR/REPAIR_VALUE/SHARE_WEAROUT)."""
     th = config.thresholds
 
-    df["FE_WEAROUT_TIER"] = _tier_from_bins(
-        _series(df, "SHARE_WEAROUT"),
-        th.share_wearout_bins,
-        ("0-20", "20-50", "50+"),
-    )
     df["FE_SHARE_WORK_TIER"] = _tier_from_bins(
         _series(df, "SHARE_WORK"),
         th.share_work_bins,
@@ -398,7 +397,6 @@ def _add_repair_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
 
     value_without = pd.to_numeric(_series(df, "VALUE_BEFORE_WITHOUT"), errors="coerce")
     value_with = pd.to_numeric(_series(df, "VALUE_BEFORE_WITH"), errors="coerce")
-    share_wearout = pd.to_numeric(_series(df, "SHARE_WEAROUT"), errors="coerce")
 
     df["FE_VALUE_BEFORE_WITHOUT_BIN"] = _amount_bins(
         value_without, th.amount_repair_bins
@@ -406,23 +404,22 @@ def _add_repair_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
     df["FE_HIGH_VALUE_BEFORE_WITHOUT"] = (
         value_without > th.amount_repair_high
     ).astype("Int64")
+    df["FE_VALUE_BEFORE_WITH_BIN"] = _amount_bins(
+        value_with, th.amount_repair_bins
+    )
+    df["FE_HIGH_VALUE_BEFORE_WITH"] = (
+        value_with > th.amount_repair_high
+    ).astype("Int64")
 
-    wearout_from_values = (value_without - value_with).where(
+    # Износ в руб. = разница with/without (без SHARE_WEAROUT).
+    df["FE_WEAROUT_RUB_FROM_VALUES"] = (value_without - value_with).where(
         (value_without > 0) & (value_with >= 0)
     )
-    wearout_from_share = value_without * share_wearout / 100
-    df["FE_WEAROUT_RUB_FROM_VALUES"] = wearout_from_values.fillna(wearout_from_share)
 
     both_values_positive = (value_without > 0) & (value_with > 0)
     df["FE_VALUE_WITH_TO_WITHOUT_RATIO"] = _safe_div(
         value_with, value_without
     ).where(both_values_positive)
-
-    repair_value = pd.to_numeric(_series(df, "REPAIR_VALUE"), errors="coerce")
-    both_repair_positive = (value_without > 0) & (repair_value > 0)
-    df["FE_REPAIR_TO_VALUE_BEFORE_RATIO"] = _safe_div(
-        repair_value, value_without
-    ).where(both_repair_positive)
     return df
 
 

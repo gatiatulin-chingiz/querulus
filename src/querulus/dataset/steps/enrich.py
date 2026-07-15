@@ -44,12 +44,12 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
 
     #агрегаты по заявителю убытка 
     #присоединяем претензии где ФИО Заявитель убытка  выступал в качестве заявителя претензии (Applicant)
-    df_applicant_agg = df.sort_values(['INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME'])[['APPLICANT_ID','INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME']]\
+    df_applicant_agg = df.sort_values(['INCIDENT_NUMBER','LOSS_DATE_TIME'])[['APPLICANT_ID','INCIDENT_NUMBER','LOSS_DATE_TIME']]\
                          .drop_duplicates(subset=['INCIDENT_NUMBER'],keep='first')\
                          .merge(df_pretensions[df_pretensions['APPLICANT_PERSON_ID']!='00000000000000000000000000000000']\
                          .drop(columns=['INCIDENT_NUMBER'],axis=1),how='left',left_on='APPLICANT_ID',right_on='APPLICANT_PERSON_ID')
 
-    df_applicant_agg = df_applicant_agg[df_applicant_agg['PAYMENT_ORDER_DATE_TIME']>=df_applicant_agg['PRETENSION_GET_DATE']]
+    df_applicant_agg = df_applicant_agg[df_applicant_agg['LOSS_DATE_TIME']>=df_applicant_agg['PRETENSION_GET_DATE']]
 
 
     sum_cols = ['PRETENSION_VALUE','UTS_VALUE','SURCHARGE_VALUE','UTS_SURCHARGE_VALUE','CESSION','PRETENSION_VALUE_PENALTY','SURCHARGE_VALUE_PENALTY',
@@ -119,13 +119,13 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
     )
 
     #агрегируем для заявителя инфо по претензиям где он был страхователем, исключая те случаи где в претензии страховтель = заявителю, чтобы не учесть дважды
-    df_applicant_agg_2 = df.sort_values(['INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME'])[['APPLICANT_ID','INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME']]\
+    df_applicant_agg_2 = df.sort_values(['INCIDENT_NUMBER','LOSS_DATE_TIME'])[['APPLICANT_ID','INCIDENT_NUMBER','LOSS_DATE_TIME']]\
                         .drop_duplicates(subset=['INCIDENT_NUMBER'],keep='first')\
                         .merge(df_pretensions[df_pretensions['VICTIM_POLICYHOLDER_PERSON_ID']!='00000000000000000000000000000000']\
                                .drop(columns=['INCIDENT_NUMBER'],axis=1),how='left',left_on='APPLICANT_ID',right_on='VICTIM_POLICYHOLDER_PERSON_ID')
 
     df_applicant_agg_2 = df_applicant_agg_2[df_applicant_agg_2['VICTIM_POLICYHOLDER_PERSON_ID']!=df_applicant_agg_2['APPLICANT_PERSON_ID']]
-    df_applicant_agg_2 = df_applicant_agg_2[df_applicant_agg_2['PAYMENT_ORDER_DATE_TIME']>=df_applicant_agg_2['PRETENSION_GET_DATE']]
+    df_applicant_agg_2 = df_applicant_agg_2[df_applicant_agg_2['LOSS_DATE_TIME']>=df_applicant_agg_2['PRETENSION_GET_DATE']]
     df_applicant_agg_2 = df_applicant_agg_2.groupby(['APPLICANT_ID','INCIDENT_NUMBER']).agg(**agg_dict).reset_index()
 
     # соединяем все агрегированные датасеты с инфо по заявителю
@@ -176,12 +176,12 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
 
     #агрегаты по страхователю убытка 
     #присоединяем претензии где Страхователь  выступал в качестве заявителя претензии (Applicant)
-    df_applicant_agg = df.sort_values(['INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME'])[['VICTIM_POLICYHOLDER_PERSON_ID','INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME']]\
+    df_applicant_agg = df.sort_values(['INCIDENT_NUMBER','LOSS_DATE_TIME'])[['VICTIM_POLICYHOLDER_PERSON_ID','INCIDENT_NUMBER','LOSS_DATE_TIME']]\
                         .drop_duplicates(subset=['INCIDENT_NUMBER'],keep='first')\
                         .merge(df_pretensions[df_pretensions['APPLICANT_PERSON_ID']!='00000000000000000000000000000000']\
                                .drop(columns=['INCIDENT_NUMBER', 'VICTIM_POLICYHOLDER_PERSON_ID'],axis=1),how='left',left_on='VICTIM_POLICYHOLDER_PERSON_ID',right_on='APPLICANT_PERSON_ID')
 
-    df_applicant_agg = df_applicant_agg[df_applicant_agg['PAYMENT_ORDER_DATE_TIME']>=df_applicant_agg['PRETENSION_GET_DATE']]
+    df_applicant_agg = df_applicant_agg[df_applicant_agg['LOSS_DATE_TIME']>=df_applicant_agg['PRETENSION_GET_DATE']]
 
 
 
@@ -233,13 +233,13 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
 
 
     #агрегируем для заявителя инфо по претензиям где он был страхователем, исключая те случаи где в претензии страховтель = заявителю, чтобы не учесть дважды
-    df_applicant_agg_2 = df.sort_values(['INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME'])[['VICTIM_POLICYHOLDER_PERSON_ID','INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME']]\
+    df_applicant_agg_2 = df.sort_values(['INCIDENT_NUMBER','LOSS_DATE_TIME'])[['VICTIM_POLICYHOLDER_PERSON_ID','INCIDENT_NUMBER','LOSS_DATE_TIME']]\
                         .drop_duplicates(subset=['INCIDENT_NUMBER'],keep='first')\
                         .merge(df_pretensions[df_pretensions['VICTIM_POLICYHOLDER_PERSON_ID']!='00000000000000000000000000000000']\
                                .drop(columns=['INCIDENT_NUMBER'],axis=1),how='left',on='VICTIM_POLICYHOLDER_PERSON_ID')
 
     df_applicant_agg_2 = df_applicant_agg_2[df_applicant_agg_2['VICTIM_POLICYHOLDER_PERSON_ID']!=df_applicant_agg_2['APPLICANT_PERSON_ID']]
-    df_applicant_agg_2 = df_applicant_agg_2[df_applicant_agg_2['PAYMENT_ORDER_DATE_TIME']>=df_applicant_agg_2['PRETENSION_GET_DATE']]
+    df_applicant_agg_2 = df_applicant_agg_2[df_applicant_agg_2['LOSS_DATE_TIME']>=df_applicant_agg_2['PRETENSION_GET_DATE']]
     df_applicant_agg_2 = df_applicant_agg_2.groupby(['VICTIM_POLICYHOLDER_PERSON_ID','INCIDENT_NUMBER']).agg(**agg_dict).reset_index()
 
 
@@ -301,11 +301,11 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
 
 
     #агрегаты по заявителю убытка , suffixes=('', '_pret')
-    df_applicant_agg = df.sort_values(['INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME'])[['APPLICANT_ID','INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME']]\
+    df_applicant_agg = df.sort_values(['INCIDENT_NUMBER','LOSS_DATE_TIME'])[['APPLICANT_ID','INCIDENT_NUMBER','LOSS_DATE_TIME']]\
                         .drop_duplicates(subset=['INCIDENT_NUMBER'],keep='first')\
                         .merge(df_claims[df_claims['Лицо']!='00000000000000000000000000000000'],how='left',left_on='APPLICANT_ID',right_on='Лицо')
 
-    df_applicant_agg = df_applicant_agg[df_applicant_agg['PAYMENT_ORDER_DATE_TIME']>=df_applicant_agg['INCOMING_CLAIM_GET_DATE_1']]
+    df_applicant_agg = df_applicant_agg[df_applicant_agg['LOSS_DATE_TIME']>=df_applicant_agg['INCOMING_CLAIM_GET_DATE_1']]
 
     df_applicant_agg.columns = df_applicant_agg.columns.str.replace(r'[\s\-]+', '_', regex=True)
 
@@ -387,11 +387,11 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
 
 
     #агрегаты по страхователю жертве убытка , suffixes=('', '_pret')
-    df_applicant_agg = df.sort_values(['INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME'])[['VICTIM_POLICYHOLDER_PERSON_ID','INCIDENT_NUMBER','PAYMENT_ORDER_DATE_TIME','APPLICANT_ID']]\
+    df_applicant_agg = df.sort_values(['INCIDENT_NUMBER','LOSS_DATE_TIME'])[['VICTIM_POLICYHOLDER_PERSON_ID','INCIDENT_NUMBER','LOSS_DATE_TIME','APPLICANT_ID']]\
                         .drop_duplicates(subset=['INCIDENT_NUMBER'],keep='first')\
                         .merge(df_claims[df_claims['Лицо']!='00000000000000000000000000000000'],how='left',left_on='VICTIM_POLICYHOLDER_PERSON_ID',right_on='Лицо')
 
-    df_applicant_agg = df_applicant_agg[df_applicant_agg['PAYMENT_ORDER_DATE_TIME']>=df_applicant_agg['INCOMING_CLAIM_GET_DATE_1']]
+    df_applicant_agg = df_applicant_agg[df_applicant_agg['LOSS_DATE_TIME']>=df_applicant_agg['INCOMING_CLAIM_GET_DATE_1']]
 
 
     df_applicant_agg.columns = df_applicant_agg.columns.str.replace(r'[\s\-]+', '_', regex=True)

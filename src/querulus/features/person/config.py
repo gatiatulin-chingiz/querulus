@@ -1,7 +1,7 @@
 """Конфиг person-feature engineering (v1).
 
 Принципы:
-- Якорь времени: T0 = PAYMENT_ORDER_DATE_TIME текущей строки (инцидента).
+- Якорь времени: T0 = LOSS_DATE_TIME текущей строки (инцидента).
 - История: берём только события по предыдущим инцидентам того же человека:
   `event_date < T0` и `INCIDENT_NUMBER != текущий`.
 - ID используются только как ключи join; в обучение не идут (TO_DROP).
@@ -26,7 +26,7 @@ class PersonRole:
         return self.name.upper()
 
 
-T0_COLUMN: str = "PAYMENT_ORDER_DATE_TIME"
+T0_COLUMN: str = "LOSS_DATE_TIME"
 INCIDENT_COLUMN: str = "INCIDENT_NUMBER"
 
 # Колонки person_id в oisuu81_t_Pretensions (после нормализации).

@@ -1,5 +1,5 @@
 {
-  "t0_column": "PAYMENT_ORDER_DATE_TIME",
+  "t0_column": "LOSS_DATE_TIME",
   "thresholds": {
     "apply_delay_high": 30,
     "apply_delay_notify": 7,
@@ -10,7 +10,6 @@
     "victim_loss_sum_bins": [50000, 200000],
     "kbm_low": 1.0,
     "kbm_mid": 1.17,
-    "share_wearout_bins": [20, 50],
     "share_work_bins": [0.3, 0.6]
   },
   "vehicle_age_bins": [3, 7, 15],
@@ -22,7 +21,7 @@
     ]
   },
   "fe_columns": [
-    "FE_DAYS_LOSS_TO_T0",
+    "FE_DAYS_LOSS_TO_PAYMENT_ORDER",
     "FE_DAYS_EVENT_TO_LOSS",
     "FE_DAYS_TO_PH_CONTRACT_END",
     "FE_DAYS_TO_VICTIM_CONTRACT_END",
@@ -70,13 +69,13 @@
     "FE_REFUND_IS_REPAIR",
     "FE_MINIMIZATION_GAP",
     "FE_HAS_MINIMIZATION",
-    "FE_WEAROUT_TIER",
     "FE_SHARE_WORK_TIER",
     "FE_VALUE_BEFORE_WITHOUT_BIN",
     "FE_HIGH_VALUE_BEFORE_WITHOUT",
+    "FE_VALUE_BEFORE_WITH_BIN",
+    "FE_HIGH_VALUE_BEFORE_WITH",
     "FE_WEAROUT_RUB_FROM_VALUES",
     "FE_VALUE_WITH_TO_WITHOUT_RATIO",
-    "FE_REPAIR_TO_VALUE_BEFORE_RATIO",
     "FE_VICTIM_LOSS_COUNT_BIN",
     "FE_VICTIM_REPEAT",
     "FE_VICTIM_LOSS_SUM_BIN",
