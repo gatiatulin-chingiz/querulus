@@ -38,19 +38,63 @@ def train_triple_stacks(
 ) -> dict[str, TrainingArtifacts]:
     """Обучить frequency+severity для каждого стека таргетов.
 
-    Feature selection (freq/sev) включается только для стеков из ``select_stacks``
-    (по умолчанию только ``new``).
+    Feature selection (freq/sev) — только для ``select_stacks`` (по умолчанию ``new``).
+    Остальные стеки в режиме MVP+select получают **те же** отобранные фичи
+    (иначе legacy/new_claims учились бы на полном MVP-пуле → завышенные метрики).
     """
     base = resolve_features_config(config or TrainingConfig())
+    stack_list = list(stacks)
+    select_on = bool(
+        select_stacks
+        and (base.frequency_select_features or base.severity_select_features)
+        and base.features_source == "mvp"
+    )
+
+    # Сначала стеки с отбором (prefer new), затем остальные.
+    if select_on:
+        primary = "new" if "new" in select_stacks else next(iter(select_stacks))
+        ordered = sorted(
+            stack_list,
+            key=lambda item: (
+                0 if item[0] == primary else 1 if item[0] in select_stacks else 2,
+                [name for name, *_ in stack_list].index(item[0]),
+            ),
+        )
+    else:
+        ordered = stack_list
+
     trainings: dict[str, TrainingArtifacts] = {}
-    for stack_name, freq_target, sev_target in stacks:
+    shared_freq: tuple[str, ...] | None = None
+    shared_sev: tuple[str, ...] | None = None
+
+    for stack_name, freq_target, sev_target in ordered:
         print(f"Обучение стека {stack_name}: {freq_target} + {sev_target} ...")
         stack_cfg = replace(
             base,
             frequency_target=freq_target,
             severity_target=sev_target,
         )
-        if stack_name not in select_stacks:
+        if select_on and stack_name in select_stacks:
+            trainings[stack_name] = train_models(df, stack_cfg)
+            # Фиксируем отобранные фичи для остальных стеков.
+            if shared_freq is None:
+                shared_freq = tuple(trainings[stack_name].frequency_features)
+                shared_sev = tuple(trainings[stack_name].severity_features)
+                print(
+                    f"  select@{stack_name}: "
+                    f"freq={len(shared_freq)} sev={len(shared_sev)} → reuse on other stacks"
+                )
+            continue
+
+        if select_on and shared_freq is not None and shared_sev is not None:
+            stack_cfg = replace(
+                stack_cfg,
+                frequency_features=shared_freq,
+                severity_features=shared_sev,
+                frequency_select_features=False,
+                severity_select_features=False,
+            )
+        elif stack_name not in select_stacks:
             stack_cfg = replace(
                 stack_cfg,
                 frequency_select_features=False,

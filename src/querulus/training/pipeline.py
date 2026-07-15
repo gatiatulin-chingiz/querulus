@@ -234,13 +234,20 @@ def _split_by_date(
     config: TrainingConfig,
     *,
     target_range: tuple[float, float] | None = None,
+    positive_target: bool = False,
     full_frame: bool = False,
 ) -> DatasetSplit:
-    """Разбить датасет на train/test по периоду."""
+    """Разбить датасет на train/test по периоду.
+
+    ``target_range`` — ``between(low, high)``.
+    ``positive_target`` — оставить только ``target > 0`` (если ``target_range`` не задан).
+    """
     data = df.copy()
     data[config.date_column] = pd.to_datetime(data[config.date_column])
     if target_range is not None:
         data = data[data[target].between(*target_range)]
+    elif positive_target:
+        data = data[pd.to_numeric(data[target], errors="coerce") > 0]
 
     train_mask = data[config.date_column].between(*config.train_period)
     test_mask = data[config.date_column].between(*config.test_period)
@@ -732,7 +739,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         **config.severity_regressor_params,
     }
     if config.severity_range is None:
-        severity_target_filter = None
+        severity_target_filter = f"{config.severity_target} > 0"
     else:
         severity_target_filter = (
             f"{config.severity_target} in "
@@ -770,6 +777,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         severity_features,
         config,
         target_range=config.severity_range,
+        positive_target=config.severity_range is None,
     )
     severity_diag_split = _split_by_date(
         data,
@@ -777,6 +785,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         severity_features,
         config,
         target_range=config.severity_range,
+        positive_target=config.severity_range is None,
         full_frame=True,
     )
     severity_train_pool = Pool(

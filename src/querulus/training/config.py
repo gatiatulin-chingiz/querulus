@@ -38,7 +38,9 @@ class TrainingConfig:
 
     ``mvp_cutoff_nan``: доля пропусков, выше которой AutoMVP убирает колонку из пула.
 
-    ``severity_range``: ``None`` — без фильтра по таргету; иначе ``(low, high)`` через ``between``.
+    ``severity_range``:
+    - ``None`` — только ``target > 0`` (без верхней границы);
+    - ``(low, high)`` — ``target.between(low, high)``.
     """
 
     date_column: str = "LOSS_DATE_TIME"
@@ -89,13 +91,13 @@ class TrainingConfig:
 
 
 def resolve_features_config(config: TrainingConfig) -> TrainingConfig:
-    """Применить ``features_source``: selected_features или полный MVP."""
+    """Применить ``features_source``: selected_features или полный MVP.
+
+    Для ``mvp`` явные ``frequency_features`` / ``severity_features`` не затираются
+    (нужно, чтобы после select на new переиспользовать те же фичи на других стеках).
+    """
     if config.features_source == "mvp":
-        return replace(
-            config,
-            frequency_features=None,
-            severity_features=None,
-        )
+        return config
     return replace(
         config,
         frequency_features=(
