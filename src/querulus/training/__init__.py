@@ -1,6 +1,7 @@
 """Обучение моделей querulus."""
 
 from querulus.training.config import TrainingConfig
+from querulus.training.drift import feature_drift_report, monthly_target_drift
 from querulus.training.pipeline import (
     TrainingArtifacts,
     format_features_table,
@@ -15,6 +16,11 @@ from querulus.training.plots import (
     run_mvp_frequency_eda,
     run_training_visualizations,
 )
+from querulus.training.severity_diagnostics import (
+    SeverityLog1pCompare,
+    compare_severity_log1p,
+    severity_error_by_quantile,
+)
 from querulus.training.triple_stack import (
     TARGET_STACKS,
     TripleStackResult,
@@ -26,20 +32,25 @@ from querulus.training.triple_stack import (
 
 __all__ = [
     "TARGET_STACKS",
+    "SeverityLog1pCompare",
     "TrainingArtifacts",
     "TrainingConfig",
     "TripleStackResult",
     "build_metrics_summary",
+    "compare_severity_log1p",
+    "feature_drift_report",
     "format_features_table",
     "format_metrics_table",
     "format_training_summary",
     "frequency_predict_proba",
     "log_training_summary",
+    "monthly_target_drift",
     "run_model_diagnostics_visualizations",
     "run_mvp_frequency_eda",
     "run_training_visualizations",
     "run_triple_fin_effects",
     "run_triple_stack",
+    "severity_error_by_quantile",
     "train_models",
     "train_triple_stacks",
 ]

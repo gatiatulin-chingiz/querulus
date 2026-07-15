@@ -34,20 +34,29 @@ def train_triple_stacks(
     config: TrainingConfig | None = None,
     *,
     stacks: Iterable[tuple[str, str, str]] = TARGET_STACKS,
+    select_stacks: frozenset[str] = frozenset({"new"}),
 ) -> dict[str, TrainingArtifacts]:
-    """Обучить frequency+severity для каждого стека таргетов."""
+    """Обучить frequency+severity для каждого стека таргетов.
+
+    Feature selection (freq/sev) включается только для стеков из ``select_stacks``
+    (по умолчанию только ``new``).
+    """
     base = resolve_features_config(config or TrainingConfig())
     trainings: dict[str, TrainingArtifacts] = {}
     for stack_name, freq_target, sev_target in stacks:
         print(f"Обучение стека {stack_name}: {freq_target} + {sev_target} ...")
-        trainings[stack_name] = train_models(
-            df,
-            replace(
-                base,
-                frequency_target=freq_target,
-                severity_target=sev_target,
-            ),
+        stack_cfg = replace(
+            base,
+            frequency_target=freq_target,
+            severity_target=sev_target,
         )
+        if stack_name not in select_stacks:
+            stack_cfg = replace(
+                stack_cfg,
+                frequency_select_features=False,
+                severity_select_features=False,
+            )
+        trainings[stack_name] = train_models(df, stack_cfg)
     return trainings
 
 
@@ -150,9 +159,10 @@ def run_triple_stack(
     loaded_from_checkpoint: bool = True,
     legacy_dataset: bool | None = None,
     run_fin_effect: bool = True,
+    select_stacks: frozenset[str] = frozenset({"new"}),
 ) -> TripleStackResult:
     """Обучить 3 стека, собрать сводки метрик и (опционально) фин. эффекта."""
-    trainings = train_triple_stacks(df, config)
+    trainings = train_triple_stacks(df, config, select_stacks=select_stacks)
     metrics_summary = build_metrics_summary(trainings)
     fin_effects: dict[str, FinEffectResult] | None = None
     fin_effect_summary: pd.DataFrame | None = None

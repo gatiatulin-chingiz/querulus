@@ -83,6 +83,7 @@ class TrainingArtifacts:
     feature_frame: pd.DataFrame | None = None
     frequency_calibrator: object | None = None
     frequency_feature_selection_summary: dict[str, object] | None = None
+    severity_feature_selection_summary: dict[str, object] | None = None
 
 
 def _require_catboost():
@@ -291,28 +292,22 @@ def _check_frequency_leakage(
     return None
 
 
-def _select_frequency_features(
-    config: TrainingConfig,
+def _select_features_by_shap(
+    *,
+    model: object,
     train_pool: object,
     test_pool: object,
     feature_count: int,
-    CatBoostClassifier: type,
+    num_features_to_select: int,
     EFeaturesSelectionAlgorithm: type,
     EShapCalcType: type,
 ) -> tuple[list[str], dict[str, object]]:
-    """Отбор признаков CatBoost RecursiveByShapValues (как model_learn.py)."""
-    selector = CatBoostClassifier(
-        iterations=config.frequency_select_iterations,
-        early_stopping_rounds=config.frequency_select_early_stopping_rounds,
-        random_state=config.frequency_random_state,
-        auto_class_weights="Balanced",
-        logging_level="Silent",
-    )
-    summary = selector.select_features(
+    """Отбор признаков CatBoost RecursiveByShapValues (freq/sev)."""
+    summary = model.select_features(
         train_pool,
         eval_set=test_pool,
         features_for_select=f"0-{feature_count - 1}",
-        num_features_to_select=config.frequency_num_features_to_select,
+        num_features_to_select=num_features_to_select,
         steps=feature_count,
         algorithm=EFeaturesSelectionAlgorithm.RecursiveByShapValues,
         shap_calc_type=EShapCalcType.Regular,
@@ -322,6 +317,61 @@ def _select_frequency_features(
     )
     selected = list(summary["selected_features_names"])
     return selected, summary
+
+
+def _select_frequency_features(
+    config: TrainingConfig,
+    train_pool: object,
+    test_pool: object,
+    feature_count: int,
+    CatBoostClassifier: type,
+    EFeaturesSelectionAlgorithm: type,
+    EShapCalcType: type,
+) -> tuple[list[str], dict[str, object]]:
+    """Отбор frequency-признаков (обёртка над RecursiveByShapValues)."""
+    selector = CatBoostClassifier(
+        iterations=config.frequency_select_iterations,
+        early_stopping_rounds=config.frequency_select_early_stopping_rounds,
+        random_state=config.frequency_random_state,
+        auto_class_weights="Balanced",
+        logging_level="Silent",
+    )
+    return _select_features_by_shap(
+        model=selector,
+        train_pool=train_pool,
+        test_pool=test_pool,
+        feature_count=feature_count,
+        num_features_to_select=config.frequency_num_features_to_select,
+        EFeaturesSelectionAlgorithm=EFeaturesSelectionAlgorithm,
+        EShapCalcType=EShapCalcType,
+    )
+
+
+def _select_severity_features(
+    config: TrainingConfig,
+    train_pool: object,
+    test_pool: object,
+    feature_count: int,
+    CatBoostRegressor: type,
+    EFeaturesSelectionAlgorithm: type,
+    EShapCalcType: type,
+) -> tuple[list[str], dict[str, object]]:
+    """Отбор severity-признаков (обёртка над RecursiveByShapValues)."""
+    selector = CatBoostRegressor(
+        iterations=config.severity_select_iterations,
+        early_stopping_rounds=config.severity_select_early_stopping_rounds,
+        random_state=config.severity_random_state,
+        logging_level="Silent",
+    )
+    return _select_features_by_shap(
+        model=selector,
+        train_pool=train_pool,
+        test_pool=test_pool,
+        feature_count=feature_count,
+        num_features_to_select=config.severity_num_features_to_select,
+        EFeaturesSelectionAlgorithm=EFeaturesSelectionAlgorithm,
+        EShapCalcType=EShapCalcType,
+    )
 
 
 def _fit_frequency_calibrator(
@@ -681,9 +731,13 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         "random_state": config.severity_random_state,
         **config.severity_regressor_params,
     }
-    severity_target_filter = (
-        f"{config.severity_target} in [{config.severity_range[0]}, {config.severity_range[1]}]"
-    )
+    if config.severity_range is None:
+        severity_target_filter = None
+    else:
+        severity_target_filter = (
+            f"{config.severity_target} in "
+            f"[{config.severity_range[0]}, {config.severity_range[1]}]"
+        )
 
     frequency_model = CatBoostClassifier(
         iterations=config.frequency_iterations,
@@ -725,20 +779,58 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         target_range=config.severity_range,
         full_frame=True,
     )
-    severity_pool = Pool(
+    severity_train_pool = Pool(
         severity_split.x_train,
         severity_split.y_train,
         cat_features=severity_cat_features,
         feature_names=severity_features,
     )
+    severity_test_pool = Pool(
+        severity_split.x_test,
+        severity_split.y_test,
+        cat_features=severity_cat_features,
+        feature_names=severity_features,
+    )
+    severity_feature_selection_summary: dict[str, object] | None = None
+    if (
+        config.severity_select_features
+        and len(severity_features) > config.severity_num_features_to_select
+    ):
+        severity_features, severity_feature_selection_summary = _select_severity_features(
+            config,
+            severity_train_pool,
+            severity_test_pool,
+            len(severity_features),
+            CatBoostRegressor,
+            EFeaturesSelectionAlgorithm,
+            EShapCalcType,
+        )
+        severity_cat_features = [
+            column for column in severity_cat_features if column in severity_features
+        ]
+        severity_hyperparameters["num_features_to_select"] = config.severity_num_features_to_select
+        severity_hyperparameters["feature_selection"] = "RecursiveByShapValues"
+        severity_train_pool = Pool(
+            severity_split.x_train[severity_features],
+            severity_split.y_train,
+            cat_features=severity_cat_features,
+            feature_names=severity_features,
+        )
+        severity_test_pool = Pool(
+            severity_split.x_test[severity_features],
+            severity_split.y_test,
+            cat_features=severity_cat_features,
+            feature_names=severity_features,
+        )
+
     severity_model = CatBoostRegressor(
         iterations=config.severity_iterations,
         random_state=config.severity_random_state,
         **config.severity_regressor_params,
     )
     severity_model.fit(
-        severity_pool,
-        eval_set=(severity_split.x_test, severity_split.y_test),
+        severity_train_pool,
+        eval_set=severity_test_pool,
         plot=False,
     )
 
@@ -810,4 +902,5 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         feature_frame=data,
         frequency_calibrator=frequency_calibrator,
         frequency_feature_selection_summary=frequency_feature_selection_summary,
+        severity_feature_selection_summary=severity_feature_selection_summary,
     )

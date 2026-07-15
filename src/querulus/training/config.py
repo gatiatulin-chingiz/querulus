@@ -25,8 +25,8 @@ class TrainingConfig:
     """Параметры разбиения, целей и обучения CatBoost.
 
     ``features_source``:
-    - ``selected`` — фичи из ``selected_features.py`` (без frequency select);
-    - ``mvp`` — полный MVP-пул (``frequency_select_features`` по желанию).
+    - ``selected`` — фичи из ``selected_features.py`` (без feature select);
+    - ``mvp`` — полный MVP-пул (``frequency_select_features`` / ``severity_select_features``).
 
     Гиперпараметры (как финальные модели в model_learn.py / configs):
     - ``frequency_iterations`` / ``severity_iterations`` — число итераций CatBoost;
@@ -37,6 +37,8 @@ class TrainingConfig:
     пересечение с признаками конкретной модели — как в Litigant.
 
     ``mvp_cutoff_nan``: доля пропусков, выше которой AutoMVP убирает колонку из пула.
+
+    ``severity_range``: ``None`` — без фильтра по таргету; иначе ``(low, high)`` через ``between``.
     """
 
     date_column: str = "LOSS_DATE_TIME"
@@ -45,7 +47,7 @@ class TrainingConfig:
     frequency_target: str = "TARGET_FREQ"
     severity_target: str = "TARGET_SEV"
     features_source: FeaturesSource = "selected"
-    severity_range: tuple[float, float] = (1.0, 1_500_000.0)
+    severity_range: tuple[float, float] | None = None
     frequency_iterations: int = 375
     severity_iterations: int = 100
     frequency_random_state: int = 0
@@ -55,9 +57,13 @@ class TrainingConfig:
     frequency_features: tuple[str, ...] | None = None
     severity_features: tuple[str, ...] | None = None
     frequency_select_features: bool = False
-    frequency_num_features_to_select: int = 20
+    frequency_num_features_to_select: int = 30
     frequency_select_iterations: int = 100
     frequency_select_early_stopping_rounds: int = 50
+    severity_select_features: bool = False
+    severity_num_features_to_select: int = 30
+    severity_select_iterations: int = 100
+    severity_select_early_stopping_rounds: int = 50
     frequency_calibration_enabled: bool = False
     frequency_calibration_method: Literal["isotonic", "sigmoid"] = "isotonic"
     frequency_leak_importance_level: float = 50.0
@@ -103,4 +109,5 @@ def resolve_features_config(config: TrainingConfig) -> TrainingConfig:
             else DEFAULT_SEVERITY_FEATURES
         ),
         frequency_select_features=False,
+        severity_select_features=False,
     )
