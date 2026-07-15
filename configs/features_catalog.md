@@ -1,6 +1,6 @@
 # Каталог признаков датасета querulus
 
-**Гранулярность:** 1 строка = 1 инцидент (первичный убыток, max `LOSS_NUMBER`).  
+**Гранулярность:** 1 строка = 1 инцидент (первичный убыток, min `LOSS_NUMBER`).  
 **T0:** `PAYMENT_ORDER_DATE_TIME` — якорь времени для person-history.  
 **Итоговый артефакт:** `data/processed/df_final_3.parquet`.
 

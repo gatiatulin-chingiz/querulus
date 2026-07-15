@@ -339,7 +339,7 @@ def build_targets(
     use_sql: bool = False,
 ):
     """Добавить TARGET_2 (ПСР), TARGET_3_SEV, TARGET_FREQ и TARGET_SEV к victim-фрейму."""
-    # Первичный убыток на инцидент: max LOSS_NUMBER
+    # Первичный убыток на инцидент: min LOSS_NUMBER
     df = select_primary_loss_per_incident(df)
 
     query_calc_agg = \
@@ -361,11 +361,10 @@ def build_targets(
     		_Fld14787	НомерРасчета	,
     		cast(_Fld14788 as INT)	СканыКалькуляцииОбработаны	,
     		_Fld15038	ДатаРасчета,
-    		-- Внутри одного убытка могут быть несколько расчётов AMOUNT_REPAIR.
-    		-- Нам нужен "последний" расчёт по Период.
+    		-- Первичный убыток (min LossNumber) + последний расчёт по Период.
     		ROW_NUMBER() over (
                 partition by itl.IncidentNumber
-                order by l.LossNumber desc, _Period desc
+                order by l.LossNumber asc, _Period desc
             ) as rn
     	from oisuu81.dbo._InfoRg14746 i
     	left join oisuu81_t_losses l on l.LossID = _Fld14747RRef

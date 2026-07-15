@@ -115,11 +115,11 @@ def claims_sql_predicate(
 
 
 def select_primary_loss_per_incident(df: pd.DataFrame) -> pd.DataFrame:
-    """Оставить одну строку на инцидент: убыток с максимальным LOSS_NUMBER."""
+    """Оставить одну строку на инцидент: первичный убыток (минимальный LOSS_NUMBER)."""
     if "LOSS_NUMBER" not in df.columns:
         raise KeyError("Для выбора первичного убытка нужна колонка LOSS_NUMBER")
     return (
-        df.sort_values(["INCIDENT_NUMBER", "LOSS_NUMBER"], ascending=[True, False])
+        df.sort_values(["INCIDENT_NUMBER", "LOSS_NUMBER"], ascending=[True, True])
         .drop_duplicates(subset=["INCIDENT_NUMBER"], keep="first")
         .reset_index(drop=True)
     )
