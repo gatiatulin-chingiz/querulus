@@ -342,9 +342,7 @@ def build_targets(
     # Первичный убыток на инцидент: min LOSS_NUMBER
     df = select_primary_loss_per_incident(df)
 
-    query_calc_agg = \
-        
-    """
+    query_calc_agg = """
     with tmp as (
     	SELECT
     		_Period         Период	,
