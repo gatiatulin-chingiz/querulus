@@ -343,6 +343,7 @@ def build_targets(
     df = select_primary_loss_per_incident(df)
 
     query_calc_agg = \
+        
     """
     with tmp as (
     	SELECT
@@ -361,10 +362,10 @@ def build_targets(
     		_Fld14787	НомерРасчета	,
     		cast(_Fld14788 as INT)	СканыКалькуляцииОбработаны	,
     		_Fld15038	ДатаРасчета,
-    		-- Первичный убыток (min LossNumber) + последний расчёт по Период.
+    		-- Расчёт с последнего убытка инцидента (max LossNumber) + последний Период.
     		ROW_NUMBER() over (
                 partition by itl.IncidentNumber
-                order by l.LossNumber asc, _Period desc
+                order by l.LossNumber desc, _Period desc
             ) as rn
     	from oisuu81.dbo._InfoRg14746 i
     	left join oisuu81_t_losses l on l.LossID = _Fld14747RRef

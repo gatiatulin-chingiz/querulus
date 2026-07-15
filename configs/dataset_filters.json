@@ -35,7 +35,7 @@
   },
 
   "primary_loss": {
-    "_comment": "Первичный убыток на инцидент: минимальный LossNumber (согласовано с df_calc_agg).",
+    "_comment": "Строка victim: первичный (min) LossNumber. df_calc_agg — последний (max) LossNumber + max Period.",
     "order_by": "loss_number_asc"
   }
 }
