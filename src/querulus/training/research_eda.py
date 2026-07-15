@@ -44,6 +44,22 @@ def plot_cat_vs_target(data, x_min, x_max, figsize, feature, save, model_type, r
     plt.show()
 
 
+def _qcut_feature(series: pd.Series, quantiles: int) -> pd.Series:
+    """Безопасный qcut: numeric + dropna; fallback на cut при сбое pandas IntervalIndex."""
+    values = pd.to_numeric(series, errors="coerce")
+    arr = values.to_numpy(dtype=float, copy=False)
+    finite = np.isfinite(arr)
+    if finite.sum() < 2 or pd.Series(arr[finite]).nunique() < 2:
+        raise ValueError("insufficient unique finite values for binning")
+
+    n_bins = max(2, min(int(quantiles), int(pd.Series(arr[finite]).nunique())))
+    try:
+        return pd.qcut(values, n_bins, duplicates="drop")
+    except (ValueError, TypeError):
+        # Pandas IntervalIndex / совпадающие quantile edges (часто на float+NaN).
+        return pd.cut(values, bins=n_bins, duplicates="drop")
+
+
 def research_continous(
     data,
     feature,
@@ -52,24 +68,31 @@ def research_continous(
     figsize: tuple = (55, 10),
     save=False,
     rotation=90,
+    *,
+    frequency_target: str | None = None,
+    severity_target: str | None = None,
 ):
     """Числовой признак по квантильным бинам: экспозиция + линия частоты/severity."""
-    if model_type == "frequency":
-        data = data[[feature, expsoure, damage_count]]
-        quantiles, bins = pd.qcut(data[feature], quantiles, duplicates="drop", retbins=True)
-        data.drop(feature, axis=1, inplace=True)
-        data = pd.concat([data, quantiles], axis=1, join="outer")
-        grouped = data.groupby(feature).agg(sum)
-        grouped["ratio"] = grouped[damage_count] / grouped[expsoure]
-    elif model_type == "severity":
-        data = data[[feature, damage_sum, expsoure, damage_count]]
-        quantiles, bins = pd.qcut(data[feature], quantiles, duplicates="drop", retbins=True)
-        data.drop(feature, axis=1, inplace=True)
-        data = pd.concat([data, quantiles], axis=1, join="outer")
-        grouped = data.groupby(feature).agg(sum)
-        grouped["ratio"] = grouped[damage_sum] / grouped[damage_count]
+    freq_col = frequency_target or damage_count
+    sev_col = severity_target or damage_sum
+    binned = _qcut_feature(data[feature], quantiles)
+    data = data.copy()
+    data[feature] = binned
 
-    grouped[damage_count] = grouped[damage_count] / sum(grouped[damage_count])
+    if model_type == "frequency":
+        data = data[[feature, expsoure, freq_col]].dropna(subset=[feature])
+        grouped = data.groupby(feature, observed=True).agg("sum")
+        grouped["ratio"] = grouped[freq_col] / grouped[expsoure]
+        count_col = freq_col
+    elif model_type == "severity":
+        data = data[[feature, sev_col, expsoure, freq_col]].dropna(subset=[feature])
+        grouped = data.groupby(feature, observed=True).agg("sum")
+        grouped["ratio"] = grouped[sev_col] / grouped[freq_col]
+        count_col = freq_col
+    else:
+        raise ValueError(f"Unknown model_type: {model_type!r}")
+
+    grouped[count_col] = grouped[count_col] / sum(grouped[count_col])
 
     plot_cat_vs_target(grouped, None, None, figsize, feature, save, model_type, rotation)
     return grouped
@@ -88,18 +111,24 @@ def research_feature(
     model_type="frequency",
     save=False,
     rotation=90,
+    *,
+    frequency_target: str | None = None,
+    severity_target: str | None = None,
 ):
     """Категориальный признак: экспозиция + линия частоты/severity по категориям."""
+    freq_col = frequency_target or damage_count
+    sev_col = severity_target or damage_sum
+
     if model_type == "frequency":
-        data = data[[feature, expsoure, damage_count]]
-        grouped = data.groupby(feature, dropna=False).agg(sum)
-
-        grouped["ratio"] = grouped[damage_count] / grouped[expsoure]
+        data = data[[feature, expsoure, freq_col]]
+        grouped = data.groupby(feature, dropna=False).agg("sum")
+        grouped["ratio"] = grouped[freq_col] / grouped[expsoure]
     elif model_type == "severity":
-        data = data[[feature, expsoure, damage_count, damage_sum]]
-        grouped = data.groupby(feature, dropna=False).agg(sum)
-
-        grouped["ratio"] = grouped[damage_sum] / grouped[damage_count]
+        data = data[[feature, expsoure, freq_col, sev_col]]
+        grouped = data.groupby(feature, dropna=False).agg("sum")
+        grouped["ratio"] = grouped[sev_col] / grouped[freq_col]
+    else:
+        raise ValueError(f"Unknown model_type: {model_type!r}")
 
     if sort_by == "index":
         grouped = grouped.sort_index()

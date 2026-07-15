@@ -165,6 +165,8 @@ def _plot_features_eda(
     rotation: int = 90,
     max_categories: int = 2000,
     skip_geo: bool = True,
+    frequency_target: str | None = None,
+    severity_target: str | None = None,
 ) -> None:
     """Построить research_* графики по списку признаков (оригинальный API Litigant)."""
     cat_set = set(cat_features)
@@ -174,40 +176,37 @@ def _plot_features_eda(
             continue
         if column not in df.columns:
             continue
-        if column in cat_set:
-            print(column, "nulls:", df[column].isnull().mean() * 100, "%")
-            print(column, "nunique:", df[column].nunique())
-            if df[column].nunique(dropna=False) >= max_categories:
-                continue
-            research_feature(
-                df.copy(),
-                column,
-                model_type=model_type,
-                figsize=figsize,
-                rotation=rotation,
-            )
-        else:
-            print(column, "nulls:", df[column].isnull().mean() * 100, "%")
-            try:
-                research_continous(
+        try:
+            if column in cat_set:
+                print(column, "nulls:", df[column].isnull().mean() * 100, "%")
+                print(column, "nunique:", df[column].nunique())
+                if df[column].nunique(dropna=False) >= max_categories:
+                    continue
+                research_feature(
                     df.copy(),
                     column,
-                    numeric_bins,
                     model_type=model_type,
                     figsize=figsize,
                     rotation=rotation,
+                    frequency_target=frequency_target,
+                    severity_target=severity_target,
                 )
-            except (ValueError, TypeError):
-                df = df.copy()
-                df[column] = pd.to_numeric(df[column], errors="coerce")
+            else:
+                print(column, "nulls:", df[column].isnull().mean() * 100, "%")
+                frame = df.copy()
+                frame[column] = pd.to_numeric(frame[column], errors="coerce")
                 research_continous(
-                    df,
+                    frame,
                     column,
                     numeric_bins,
                     model_type=model_type,
                     figsize=figsize,
                     rotation=rotation,
+                    frequency_target=frequency_target,
+                    severity_target=severity_target,
                 )
+        except (ValueError, TypeError) as exc:
+            print(f"skip EDA for {column!r}: {exc}")
 
 
 def run_mvp_frequency_eda(
@@ -249,6 +248,8 @@ def run_mvp_frequency_eda(
         rotation=rotation,
         max_categories=max_categories,
         skip_geo=False,
+        frequency_target=config.frequency_target,
+        severity_target=config.severity_target,
     )
 
     print("\n=== Frequency MVP EDA (binary) ===")
@@ -262,6 +263,8 @@ def run_mvp_frequency_eda(
         rotation=rotation,
         max_categories=max_categories,
         skip_geo=False,
+        frequency_target=config.frequency_target,
+        severity_target=config.severity_target,
     )
 
     print("\n=== Frequency MVP EDA (categorical) ===")
@@ -275,6 +278,8 @@ def run_mvp_frequency_eda(
         rotation=rotation,
         max_categories=max_categories,
         skip_geo=False,
+        frequency_target=config.frequency_target,
+        severity_target=config.severity_target,
     )
 
 
