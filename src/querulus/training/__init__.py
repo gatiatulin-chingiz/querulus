@@ -21,6 +21,11 @@ from querulus.training.severity_diagnostics import (
     compare_severity_log1p,
     severity_error_by_quantile,
 )
+from querulus.training.feature_selection_io import (
+    load_feature_selection_latest,
+    save_feature_selection,
+)
+from querulus.training.severity_zoo import SeverityZooCompare, run_severity_zoo_compare
 from querulus.training.triple_stack import (
     TARGET_STACKS,
     TripleStackResult,
@@ -33,6 +38,7 @@ from querulus.training.triple_stack import (
 __all__ = [
     "TARGET_STACKS",
     "SeverityLog1pCompare",
+    "SeverityZooCompare",
     "TrainingArtifacts",
     "TrainingConfig",
     "TripleStackResult",
@@ -43,13 +49,16 @@ __all__ = [
     "format_metrics_table",
     "format_training_summary",
     "frequency_predict_proba",
+    "load_feature_selection_latest",
     "log_training_summary",
     "monthly_target_drift",
     "run_model_diagnostics_visualizations",
     "run_mvp_frequency_eda",
+    "run_severity_zoo_compare",
     "run_training_visualizations",
     "run_triple_fin_effects",
     "run_triple_stack",
+    "save_feature_selection",
     "severity_error_by_quantile",
     "train_models",
     "train_triple_stacks",

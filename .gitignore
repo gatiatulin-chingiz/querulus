@@ -59,3 +59,8 @@ features_engineering/features_list.txt
 
 # SQL-справочник колонок (локально, не в git)
 src/querulus/dataset/sql/
+
+# Журналы работ и отчёты — локально, пока не в git
+**/CHANGELOG.md
+**/REPORT*.md
+**/REPORT_*.md
