@@ -83,6 +83,8 @@ class TrainingConfig:
             "verbose": 250,
         }
     )
+    severity_target_transform: Literal["raw", "log1p"] = "raw"
+    severity_sample_weight: Literal["none", "sqrt", "linear"] = "none"
 
     @property
     def drop_columns(self) -> tuple[str, ...]:

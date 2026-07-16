@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from querulus.fin_effect.config import FinEffectConfig
+from querulus.training.severity_training import severity_predict
 
 SplitName = Literal["train", "test", "all"]
 
@@ -493,10 +494,11 @@ def run_fin_effect_from_training(
         index=effect_index,
     )
     sev_pred = pd.Series(
-        _catboost_predict(
+        severity_predict(
             training.severity_model,
             predict_frame[sev_features],
             getattr(training, "severity_categorical_features", []),
+            transform=getattr(training, "severity_target_transform", "raw"),
         ),
         index=effect_index,
     )

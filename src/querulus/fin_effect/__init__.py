@@ -47,6 +47,14 @@ from querulus.fin_effect.resolve import (
     resolve_fin_effect_config,
 )
 from querulus.fin_effect.export import export_analytics_excel
+from querulus.fin_effect.segment_eval import (
+    SegmentFinEffectCompare,
+    SeverityVariantsCompare,
+    compare_severity_fin_effect_variants,
+    compare_value_before_segment_strategies,
+    fin_effect_penalty_table,
+    run_fin_effect_with_severity_predictions,
+)
 from querulus.fin_effect.summary import (
     color_excel_table,
     create_summary_table,
@@ -85,6 +93,8 @@ __all__ = [
     "compare_premiums",
     "compare_severity_predictions",
     "compare_severity_targets",
+    "compare_severity_fin_effect_variants",
+    "compare_value_before_segment_strategies",
     "compute_fin_effect_fact",
     "compute_fin_effect_model",
     "create_summary_table",
@@ -93,6 +103,7 @@ __all__ = [
     "export_plot_html",
     "export_summary_excel",
     "fact_only_compare_report",
+    "fin_effect_penalty_table",
     "payments_fee",
     "plot_confusion_matrix",
     "plot_cost_confusion_heatmaps",
@@ -116,8 +127,11 @@ __all__ = [
     "run_dual_stack_compare",
     "run_fin_effect_from_training",
     "run_fin_effect_pipeline",
+    "run_fin_effect_with_severity_predictions",
     "search_best_threshold",
     "search_best_threshold_by_f1",
     "search_threshold_strategies",
+    "SegmentFinEffectCompare",
+    "SeverityVariantsCompare",
     "summary_itogo_breakdown",
 ]

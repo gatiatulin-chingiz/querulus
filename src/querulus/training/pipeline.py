@@ -15,6 +15,11 @@ import pandas as pd
 from querulus import PROJECT_ROOT
 from querulus.features.config import is_fe_categorical
 from querulus.training.config import TrainingConfig, resolve_features_config
+from querulus.training.severity_training import (
+    severity_predict,
+    severity_sample_weights,
+    severity_train_target,
+)
 
 logger = logging.getLogger("querulus.training")
 
@@ -84,6 +89,7 @@ class TrainingArtifacts:
     frequency_calibrator: object | None = None
     frequency_feature_selection_summary: dict[str, object] | None = None
     severity_feature_selection_summary: dict[str, object] | None = None
+    severity_target_transform: str = "raw"
 
 
 def _require_catboost():
@@ -789,14 +795,19 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         full_frame=True,
     )
     severity_train_pool = Pool(
-        severity_split.x_train,
-        severity_split.y_train,
+        severity_split.x_train[severity_features],
+        severity_train_target(
+            severity_split.y_train, config.severity_target_transform
+        ),
         cat_features=severity_cat_features,
         feature_names=severity_features,
+        weight=severity_sample_weights(
+            severity_split.y_train, config.severity_sample_weight
+        ),
     )
     severity_test_pool = Pool(
-        severity_split.x_test,
-        severity_split.y_test,
+        severity_split.x_test[severity_features],
+        severity_train_target(severity_split.y_test, config.severity_target_transform),
         cat_features=severity_cat_features,
         feature_names=severity_features,
     )
@@ -821,13 +832,20 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         severity_hyperparameters["feature_selection"] = "RecursiveByShapValues"
         severity_train_pool = Pool(
             severity_split.x_train[severity_features],
-            severity_split.y_train,
+            severity_train_target(
+                severity_split.y_train, config.severity_target_transform
+            ),
             cat_features=severity_cat_features,
             feature_names=severity_features,
+            weight=severity_sample_weights(
+                severity_split.y_train, config.severity_sample_weight
+            ),
         )
         severity_test_pool = Pool(
             severity_split.x_test[severity_features],
-            severity_split.y_test,
+            severity_train_target(
+                severity_split.y_test, config.severity_target_transform
+            ),
             cat_features=severity_cat_features,
             feature_names=severity_features,
         )
@@ -912,4 +930,5 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         frequency_calibrator=frequency_calibrator,
         frequency_feature_selection_summary=frequency_feature_selection_summary,
         severity_feature_selection_summary=severity_feature_selection_summary,
+        severity_target_transform=config.severity_target_transform,
     )
