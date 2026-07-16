@@ -1,13 +1,15 @@
 """Обучение severity: log-таргет, веса, predict с обратным преобразованием."""
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pandas as pd
 
 from querulus.training.config import TrainingConfig
-from querulus.training.pipeline import TrainingArtifacts, _require_catboost
+
+if TYPE_CHECKING:
+    from querulus.training.pipeline import TrainingArtifacts
 
 SeverityTargetTransform = Literal["raw", "log1p"]
 SeveritySampleWeight = Literal["none", "sqrt", "linear"]
@@ -73,6 +75,8 @@ def fit_severity_model(
     eval_index: pd.Index | None = None,
 ) -> object:
     """Обучить severity на сплите ``training`` (опционально подмножество индексов)."""
+    from querulus.training.pipeline import _require_catboost
+
     if training.severity_split is None:
         raise ValueError("severity_split отсутствует в TrainingArtifacts")
     _, CatBoostRegressor, Pool, *_ = _require_catboost()
