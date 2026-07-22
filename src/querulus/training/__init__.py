@@ -3,7 +3,11 @@
 from querulus.training.calibration import expected_calibration_error, fit_probability_calibrator
 from querulus.training.config import TrainingConfig
 from querulus.training.corr_filter import CorrFilterResult, correlation_filter_features
-from querulus.training.drift import feature_drift_report, monthly_target_drift
+from querulus.training.drift import (
+    feature_drift_report,
+    filter_features_by_drift,
+    monthly_target_drift,
+)
 from querulus.training.feature_selection_io import (
     load_feature_selection_latest,
     save_feature_selection,
@@ -57,6 +61,7 @@ __all__ = [
     "correlation_filter_features",
     "expected_calibration_error",
     "feature_drift_report",
+    "filter_features_by_drift",
     "fit_probability_calibrator",
     "format_features_table",
     "format_metrics_table",

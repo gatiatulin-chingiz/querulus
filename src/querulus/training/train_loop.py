@@ -12,6 +12,7 @@ from querulus import PROJECT_ROOT
 from querulus.training.calibration import expected_calibration_error, fit_probability_calibrator
 from querulus.training.config import TrainingConfig, resolve_features_config
 from querulus.training.corr_filter import correlation_filter_features, slice_mvp_types
+from querulus.training.drift import filter_features_by_drift
 from querulus.training.feature_selection_io import save_feature_selection
 from querulus.training.hpo import HpoResult, run_hpo
 from querulus.training.pipeline import TrainingArtifacts, frequency_predict_proba, train_models
@@ -29,6 +30,8 @@ class TrainLoopFlags:
 
     use_fe_features: bool = True
     run_corr_filter: bool = True
+    run_psi_filter: bool = True
+    psi_threshold: float = 0.5
     run_hpo: bool = False
     run_shap_select: bool = True
     run_hpo_retune: bool = False
@@ -54,6 +57,8 @@ class TrainLoopResult:
     ece_before: float | None = None
     ece_after: float | None = None
     artifacts_dir: Path | None = None
+    psi_dropped: list[str] = field(default_factory=list)
+    psi_report: pd.DataFrame | None = None
 
 
 def _drop_fe_columns(features: list[str] | tuple[str, ...]) -> list[str]:
@@ -81,6 +86,7 @@ def print_flags_table(flags: TrainLoopFlags) -> None:
     rows = [
         ("USE_FE_FEATURES", flags.use_fe_features, "derived/incident FE_* в пуле"),
         ("RUN_CORR_FILTER", flags.run_corr_filter, "Pearson-filter числовых, раздельно freq/sev"),
+        ("RUN_PSI_FILTER", flags.run_psi_filter, f"дроп фич с PSI/L1 > {flags.psi_threshold} (train vs Val)"),
         ("RUN_HPO", flags.run_hpo, "Optuna+MLflow TimeSeriesSplit"),
         ("RUN_SHAP_SELECT", flags.run_shap_select, "RecursiveByShapValues"),
         ("RUN_HPO_RETUNE", flags.run_hpo_retune, "короткий ре-тюнинг после SHAP"),
@@ -101,7 +107,7 @@ def run_train_loop_new(
 ) -> TrainLoopResult:
     """Пайплайн блока B только для стека new (таргеты из config).
 
-    Порядок: FE-флаг → corr → HPO → SHAP(select) → (retune) → fit → cal.
+    Порядок: FE-флаг → corr → PSI(train vs Val) → HPO → SHAP(select) → (retune) → fit → cal.
     Early-stop / SHAP eval — на Val; Test из config.test_period в HPO не идёт.
     """
     flags = flags or TrainLoopFlags()
@@ -214,6 +220,55 @@ def run_train_loop_new(
         )
     else:
         stage_skipped("corr_filter", "RUN_CORR_FILTER")
+
+    psi_dropped: list[str] = []
+    psi_report: pd.DataFrame | None = None
+    if flags.run_psi_filter and (freq_features or sev_features):
+        stage_start(
+            "psi_filter",
+            detail=(
+                f"threshold={flags.psi_threshold} "
+                f"ref=train_core vs Val ({val_period})"
+            ),
+        )
+        # Один union-пул: drift по времени, не по таргету.
+        union = list(dict.fromkeys([*freq_features, *sev_features]))
+        cat_names = set(freq_mvp.get("CATEGORIAL", ())) | set(freq_mvp.get("BINARY", ()))
+        cat_names |= set(sev_mvp.get("CATEGORIAL", ())) | set(sev_mvp.get("BINARY", ()))
+        kept_union, psi_report = filter_features_by_drift(
+            df,
+            union,
+            date_column=base.date_column,
+            reference_period=train_core,
+            compare_period=val_period,
+            threshold=flags.psi_threshold,
+            categorical_features=cat_names,
+        )
+        kept_set = set(kept_union)
+        psi_dropped = [
+            name
+            for name in union
+            if name not in kept_set
+        ]
+        freq_features = [f for f in freq_features if f in kept_set]
+        sev_features = [f for f in sev_features if f in kept_set]
+        freq_mvp = slice_mvp_types(freq_mvp, freq_features)
+        sev_mvp = slice_mvp_types(sev_mvp, sev_features)
+        print(f"[B] PSI-filter dropped ({len(psi_dropped)}):")
+        if psi_dropped:
+            drop_view = psi_report.loc[psi_report["dropped"], ["feature", "kind", "drift_score"]]
+            print(drop_view.to_string(index=False))
+        else:
+            print("[B]   (none)")
+        stage_done(
+            "psi_filter",
+            detail=(
+                f"drop={len(psi_dropped)} "
+                f"freq={len(freq_features)} sev={len(sev_features)}"
+            ),
+        )
+    else:
+        stage_skipped("psi_filter", "RUN_PSI_FILTER")
 
     freq_hpo: HpoResult | None = None
     sev_hpo: HpoResult | None = None
@@ -404,4 +459,6 @@ def run_train_loop_new(
         ece_before=ece_before,
         ece_after=ece_after,
         artifacts_dir=out_dir,
+        psi_dropped=psi_dropped,
+        psi_report=psi_report,
     )

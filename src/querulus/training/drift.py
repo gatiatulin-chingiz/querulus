@@ -135,3 +135,65 @@ def monthly_target_drift(
         .rename(columns={"_split": "split", "_month": "month"})
     )
     return grouped.sort_values(["split", "month"]).reset_index(drop=True)
+
+
+def filter_features_by_drift(
+    df: pd.DataFrame,
+    features: Iterable[str],
+    *,
+    date_column: str,
+    reference_period: tuple[str, str],
+    compare_period: tuple[str, str],
+    threshold: float = 0.5,
+    categorical_features: Iterable[str] | None = None,
+) -> tuple[list[str], pd.DataFrame]:
+    """Убрать признаки с drift_score > threshold (PSI / L1) между двумя периодами.
+
+    Типично: ``reference_period`` = train_core, ``compare_period`` = Val
+    (Test не использовать — иначе утечка в отбор).
+
+    Returns:
+        kept_features, report (все фичи; у dropped колонка ``dropped`` = True).
+    """
+    data = df.copy()
+    data[date_column] = pd.to_datetime(data[date_column], errors="coerce")
+    ref = data[data[date_column].between(*reference_period)]
+    cmp = data[data[date_column].between(*compare_period)]
+    cat_set = set(categorical_features or ())
+    feature_list = [f for f in features if f in data.columns]
+
+    rows: list[dict[str, object]] = []
+    for column in feature_list:
+        ref_col = ref[column]
+        cmp_col = cmp[column]
+        is_cat = column in cat_set or (
+            not pd.api.types.is_numeric_dtype(ref_col) and ref_col.dtype == object
+        )
+        if is_cat:
+            score = _categorical_share_l1(ref_col, cmp_col)
+            kind = "categorical"
+        else:
+            ref_num = pd.to_numeric(ref_col, errors="coerce")
+            cmp_num = pd.to_numeric(cmp_col, errors="coerce")
+            score = _psi(ref_num.to_numpy(dtype=float), cmp_num.to_numpy(dtype=float))
+            kind = "numeric"
+        drop = bool(score == score and score > threshold)  # False if NaN
+        rows.append(
+            {
+                "feature": column,
+                "kind": kind,
+                "drift_score": score,
+                "dropped": drop,
+                "threshold": threshold,
+            }
+        )
+
+    report = pd.DataFrame(rows)
+    if report.empty:
+        return [], report
+    report = report.sort_values("drift_score", ascending=False, na_position="last").reset_index(
+        drop=True
+    )
+    dropped = set(report.loc[report["dropped"], "feature"].tolist())
+    kept = [f for f in feature_list if f not in dropped]
+    return kept, report
