@@ -46,6 +46,9 @@ class TrainingConfig:
     date_column: str = "LOSS_DATE_TIME"
     train_period: tuple[str, str] = ("2022-01-01", "2024-05-31")
     test_period: tuple[str, str] = ("2024-06-01", "2025-06-01")
+    # Внутренние периоды (если None — режутся из train_period хвостом val/cal).
+    val_period: tuple[str, str] | None = None
+    cal_period: tuple[str, str] | None = None
     frequency_target: str = "TARGET_FREQ"
     severity_target: str = "TARGET_SEV"
     features_source: FeaturesSource = "selected"
@@ -85,6 +88,9 @@ class TrainingConfig:
     )
     severity_target_transform: Literal["raw", "log1p"] = "raw"
     severity_sample_weight: Literal["none", "sqrt", "linear"] = "none"
+    # Train-loop (блок B): FE в пуле обучения
+    use_fe_features: bool = True
+    corr_filter_threshold: float = 0.95
 
     @property
     def drop_columns(self) -> tuple[str, ...]:

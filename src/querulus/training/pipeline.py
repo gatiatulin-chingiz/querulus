@@ -389,17 +389,15 @@ def _select_severity_features(
 
 def _fit_frequency_calibrator(
     model: object,
-    x_train: pd.DataFrame,
-    y_train: pd.Series,
+    x_cal: pd.DataFrame,
+    y_cal: pd.Series,
     *,
     method: str,
 ) -> object:
-    """Пост-калибровка вероятностей поверх обученного CatBoost."""
-    from sklearn.calibration import CalibratedClassifierCV
+    """Пост-калибровка на отдельном Cal-set (не на train)."""
+    from querulus.training.calibration import fit_probability_calibrator
 
-    calibrator = CalibratedClassifierCV(model, method=method, cv="prefit")
-    calibrator.fit(x_train, y_train.astype(int))
-    return calibrator
+    return fit_probability_calibrator(model, x_cal, y_cal, method=method)
 
 
 def frequency_predict_proba(

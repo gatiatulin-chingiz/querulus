@@ -48,39 +48,53 @@ def run_features(
     use_sql: bool = False,
     config: FeatureConfig | None = None,
     save_checkpoint: bool = True,
+    include_fe_features: bool = True,
     include_person_features: bool = False,
 ) -> pd.DataFrame:
-    """Этап 0 (cleanup) + этап 1 (derived) + person-history и сохранение df_final_3."""
+    """Этап 0 (cleanup) + опционально derived/incident FE + person-history.
+
+    ``include_fe_features=False``: только cleanup, без ``FE_*`` derived/incident.
+    ``include_person_features`` имеет смысл только при ``include_fe_features=True``.
+    """
     feature_config = config or load_feature_config()
     rows_before = len(df)
     cols_before = df.shape[1]
 
     df = cleanup_merge_columns(df, feature_config)
-    df = add_derived_features(df, feature_config)
 
-    from querulus.features.incident_pretensions import add_incident_pretension_features
-    from querulus.features.person.loaders import load_pretensions_base
+    pret_base = None
+    if include_fe_features:
+        df = add_derived_features(df, feature_config)
 
-    pret_base = load_pretensions_base(paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint)
-    pret_incident = _filter_pretensions_for_incidents(df, pret_base)
-    df = add_incident_pretension_features(df, pret_incident, feature_config)
-    del pret_incident
+        from querulus.features.incident_pretensions import add_incident_pretension_features
+        from querulus.features.person.loaders import load_pretensions_base
 
-    if include_person_features:
-        from querulus.features.person.pipeline import run_person_features
-
-        df = run_person_features(
-            df,
-            paths,
-            conn=conn,
-            use_sql=use_sql,
-            save_checkpoint=save_checkpoint,
-            pretensions_base=pret_base,
+        pret_base = load_pretensions_base(
+            paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint
         )
+        pret_incident = _filter_pretensions_for_incidents(df, pret_base)
+        df = add_incident_pretension_features(df, pret_incident, feature_config)
+        del pret_incident
+
+        if include_person_features:
+            from querulus.features.person.pipeline import run_person_features
+
+            df = run_person_features(
+                df,
+                paths,
+                conn=conn,
+                use_sql=use_sql,
+                save_checkpoint=save_checkpoint,
+                pretensions_base=pret_base,
+            )
+        else:
+            logger.info("Person features пропущены (include_person_features=False).")
+        del pret_base
+        gc.collect()
     else:
-        logger.info("Person features пропущены (include_person_features=False).")
-    del pret_base
-    gc.collect()
+        logger.info("Derived/incident FE пропущены (include_fe_features=False).")
+        if include_person_features:
+            logger.info("Person FE пропущены: нужен include_fe_features=True.")
 
     fe_added = [col for col in feature_config.fe_columns if col in df.columns]
     logger.info(
