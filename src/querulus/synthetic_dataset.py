@@ -97,6 +97,9 @@ def build_synthetic_final_dataset(
     without_real = deflate_to_base_year(without_s, loss_dt)
     col_with_real = real_feature_name("VALUE_BEFORE_WITH")
     col_without_real = real_feature_name("VALUE_BEFORE_WITHOUT")
+    premium_sum = rng.uniform(3_000, 25_000, size=n_rows)
+    premium_count = rng.integers(1, 4, size=n_rows).astype(float)
+    premium_real = deflate_to_base_year(pd.Series(premium_sum), loss_dt)
 
     return pd.DataFrame(
         {
@@ -126,8 +129,11 @@ def build_synthetic_final_dataset(
             "APPLY_DELAY": rng.integers(0, 120, size=n_rows).astype(float),
             "VALUE_BEFORE_WITHOUT": value_before_without,
             "VALUE_BEFORE_WITH": value_before,
+            "PREMIUM_SUM_ALL": premium_sum,
+            "PREMIUM_COUNT_ALL": premium_count,
             col_without_real: without_real.to_numpy(),
             col_with_real: with_real.to_numpy(),
+            real_feature_name("PREMIUM_SUM_ALL"): premium_real.to_numpy(),
             "FE_VALUE_BEFORE_DIFF": (without_real - with_real).to_numpy(),
             "FE_VALUE_BEFORE_RATIO": np.where(
                 value_before_without > 0,

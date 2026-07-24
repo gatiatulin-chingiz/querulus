@@ -87,6 +87,21 @@ def run_features(
                 save_checkpoint=save_checkpoint,
                 pretensions_base=pret_base,
             )
+            # Person money-FE появляются только здесь → REAL после сборки.
+            from querulus.features.inflation import (
+                MONETARY_COLUMNS_FOR_REAL,
+                add_real_monetary_columns,
+            )
+
+            person_money = tuple(
+                c for c in MONETARY_COLUMNS_FOR_REAL if c.startswith("FE_PERSON_")
+            )
+            df = add_real_monetary_columns(
+                df,
+                df[feature_config.t0_column],
+                person_money,
+                base_year=feature_config.inflation_base_year,
+            )
         else:
             logger.info("Person features пропущены (include_person_features=False).")
         del pret_base

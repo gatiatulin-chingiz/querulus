@@ -31,10 +31,15 @@ RU_CPI_LEVEL_VS_BASE: dict[int, float] = {
     2026: 1.5704,
 }
 
-# Денежные колонки → FE_*_REAL (номинал остаётся в df для сегментов/финэффекта).
+# Денежные колонки → *_REAL_{year} (номинал остаётся в df; в обучение — TO_DROP).
+# Person-претензии: сумма уже агрегирована; дефлируем по T0 строки (приближение).
 MONETARY_COLUMNS_FOR_REAL: tuple[str, ...] = (
     "VALUE_BEFORE_WITH",
     "VALUE_BEFORE_WITHOUT",
+    "PREMIUM_SUM_ALL",
+    "FE_PERSON_PRET_PAYMENT_RECIPIENT_FE_PERSON_PRET_SURCHARGE_VALUE_SUM",
+    "FE_PERSON_PRET_APPLICANT_FE_PERSON_PRET_PRETENSION_VALUE_SUM",
+    "FE_PERSON_PRET_APPLICANT_FE_PERSON_PRET_SURCHARGE_VALUE_SUM",
 )
 
 
@@ -83,4 +88,30 @@ def deflate_to_base_year(
 
 def real_feature_name(column: str, base_year: int = INFLATION_BASE_YEAR) -> str:
     """Имя FE-колонки в рублях базисного года."""
-    return f"FE_{column}_REAL_{base_year}"
+    stem = column if column.startswith("FE_") else f"FE_{column}"
+    suffix = f"_REAL_{base_year}"
+    if stem.endswith(suffix):
+        return stem
+    return f"{stem}{suffix}"
+
+
+def add_real_monetary_columns(
+    df: pd.DataFrame,
+    event_dates: pd.Series,
+    columns: tuple[str, ...] | list[str] | None = None,
+    *,
+    base_year: int = INFLATION_BASE_YEAR,
+    levels: Mapping[int, float] | None = None,
+) -> pd.DataFrame:
+    """Добавить ``*_REAL_{base_year}`` для денежных колонок, если они есть в df."""
+    out = df
+    for col in columns or MONETARY_COLUMNS_FOR_REAL:
+        if col not in out.columns:
+            continue
+        out[real_feature_name(col, base_year)] = deflate_to_base_year(
+            out[col],
+            event_dates,
+            base_year=base_year,
+            levels=levels,
+        )
+    return out

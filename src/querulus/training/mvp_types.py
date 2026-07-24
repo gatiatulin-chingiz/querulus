@@ -95,9 +95,13 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': [],
              'LONGITUDE',
              'LATITUDE',
              'Выплаченный_износ_инцидент',
-             # VALUE_BEFORE_* номинал — инфляционный дрейф; в модели FE_*_REAL_2020
+             # VALUE_BEFORE_* / PREMIUM / person-pret суммы — номинал; в модели *_REAL_2020
              'VALUE_BEFORE_WITH',
              'VALUE_BEFORE_WITHOUT',
+             'PREMIUM_SUM_ALL',
+             'FE_PERSON_PRET_PAYMENT_RECIPIENT_FE_PERSON_PRET_SURCHARGE_VALUE_SUM',
+             'FE_PERSON_PRET_APPLICANT_FE_PERSON_PRET_PRETENSION_VALUE_SUM',
+             'FE_PERSON_PRET_APPLICANT_FE_PERSON_PRET_SURCHARGE_VALUE_SUM',
              # VALUE_AFTER_WITH — нет
              'CHECK',
              # CPM/With related signals (leakage)

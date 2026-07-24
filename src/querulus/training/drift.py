@@ -38,30 +38,6 @@ def _categorical_share_l1(train: pd.Series, test: pd.Series, top_n: int = 20) ->
     return float((t - s).abs().sum())
 
 
-def _categorical_set_diff(
-    train: pd.Series,
-    test: pd.Series,
-    *,
-    max_list: int = 15,
-) -> tuple[str, str]:
-    """Категории, появившиеся в test / пропавшие из train (строки через ``|``)."""
-    train_set = set(train.astype("string").fillna("<NA>").unique())
-    test_set = set(test.astype("string").fillna("<NA>").unique())
-    appeared = sorted(test_set - train_set)
-    disappeared = sorted(train_set - test_set)
-
-    def _fmt(values: list[str]) -> str:
-        if not values:
-            return ""
-        head = values[:max_list]
-        text = " | ".join(head)
-        if len(values) > max_list:
-            text += f" | …(+{len(values) - max_list})"
-        return text
-
-    return _fmt(appeared), _fmt(disappeared)
-
-
 def feature_drift_report(
     df: pd.DataFrame,
     features: Iterable[str],
@@ -113,9 +89,6 @@ def feature_drift_report(
             row["psi"] = float("nan")
             row["train_nunique"] = int(train_col.nunique(dropna=True))
             row["test_nunique"] = int(test_col.nunique(dropna=True))
-            appeared, disappeared = _categorical_set_diff(train_col, test_col)
-            row["cats_appeared"] = appeared
-            row["cats_disappeared"] = disappeared
         else:
             train_num = pd.to_numeric(train_col, errors="coerce")
             test_num = pd.to_numeric(test_col, errors="coerce")
@@ -128,8 +101,6 @@ def feature_drift_report(
                 if train_num.notna().any() and test_num.notna().any()
                 else float("nan")
             )
-            row["cats_appeared"] = ""
-            row["cats_disappeared"] = ""
         rows.append(row)
 
     report = pd.DataFrame(rows)
@@ -212,7 +183,6 @@ def filter_features_by_drift(
             kind = "categorical"
             metric = "L1"
             thr = l1_th
-            appeared, disappeared = _categorical_set_diff(ref_col, cmp_col)
             if score != score:
                 note = "L1 недоступен (пустые доли)"
         else:
@@ -222,7 +192,6 @@ def filter_features_by_drift(
             kind = "numeric"
             metric = "PSI"
             thr = psi_th
-            appeared, disappeared = "", ""
             if score != score:
                 nuniq = int(ref_num.nunique(dropna=True))
                 note = f"PSI недоступен (уник.≈{nuniq} / мало строк — бины не строятся)"
@@ -236,8 +205,6 @@ def filter_features_by_drift(
                 "threshold": thr,
                 "dropped": drop,
                 "note": note,
-                "cats_appeared": appeared,
-                "cats_disappeared": disappeared,
             }
         )
 
@@ -265,8 +232,6 @@ def format_psi_filter_report(report: pd.DataFrame) -> str:
             "threshold",
             "dropped",
             "note",
-            "cats_appeared",
-            "cats_disappeared",
         )
         if c in report.columns
     ]

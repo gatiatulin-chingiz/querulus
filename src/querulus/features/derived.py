@@ -346,9 +346,21 @@ def _add_policy_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
     franchise = pd.to_numeric(_series(df, "FRANCHISE_VALUE"), errors="coerce")
     df["FE_HAS_FRANCHISE"] = (franchise > 0).astype("Int64")
 
+    from querulus.features.inflation import (
+        INFLATION_BASE_YEAR,
+        deflate_to_base_year,
+        real_feature_name,
+    )
+
+    # Премия в руб. base_year; номинал PREMIUM_SUM_ALL → TO_DROP.
+    base_year = getattr(config, "inflation_base_year", INFLATION_BASE_YEAR)
     premium_sum = pd.to_numeric(_series(df, "PREMIUM_SUM_ALL"), errors="coerce")
     premium_count = pd.to_numeric(_series(df, "PREMIUM_COUNT_ALL"), errors="coerce")
-    df["FE_PREMIUM_PER_POLICY"] = _safe_div(premium_sum, premium_count)
+    premium_real = deflate_to_base_year(
+        premium_sum, _series(df, config.t0_column), base_year=base_year
+    )
+    df[real_feature_name("PREMIUM_SUM_ALL", base_year)] = premium_real
+    df["FE_PREMIUM_PER_POLICY"] = _safe_div(premium_real, premium_count)
 
     df["FE_INSURANCE_AMOUNT_BIN"] = _amount_bins(
         _series(df, "INSURANCE_AMOUNT"),
