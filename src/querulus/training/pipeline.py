@@ -314,22 +314,98 @@ def _select_features_by_shap(
     num_features_to_select: int,
     EFeaturesSelectionAlgorithm: type,
     EShapCalcType: type,
+    task_label: str = "features",
+    iterations_hint: int | None = None,
+    n_progress_steps: int = 20,
 ) -> tuple[list[str], dict[str, object]]:
-    """Отбор признаков CatBoost RecursiveByShapValues (freq/sev)."""
-    summary = model.select_features(
-        train_pool,
-        eval_set=test_pool,
-        features_for_select=f"0-{feature_count - 1}",
-        num_features_to_select=num_features_to_select,
-        steps=feature_count,
-        algorithm=EFeaturesSelectionAlgorithm.RecursiveByShapValues,
-        shap_calc_type=EShapCalcType.Regular,
-        train_final_model=False,
-        logging_level="Silent",
-        plot=False,
+    """Отбор признаков CatBoost RecursiveByShapValues с прогрессом по батчам.
+
+    Один вызов ``select_features`` с ``steps≈n_features`` молчит минутами.
+    Здесь режем elimination на ~``n_progress_steps`` батчей (``steps=1``) + tqdm/ETA.
+    """
+    import time
+
+    try:
+        from tqdm.auto import tqdm
+    except ImportError:  # pragma: no cover
+        tqdm = None
+
+    feature_names = list(train_pool.get_feature_names())
+    if len(feature_names) != feature_count:
+        feature_count = len(feature_names)
+
+    n_select = min(int(num_features_to_select), feature_count)
+    if n_select >= feature_count:
+        print(f"[FS] {task_label}: already ≤{n_select} features, skip")
+        return feature_names, {"selected_features_names": feature_names}
+
+    n_elim = feature_count - n_select
+    n_batches = max(1, min(int(n_progress_steps), n_elim))
+    batch_size = max(1, (n_elim + n_batches - 1) // n_batches)
+    iters = iterations_hint
+    if iters is None:
+        try:
+            iters = model.get_param("iterations")
+        except Exception:
+            iters = "?"
+
+    print(
+        f"[FS] {task_label}: {feature_count} → {n_select} "
+        f"(drop {n_elim} in ~{n_batches} steps, ≤{batch_size}/step, "
+        f"iters≈{iters}/step)"
     )
-    selected = list(summary["selected_features_names"])
-    return selected, summary
+    started = time.perf_counter()
+    remaining = feature_names
+    summary: dict[str, object] = {"selected_features_names": remaining}
+    dropped_so_far = 0
+    pbar = (
+        tqdm(total=n_elim, desc=f"[FS] {task_label}", unit="feat", leave=True)
+        if tqdm is not None
+        else None
+    )
+
+    while len(remaining) > n_select:
+        drop_now = min(batch_size, len(remaining) - n_select)
+        keep = len(remaining) - drop_now
+        step_t0 = time.perf_counter()
+        summary = model.select_features(
+            train_pool,
+            eval_set=test_pool,
+            features_for_select=remaining,
+            num_features_to_select=keep,
+            steps=1,
+            algorithm=EFeaturesSelectionAlgorithm.RecursiveByShapValues,
+            shap_calc_type=EShapCalcType.Regular,
+            train_final_model=False,
+            logging_level="Silent",
+            plot=False,
+        )
+        remaining = list(summary["selected_features_names"])
+        dropped_so_far += drop_now
+        step_sec = time.perf_counter() - step_t0
+        if pbar is not None:
+            pbar.update(drop_now)
+            pbar.set_postfix_str(
+                f"kept={len(remaining)} step={step_sec:.0f}s"
+            )
+        else:
+            elapsed = time.perf_counter() - started
+            rate = dropped_so_far / elapsed if elapsed > 0 else 0.0
+            eta = (n_elim - dropped_so_far) / rate if rate > 0 else float("nan")
+            print(
+                f"[FS] {task_label}: dropped {dropped_so_far}/{n_elim}, "
+                f"kept={len(remaining)}, step={step_sec:.0f}s, "
+                f"elapsed={elapsed / 60:.1f}m, ETA={eta / 60:.1f}m"
+            )
+
+    if pbar is not None:
+        pbar.close()
+    elapsed = time.perf_counter() - started
+    print(
+        f"[FS] {task_label}: DONE in {elapsed / 60:.1f} min, "
+        f"kept {len(remaining)} features"
+    )
+    return remaining, summary
 
 
 def _select_frequency_features(
@@ -357,6 +433,8 @@ def _select_frequency_features(
         num_features_to_select=config.frequency_num_features_to_select,
         EFeaturesSelectionAlgorithm=EFeaturesSelectionAlgorithm,
         EShapCalcType=EShapCalcType,
+        task_label="frequency",
+        iterations_hint=config.frequency_select_iterations,
     )
 
 
@@ -384,6 +462,8 @@ def _select_severity_features(
         num_features_to_select=config.severity_num_features_to_select,
         EFeaturesSelectionAlgorithm=EFeaturesSelectionAlgorithm,
         EShapCalcType=EShapCalcType,
+        task_label="severity",
+        iterations_hint=config.severity_select_iterations,
     )
 
 
