@@ -134,12 +134,6 @@ def build_synthetic_final_dataset(
                 value_before / value_before_without,
                 np.nan,
             ),
-            "FE_WEAROUT_RUB_FROM_VALUES": (without_real - with_real).to_numpy(),
-            "FE_VALUE_WITH_TO_WITHOUT_RATIO": np.where(
-                value_before_without > 0,
-                value_before / value_before_without,
-                np.nan,
-            ),
             "Выплата_по_основному_убытку": rng.uniform(5_000, 80_000, size=n_rows),
             "Сумма_выплат_по_претензиям": pret_amount * rng.uniform(0.3, 0.8, size=n_rows),
             "Сумма_взыскано_по_ФУ": np.where(

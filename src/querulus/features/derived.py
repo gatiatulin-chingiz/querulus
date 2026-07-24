@@ -436,8 +436,6 @@ def _add_repair_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
     df["FE_VALUE_BEFORE_RATIO"] = _safe_div(value_with_real, value_without_real).where(
         both_positive
     )
-    df["FE_WEAROUT_RUB_FROM_VALUES"] = df["FE_VALUE_BEFORE_DIFF"]
-    df["FE_VALUE_WITH_TO_WITHOUT_RATIO"] = df["FE_VALUE_BEFORE_RATIO"]
     return df
 
 
