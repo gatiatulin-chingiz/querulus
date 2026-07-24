@@ -387,7 +387,15 @@ def _add_process_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def _add_repair_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
     """Блок I: калькуляция от VALUE_BEFORE_WITH/WITHOUT (без AMOUNT_REPAIR/REPAIR_VALUE/SHARE_WEAROUT)."""
+    from querulus.features.inflation import (
+        INFLATION_BASE_YEAR,
+        deflate_to_base_year,
+        real_feature_name,
+    )
+
     th = config.thresholds
+    base_year = getattr(config, "inflation_base_year", INFLATION_BASE_YEAR)
+    t0 = config.t0_column
 
     df["FE_SHARE_WORK_TIER"] = _tier_from_bins(
         _series(df, "SHARE_WORK"),
@@ -397,29 +405,39 @@ def _add_repair_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
 
     value_without = pd.to_numeric(_series(df, "VALUE_BEFORE_WITHOUT"), errors="coerce")
     value_with = pd.to_numeric(_series(df, "VALUE_BEFORE_WITH"), errors="coerce")
+    # Реальные рубли базисного года — против инфляционного PSI на номинале.
+    value_without_real = deflate_to_base_year(
+        value_without, _series(df, t0), base_year=base_year
+    )
+    value_with_real = deflate_to_base_year(
+        value_with, _series(df, t0), base_year=base_year
+    )
+    df[real_feature_name("VALUE_BEFORE_WITHOUT", base_year)] = value_without_real
+    df[real_feature_name("VALUE_BEFORE_WITH", base_year)] = value_with_real
 
+    # Бакеты/флаги — по реальной шкале (пороги в рублях base_year).
     df["FE_VALUE_BEFORE_WITHOUT_BIN"] = _amount_bins(
-        value_without, th.amount_repair_bins
+        value_without_real, th.amount_repair_bins
     )
     df["FE_HIGH_VALUE_BEFORE_WITHOUT"] = (
-        value_without > th.amount_repair_high
+        value_without_real > th.amount_repair_high
     ).astype("Int64")
     df["FE_VALUE_BEFORE_WITH_BIN"] = _amount_bins(
-        value_with, th.amount_repair_bins
+        value_with_real, th.amount_repair_bins
     )
     df["FE_HIGH_VALUE_BEFORE_WITH"] = (
-        value_with > th.amount_repair_high
+        value_with_real > th.amount_repair_high
     ).astype("Int64")
 
-    # Износ в руб. = разница with/without (без SHARE_WEAROUT).
-    df["FE_WEAROUT_RUB_FROM_VALUES"] = (value_without - value_with).where(
-        (value_without > 0) & (value_with >= 0)
+    # Износ (руб. base_year) и отношение (безразмерное — инфляция не нужна).
+    both_ok = (value_without_real > 0) & (value_with_real >= 0)
+    both_positive = (value_without_real > 0) & (value_with_real > 0)
+    df["FE_VALUE_BEFORE_DIFF"] = (value_without_real - value_with_real).where(both_ok)
+    df["FE_VALUE_BEFORE_RATIO"] = _safe_div(value_with_real, value_without_real).where(
+        both_positive
     )
-
-    both_values_positive = (value_without > 0) & (value_with > 0)
-    df["FE_VALUE_WITH_TO_WITHOUT_RATIO"] = _safe_div(
-        value_with, value_without
-    ).where(both_values_positive)
+    df["FE_WEAROUT_RUB_FROM_VALUES"] = df["FE_VALUE_BEFORE_DIFF"]
+    df["FE_VALUE_WITH_TO_WITHOUT_RATIO"] = df["FE_VALUE_BEFORE_RATIO"]
     return df
 
 

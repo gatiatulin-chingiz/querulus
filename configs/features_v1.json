@@ -13,6 +13,7 @@
     "share_work_bins": [0.3, 0.6]
   },
   "vehicle_age_bins": [3, 7, 15],
+  "inflation_base_year": 2020,
   "dedup_columns": {
     "target": "VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR",
     "sources": [
@@ -74,6 +75,10 @@
     "FE_HIGH_VALUE_BEFORE_WITHOUT",
     "FE_VALUE_BEFORE_WITH_BIN",
     "FE_HIGH_VALUE_BEFORE_WITH",
+    "FE_VALUE_BEFORE_WITH_REAL_2020",
+    "FE_VALUE_BEFORE_WITHOUT_REAL_2020",
+    "FE_VALUE_BEFORE_DIFF",
+    "FE_VALUE_BEFORE_RATIO",
     "FE_WEAROUT_RUB_FROM_VALUES",
     "FE_VALUE_WITH_TO_WITHOUT_RATIO",
     "FE_VICTIM_LOSS_COUNT_BIN",

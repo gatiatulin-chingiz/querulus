@@ -263,7 +263,7 @@ def search_threshold_strategies(
     base_sum: np.ndarray,
     config: FinEffectConfig | None = None,
 ) -> dict[str, ThresholdStrategyResult]:
-    """Сравнить пороги: net_effect (primary), F1, average precision."""
+    """Сравнить пороги: ``best_net_effect`` и ``pr_auc`` (порог по F1 на PR)."""
     from sklearn.metrics import average_precision_score
 
     config = config or FinEffectConfig()
@@ -272,14 +272,15 @@ def search_threshold_strategies(
     best_net, net_metrics = search_best_threshold(
         y_proba_freq, y_true_freq, y_pred_sev, y_true_sev, base_sum, config
     )
-    best_f1, f1_metrics = search_best_threshold_by_f1(
+    # Порог ориентирован на PR-кривую (max F1); AP — threshold-free метрика качества.
+    best_pr, pr_metrics = search_best_threshold_by_f1(
         y_proba_freq, y_true_freq, y_pred_sev, y_true_sev, base_sum, config
     )
 
     strategies: dict[str, ThresholdStrategyResult] = {}
     for name, threshold, metrics_map in (
         ("best_net_effect", best_net, net_metrics),
-        ("best_f1", best_f1, f1_metrics),
+        ("pr_auc", best_pr, pr_metrics),
     ):
         metrics = metrics_map[round(float(threshold), 2)]
         strategies[name] = ThresholdStrategyResult(
@@ -289,13 +290,6 @@ def search_threshold_strategies(
             average_precision=ap,
             f1=_f1_score(metrics.precision, metrics.recall),
         )
-    strategies["average_precision"] = ThresholdStrategyResult(
-        strategy="average_precision",
-        threshold=float(best_f1),
-        net_effect=f1_metrics[round(float(best_f1), 2)].net_effect,
-        average_precision=ap,
-        f1=strategies["best_f1"].f1,
-    )
     return strategies
 
 
@@ -459,6 +453,7 @@ def run_fin_effect_from_training(
     training: object,
     *,
     split: SplitName = "test",
+    effect_index: pd.Index | None = None,
     frequency_target_column: str | None = None,
     threshold: float | None = None,
     config: FinEffectConfig | None = None,
@@ -467,24 +462,30 @@ def run_fin_effect_from_training(
 
     Как в Litigant: база — все строки frequency test (``X_test_freq``),
     severity предсказывается на тех же строках, а не на severity_split.
+
+    ``effect_index`` — явный набор строк (holdout Test блока B и т.п.).
+    Если задан, ``split`` игнорируется; ``y_true`` — из ``frequency_target_column``
+    или ``config.frequency_target_column`` / колонки в ``df``.
     """
     config = config or FinEffectConfig()
     frequency_split = getattr(training, "frequency_split", None)
-    if frequency_split is None:
+    if effect_index is None and frequency_split is None:
         raise ValueError("training.frequency_split должен быть заполнен")
 
     freq_features = training.frequency_features
     sev_features = training.severity_features
 
-    if split == "train":
-        effect_index = frequency_split.x_train.index
-        y_true_freq = frequency_split.y_train
-    elif split == "test":
-        effect_index = frequency_split.x_test.index
-        y_true_freq = frequency_split.y_test
-    else:
-        effect_index = frequency_split.x_train.index.union(frequency_split.x_test.index)
-        y_true_freq = pd.concat([frequency_split.y_train, frequency_split.y_test])
+    y_true_freq: pd.Series | None = None
+    if effect_index is None:
+        if split == "train":
+            effect_index = frequency_split.x_train.index
+            y_true_freq = frequency_split.y_train
+        elif split == "test":
+            effect_index = frequency_split.x_test.index
+            y_true_freq = frequency_split.y_test
+        else:
+            effect_index = frequency_split.x_train.index.union(frequency_split.x_test.index)
+            y_true_freq = pd.concat([frequency_split.y_train, frequency_split.y_test])
 
     effect_frame = df.loc[effect_index]
     predict_frame = _feature_rows_for_predict(training, effect_index, effect_frame)
@@ -505,8 +506,21 @@ def run_fin_effect_from_training(
 
     if frequency_target_column:
         y_true = effect_frame[frequency_target_column]
-    else:
+    elif y_true_freq is not None:
         y_true = y_true_freq
+    else:
+        freq_col = getattr(config, "frequency_target_column", None)
+        if not freq_col or freq_col not in effect_frame.columns:
+            for candidate in ("TARGET_FREQ", "TARGET_2", "TARGET_FREQ_CLAIMS"):
+                if candidate in effect_frame.columns:
+                    freq_col = candidate
+                    break
+        if not freq_col or freq_col not in effect_frame.columns:
+            raise ValueError(
+                "Не удалось определить frequency target для effect_index; "
+                "передайте frequency_target_column="
+            )
+        y_true = effect_frame[freq_col]
 
     return run_fin_effect_pipeline(
         effect_frame,
@@ -532,7 +546,8 @@ def print_best_threshold_report(result: FinEffectResult) -> None:
         for strategy in result.threshold_strategies.values():
             print(
                 f"  {strategy.strategy:20s} threshold={strategy.threshold:.2f} "
-                f"net_effect={strategy.net_effect:,.0f} F1={strategy.f1:.3f} AP={strategy.average_precision:.3f}"
+                f"net_effect={strategy.net_effect:,.0f} F1={strategy.f1:.3f} "
+                f"PR-AUC={strategy.average_precision:.3f}"
             )
 
 

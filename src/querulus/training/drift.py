@@ -38,6 +38,30 @@ def _categorical_share_l1(train: pd.Series, test: pd.Series, top_n: int = 20) ->
     return float((t - s).abs().sum())
 
 
+def _categorical_set_diff(
+    train: pd.Series,
+    test: pd.Series,
+    *,
+    max_list: int = 15,
+) -> tuple[str, str]:
+    """Категории, появившиеся в test / пропавшие из train (строки через ``|``)."""
+    train_set = set(train.astype("string").fillna("<NA>").unique())
+    test_set = set(test.astype("string").fillna("<NA>").unique())
+    appeared = sorted(test_set - train_set)
+    disappeared = sorted(train_set - test_set)
+
+    def _fmt(values: list[str]) -> str:
+        if not values:
+            return ""
+        head = values[:max_list]
+        text = " | ".join(head)
+        if len(values) > max_list:
+            text += f" | …(+{len(values) - max_list})"
+        return text
+
+    return _fmt(appeared), _fmt(disappeared)
+
+
 def feature_drift_report(
     df: pd.DataFrame,
     features: Iterable[str],
@@ -85,13 +109,18 @@ def feature_drift_report(
             "null_share_delta": float(test_col.isna().mean() - train_col.isna().mean()),
         }
         if is_cat:
-            row["drift_score"] = _categorical_share_l1(train_col, test_col)
+            row["l1"] = _categorical_share_l1(train_col, test_col)
+            row["psi"] = float("nan")
             row["train_nunique"] = int(train_col.nunique(dropna=True))
             row["test_nunique"] = int(test_col.nunique(dropna=True))
+            appeared, disappeared = _categorical_set_diff(train_col, test_col)
+            row["cats_appeared"] = appeared
+            row["cats_disappeared"] = disappeared
         else:
             train_num = pd.to_numeric(train_col, errors="coerce")
             test_num = pd.to_numeric(test_col, errors="coerce")
-            row["drift_score"] = _psi(train_num.to_numpy(dtype=float), test_num.to_numpy(dtype=float))
+            row["psi"] = _psi(train_num.to_numpy(dtype=float), test_num.to_numpy(dtype=float))
+            row["l1"] = float("nan")
             row["train_mean"] = float(train_num.mean()) if train_num.notna().any() else float("nan")
             row["test_mean"] = float(test_num.mean()) if test_num.notna().any() else float("nan")
             row["mean_delta"] = (
@@ -99,13 +128,18 @@ def feature_drift_report(
                 if train_num.notna().any() and test_num.notna().any()
                 else float("nan")
             )
+            row["cats_appeared"] = ""
+            row["cats_disappeared"] = ""
         rows.append(row)
 
     report = pd.DataFrame(rows)
     if report.empty:
         return report
-    return report.sort_values("drift_score", ascending=False, na_position="last").reset_index(
-        drop=True
+    report["_sort"] = report["psi"].fillna(report["l1"])
+    return (
+        report.sort_values("_sort", ascending=False, na_position="last")
+        .drop(columns=["_sort"])
+        .reset_index(drop=True)
     )
 
 
@@ -145,16 +179,21 @@ def filter_features_by_drift(
     reference_period: tuple[str, str],
     compare_period: tuple[str, str],
     threshold: float = 0.5,
+    psi_threshold: float | None = None,
+    l1_threshold: float | None = None,
     categorical_features: Iterable[str] | None = None,
 ) -> tuple[list[str], pd.DataFrame]:
-    """Убрать признаки с drift_score > threshold (PSI / L1) между двумя периодами.
+    """Убрать признаки с сильным дрейфом: PSI (числа) / L1 (каты).
 
-    Типично: ``reference_period`` = train_core, ``compare_period`` = Val
-    (Test не использовать — иначе утечка в отбор).
+    ``threshold`` — общий fallback, если ``psi_threshold`` / ``l1_threshold`` не заданы.
+    NaN score → не дропаем; в ``note`` причина (мало уникальных значений и т.п.).
 
     Returns:
-        kept_features, report (все фичи; у dropped колонка ``dropped`` = True).
+        kept_features, report с колонками metric / score / dropped / note.
     """
+    psi_th = float(threshold if psi_threshold is None else psi_threshold)
+    l1_th = float(threshold if l1_threshold is None else l1_threshold)
+
     data = df.copy()
     data[date_column] = pd.to_datetime(data[date_column], errors="coerce")
     ref = data[data[date_column].between(*reference_period)]
@@ -166,34 +205,74 @@ def filter_features_by_drift(
     for column in feature_list:
         ref_col = ref[column]
         cmp_col = cmp[column]
-        is_cat = column in cat_set or (
-            not pd.api.types.is_numeric_dtype(ref_col) and ref_col.dtype == object
-        )
+        is_cat = column in cat_set or not pd.api.types.is_numeric_dtype(ref_col)
+        note = ""
         if is_cat:
             score = _categorical_share_l1(ref_col, cmp_col)
             kind = "categorical"
+            metric = "L1"
+            thr = l1_th
+            appeared, disappeared = _categorical_set_diff(ref_col, cmp_col)
+            if score != score:
+                note = "L1 недоступен (пустые доли)"
         else:
             ref_num = pd.to_numeric(ref_col, errors="coerce")
             cmp_num = pd.to_numeric(cmp_col, errors="coerce")
             score = _psi(ref_num.to_numpy(dtype=float), cmp_num.to_numpy(dtype=float))
             kind = "numeric"
-        drop = bool(score == score and score > threshold)  # False if NaN
+            metric = "PSI"
+            thr = psi_th
+            appeared, disappeared = "", ""
+            if score != score:
+                nuniq = int(ref_num.nunique(dropna=True))
+                note = f"PSI недоступен (уник.≈{nuniq} / мало строк — бины не строятся)"
+        drop = bool(score == score and score > thr)
         rows.append(
             {
                 "feature": column,
                 "kind": kind,
-                "drift_score": score,
+                "metric": metric,
+                "score": score,
+                "threshold": thr,
                 "dropped": drop,
-                "threshold": threshold,
+                "note": note,
+                "cats_appeared": appeared,
+                "cats_disappeared": disappeared,
             }
         )
 
     report = pd.DataFrame(rows)
     if report.empty:
         return [], report
-    report = report.sort_values("drift_score", ascending=False, na_position="last").reset_index(
-        drop=True
-    )
+    report = report.sort_values(
+        "score", ascending=False, na_position="last"
+    ).reset_index(drop=True)
     dropped = set(report.loc[report["dropped"], "feature"].tolist())
     kept = [f for f in feature_list if f not in dropped]
     return kept, report
+
+
+def format_psi_filter_report(report: pd.DataFrame) -> str:
+    """Читаемая таблица PSI/L1 без лишних NaN-колонок."""
+    if report is None or report.empty:
+        return "(empty)"
+    cols = [
+        c
+        for c in (
+            "feature",
+            "metric",
+            "score",
+            "threshold",
+            "dropped",
+            "note",
+            "cats_appeared",
+            "cats_disappeared",
+        )
+        if c in report.columns
+    ]
+    view = report[cols].copy()
+    if "score" in view.columns:
+        view["score"] = view["score"].map(
+            lambda x: f"{x:.3f}" if isinstance(x, (int, float)) and x == x else "—"
+        )
+    return view.to_string(index=False)

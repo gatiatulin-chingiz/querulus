@@ -118,12 +118,14 @@
 | Фича | Описание | Как собирается |
 |------|----------|----------------|
 | `FE_SHARE_WORK_TIER` | Доля работ | low/mid/high из `SHARE_WORK` |
-| `FE_VALUE_BEFORE_WITHOUT_BIN` | Бакет калькуляции без износа | `<100k / 100-300k / >300k` |
-| `FE_HIGH_VALUE_BEFORE_WITHOUT` | Дорогая калькуляция без износа | `VALUE_BEFORE_WITHOUT > 300000` |
-| `FE_VALUE_BEFORE_WITH_BIN` | Бакет калькуляции с износом | те же бакеты от `VALUE_BEFORE_WITH` |
-| `FE_HIGH_VALUE_BEFORE_WITH` | Дорогая калькуляция с износом | `VALUE_BEFORE_WITH > 300000` |
-| `FE_WEAROUT_RUB_FROM_VALUES` | Износ в руб. | `VALUE_BEFORE_WITHOUT − VALUE_BEFORE_WITH` |
-| `FE_VALUE_WITH_TO_WITHOUT_RATIO` | Доля «с износом» / «без» | `VALUE_BEFORE_WITH / VALUE_BEFORE_WITHOUT` |
+| `FE_VALUE_BEFORE_WITHOUT_BIN` | Бакет без износа (руб. 2020) | пороги 100k/300k на `*_REAL_2020` |
+| `FE_HIGH_VALUE_BEFORE_WITHOUT` | Дорогая калькуляция без износа | `*_REAL_2020 > 300000` |
+| `FE_VALUE_BEFORE_WITH_BIN` | Бакет с износом (руб. 2020) | те же пороги на `*_REAL_2020` |
+| `FE_HIGH_VALUE_BEFORE_WITH` | Дорогая калькуляция с износом | `*_REAL_2020 > 300000` |
+| `FE_VALUE_BEFORE_WITH_REAL_2020` | VALUE_BEFORE_WITH в руб. 2020 | `nominal / CPI` (Росстат Dec/Dec → дек.2020=1) |
+| `FE_VALUE_BEFORE_WITHOUT_REAL_2020` | VALUE_BEFORE_WITHOUT в руб. 2020 | то же |
+| `FE_VALUE_BEFORE_DIFF` / `FE_WEAROUT_RUB_FROM_VALUES` | Износ в руб. 2020 | `WITHOUT_REAL − WITH_REAL` |
+| `FE_VALUE_BEFORE_RATIO` / `FE_VALUE_WITH_TO_WITHOUT_RATIO` | Отношение with/without | безразмерное (CPI сокращается) |
 
 > В обучение не идут: `AMOUNT_REPAIR`, `REPAIR_VALUE`, `SHARE_WEAROUT`, `LATITUDE`/`LONGITUDE` и старые FE от них (`TO_DROP` в `mvp_types.py`).
 

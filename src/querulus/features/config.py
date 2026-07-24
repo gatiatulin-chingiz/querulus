@@ -33,6 +33,7 @@ class FeatureConfig:
     t0_column: str = "LOSS_DATE_TIME"
     thresholds: FeatureThresholds = field(default_factory=FeatureThresholds)
     vehicle_age_bins: tuple[float, ...] = (3.0, 7.0, 15.0)
+    inflation_base_year: int = 2020
     dedup_target: str = "VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR"
     dedup_sources: tuple[str, ...] = (
         "VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR_x",
@@ -89,6 +90,7 @@ def load_feature_config(path: Path | None = None) -> FeatureConfig:
         t0_column=str(data.get("t0_column", "LOSS_DATE_TIME")),
         thresholds=thresholds,
         vehicle_age_bins=tuple(data.get("vehicle_age_bins", [3, 7, 15])),
+        inflation_base_year=int(data.get("inflation_base_year", 2020)),
         dedup_target=str(dedup.get("target", "VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR")),
         dedup_sources=tuple(dedup.get("sources", FeatureConfig.dedup_sources)),
         fe_columns=tuple(data.get("fe_columns", [])),

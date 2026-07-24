@@ -87,11 +87,21 @@ def build_synthetic_final_dataset(
     value_before_without = value_before * rng.uniform(0.85, 1.0, size=n_rows)
 
     event_year = pd.to_datetime(loss_dates).year.astype(int)
+    loss_dt = pd.to_datetime(loss_dates)
+
+    from querulus.features.inflation import deflate_to_base_year, real_feature_name
+
+    with_s = pd.Series(value_before)
+    without_s = pd.Series(value_before_without)
+    with_real = deflate_to_base_year(with_s, loss_dt)
+    without_real = deflate_to_base_year(without_s, loss_dt)
+    col_with_real = real_feature_name("VALUE_BEFORE_WITH")
+    col_without_real = real_feature_name("VALUE_BEFORE_WITHOUT")
 
     return pd.DataFrame(
         {
             "INCIDENT_NUMBER": [f"SYN-{i:06d}" for i in range(n_rows)],
-            "LOSS_DATE_TIME": pd.to_datetime(loss_dates),
+            "LOSS_DATE_TIME": loss_dt,
             "TARGET_2": target_2,
             "TARGET_3_SEV": target_3_sev,
             "TARGET_FREQ": target_freq,
@@ -116,6 +126,20 @@ def build_synthetic_final_dataset(
             "APPLY_DELAY": rng.integers(0, 120, size=n_rows).astype(float),
             "VALUE_BEFORE_WITHOUT": value_before_without,
             "VALUE_BEFORE_WITH": value_before,
+            col_without_real: without_real.to_numpy(),
+            col_with_real: with_real.to_numpy(),
+            "FE_VALUE_BEFORE_DIFF": (without_real - with_real).to_numpy(),
+            "FE_VALUE_BEFORE_RATIO": np.where(
+                value_before_without > 0,
+                value_before / value_before_without,
+                np.nan,
+            ),
+            "FE_WEAROUT_RUB_FROM_VALUES": (without_real - with_real).to_numpy(),
+            "FE_VALUE_WITH_TO_WITHOUT_RATIO": np.where(
+                value_before_without > 0,
+                value_before / value_before_without,
+                np.nan,
+            ),
             "Выплата_по_основному_убытку": rng.uniform(5_000, 80_000, size=n_rows),
             "Сумма_выплат_по_претензиям": pret_amount * rng.uniform(0.3, 0.8, size=n_rows),
             "Сумма_взыскано_по_ФУ": np.where(

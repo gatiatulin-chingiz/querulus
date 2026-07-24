@@ -95,7 +95,10 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': [],
              'LONGITUDE',
              'LATITUDE',
              'Выплаченный_износ_инцидент',
-             # VALUE_BEFORE_WITH/WITHOUT и их FE_* — в пуле; VALUE_AFTER_WITH — нет
+             # VALUE_BEFORE_* номинал — инфляционный дрейф; в модели FE_*_REAL_2020
+             'VALUE_BEFORE_WITH',
+             'VALUE_BEFORE_WITHOUT',
+             # VALUE_AFTER_WITH — нет
              'CHECK',
              # CPM/With related signals (leakage)
              'CPM_RATIO_RUB',

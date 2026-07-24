@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import datetime
 import math
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -73,6 +72,7 @@ def _cat_feature_names(
     features: list[str],
     mvp_types: dict[str, tuple[str, ...]] | None,
 ) -> list[str]:
+    """CatBoost cat_features = features ∩ (CATEGORIAL ∪ BINARY) из resolved MVP."""
     if not mvp_types:
         return []
     cats = set(mvp_types.get("CATEGORIAL", ())) | set(mvp_types.get("BINARY", ()))
@@ -121,9 +121,14 @@ def run_hpo(
 
     ``mvp_types`` — types_dict для cat_features (CATEGORIAL/BINARY).
     """
+    import logging
+
     import optuna
     from catboost import CatBoostClassifier, CatBoostRegressor, Pool
     from sklearn.model_selection import TimeSeriesSplit
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    logging.getLogger("optuna").setLevel(logging.WARNING)
 
     feature_list = [f for f in features if f in df.columns]
     if not feature_list:
@@ -155,44 +160,26 @@ def run_hpo(
         params = _suggest_catboost_params(trial, task_type=task_type, random_seed=random_seed)
         early = int(params.pop("early_stopping_rounds"))
         fold_scores: list[float] = []
-        context = mlflow.start_run(run_name=f"trial_{trial.number}", nested=True) if mlflow else None
-        try:
-            if context is not None:
-                context.__enter__()
-            for fold, (tr_idx, va_idx) in enumerate(splitter.split(x_all)):
-                x_tr, y_tr = x_all.iloc[tr_idx], y_all.iloc[tr_idx]
-                x_va, y_va = x_all.iloc[va_idx], y_all.iloc[va_idx]
-                pool = Pool(x_tr, y_tr, cat_features=cat_features, feature_names=feature_list)
-                eval_pool = Pool(
-                    x_va, y_va, cat_features=cat_features, feature_names=feature_list
+        # Без nested MLflow-run на каждый trial — меньше шума в логах.
+        for fold, (tr_idx, va_idx) in enumerate(splitter.split(x_all)):
+            x_tr, y_tr = x_all.iloc[tr_idx], y_all.iloc[tr_idx]
+            x_va, y_va = x_all.iloc[va_idx], y_all.iloc[va_idx]
+            pool = Pool(x_tr, y_tr, cat_features=cat_features, feature_names=feature_list)
+            eval_pool = Pool(
+                x_va, y_va, cat_features=cat_features, feature_names=feature_list
+            )
+            model = model_cls(**params)
+            model.fit(pool, eval_set=eval_pool, early_stopping_rounds=early, verbose=False)
+            if task_type == "classification":
+                pred = model.predict_proba(x_va)[:, 1]
+            else:
+                pred = np.asarray(model.predict(x_va), dtype=float)
+            fold_scores.append(
+                _fold_metric(
+                    y_va, pred, task_type=task_type, optimize_metric=optimize_metric
                 )
-                model = model_cls(**params)
-                model.fit(pool, eval_set=eval_pool, early_stopping_rounds=early, verbose=False)
-                if task_type == "classification":
-                    pred = model.predict_proba(x_va)[:, 1]
-                else:
-                    pred = np.asarray(model.predict(x_va), dtype=float)
-                fold_scores.append(
-                    _fold_metric(
-                        y_va, pred, task_type=task_type, optimize_metric=optimize_metric
-                    )
-                )
-            score = float(np.mean(fold_scores))
-            if mlflow is not None:
-                mlflow.log_params({k: v for k, v in params.items() if v is not None})
-                mlflow.log_param("early_stopping_rounds", early)
-                mlflow.log_metric(f"{optimize_metric}_cv_mean", score)
-                mlflow.set_tags(
-                    {
-                        "datetime": str(datetime.datetime.now()),
-                        "task_type": task_type,
-                        "target": target_column,
-                    }
-                )
-            return score
-        finally:
-            if context is not None:
-                context.__exit__(None, None, None)
+            )
+        return float(np.mean(fold_scores))
 
     study = optuna.create_study(direction=direction)
     parent = mlflow.start_run(run_name=run_name) if mlflow else None
@@ -202,7 +189,7 @@ def run_hpo(
             mlflow.log_param("n_features", len(feature_list))
             mlflow.log_param("cv", cv)
             mlflow.log_param("optimize_metric", optimize_metric)
-        study.optimize(objective, n_trials=n_trials)
+        study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
         if mlflow is not None:
             mlflow.log_params(study.best_params)
             if study.best_value is not None and not (

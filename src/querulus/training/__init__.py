@@ -32,6 +32,11 @@ from querulus.training.severity_diagnostics import (
     compare_severity_log1p,
     severity_error_by_quantile,
 )
+from querulus.training.severity_variant import (
+    SEVERITY_VARIANT_NAMES,
+    SeverityVariantSpec,
+    resolve_severity_variant,
+)
 from querulus.training.severity_zoo import SeverityZooCompare, run_severity_zoo_compare
 from querulus.training.splits import DateSplitParts, split_by_date_periods
 from querulus.training.train_loop import TrainLoopFlags, TrainLoopResult, run_train_loop_new
@@ -50,7 +55,10 @@ __all__ = [
     "HpoResult",
     "TARGET_STACKS",
     "SeverityLog1pCompare",
+    "SEVERITY_VARIANT_NAMES",
+    "SeverityVariantSpec",
     "SeverityZooCompare",
+    "resolve_severity_variant",
     "TrainLoopFlags",
     "TrainLoopResult",
     "TrainingArtifacts",

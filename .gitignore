@@ -43,9 +43,16 @@ data/processed/*
 # Обучение / инференс
 catboost_info/
 **/catboost_info/**
+mlruns/
+**/mlruns/**
 *.tfevents
 results/
 **/prod_models/
+
+# Локальные дампы / черновики
+errors.txt
+_cells_dump/
+chat-*.txt
 
 # Архивы и временные файлы
 *.zip
