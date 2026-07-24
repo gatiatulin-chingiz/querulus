@@ -6,9 +6,17 @@ import gc
 
 import pandas as pd
 
+from querulus.dataset.constants import RENAME_DICT
 from querulus.features.person.config import INCIDENT_COLUMN, PERSON_PREFIX, ROLES, T0_COLUMN
 from querulus.features.person.loaders import normalize_person_id_series, normalize_person_id_series as _norm_pid
 from querulus.features.person.utils import collect_person_ids
+
+
+def _normalize_claims_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Как в build_targets: raw SQL / parquet → канонические UPPER + RENAME_DICT."""
+    out = df.rename(columns=RENAME_DICT)
+    out.columns = out.columns.str.upper()
+    return out.rename(columns=RENAME_DICT)
 
 
 def _prep_claims_persons(df_persons: pd.DataFrame) -> pd.DataFrame:
@@ -18,13 +26,22 @@ def _prep_claims_persons(df_persons: pd.DataFrame) -> pd.DataFrame:
         df["INCOMING_CLAIM_NUMBER"] = df["НомерИск"]
     if "Лицо" in df.columns and "PERSON_ID" not in df.columns:
         df["PERSON_ID"] = df["Лицо"]
+    if "INCOMING_CLAIM_NUMBER" not in df.columns:
+        raise KeyError(
+            "df_claims_persons: нет INCOMING_CLAIM_NUMBER / НомерИск; "
+            f"cols={list(df.columns)[:20]}"
+        )
+    if "PERSON_ID" not in df.columns:
+        raise KeyError(
+            f"df_claims_persons: нет PERSON_ID / Лицо; cols={list(df.columns)[:20]}"
+        )
     df["PERSON_ID"] = _norm_pid(df["PERSON_ID"])
     return df
 
 
 def _prep_claims_incoming(df_claims: pd.DataFrame) -> pd.DataFrame:
-    df = df_claims.copy()
-    # Ensure canonical columns.
+    # target_3_claims.parquet пишется сырым SQL (IncomingClaimNumber), не после RENAME.
+    df = _normalize_claims_columns(df_claims)
     if "INCIDENTNUMBER" in df.columns and INCIDENT_COLUMN not in df.columns:
         df[INCIDENT_COLUMN] = df["INCIDENTNUMBER"]
     if "INCOMINGCLAIMNUMBER" in df.columns and "INCOMING_CLAIM_NUMBER" not in df.columns:
@@ -32,8 +49,21 @@ def _prep_claims_incoming(df_claims: pd.DataFrame) -> pd.DataFrame:
     if "INCOMINGCLAIMGETDATE" in df.columns and "INCOMING_CLAIM_GET_DATE" not in df.columns:
         df["INCOMING_CLAIM_GET_DATE"] = df["INCOMINGCLAIMGETDATE"]
 
-    df[INCIDENT_COLUMN] = pd.to_numeric(df.get(INCIDENT_COLUMN), errors="coerce")
-    df["INCOMING_CLAIM_GET_DATE"] = pd.to_datetime(df.get("INCOMING_CLAIM_GET_DATE"), errors="coerce")
+    missing = [
+        c
+        for c in (INCIDENT_COLUMN, "INCOMING_CLAIM_NUMBER", "INCOMING_CLAIM_GET_DATE")
+        if c not in df.columns
+    ]
+    if missing:
+        raise KeyError(
+            f"claims incoming: нет {missing} после normalize; "
+            f"cols={list(df.columns)[:30]}"
+        )
+
+    df[INCIDENT_COLUMN] = pd.to_numeric(df[INCIDENT_COLUMN], errors="coerce")
+    df["INCOMING_CLAIM_GET_DATE"] = pd.to_datetime(
+        df["INCOMING_CLAIM_GET_DATE"], errors="coerce"
+    )
     return df
 
 
