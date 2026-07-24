@@ -16,6 +16,7 @@ from querulus.training.drift_thresholds import DEFAULT_L1_THRESHOLD, DEFAULT_PSI
 from querulus.training.drift import filter_features_by_drift, format_psi_filter_report
 from querulus.training.feature_selection_io import save_feature_selection
 from querulus.training.hpo import HpoResult, run_hpo
+from querulus.training.noise_cut import NoiseCutResult, filter_features_by_noise
 from querulus.training.pipeline import (
     TrainingArtifacts,
     frequency_predict_proba,
@@ -38,7 +39,8 @@ class TrainLoopFlags:
     """Флаги этапов блока B (выключенный этап = skip).
 
     Только отбор фич: ``run_shap_select=True``, ``run_fit=False``
-    (HPO/cal тогда тоже пропускаются).
+    (HPO/cal тогда тоже пропускаются). После SHAP — опциональный
+    ``run_noise_cut`` (отсев слабее ``FE_NOISE_UNIFORM``).
     """
 
     use_fe_features: bool = True
@@ -48,6 +50,7 @@ class TrainLoopFlags:
     l1_threshold: float = DEFAULT_L1_THRESHOLD
     run_shap_select: bool = True
     shap_n_features: int = 30
+    run_noise_cut: bool = True
     run_fit: bool = True
     run_hpo: bool = False
     run_calibration: bool = True
@@ -77,6 +80,8 @@ class TrainLoopResult:
     artifacts_dir: Path | None = None
     psi_dropped: list[str] = field(default_factory=list)
     psi_report: pd.DataFrame | None = None
+    frequency_noise_cut: NoiseCutResult | None = None
+    severity_noise_cut: NoiseCutResult | None = None
 
 
 def _drop_fe_columns(features: list[str] | tuple[str, ...]) -> list[str]:
@@ -114,6 +119,11 @@ def print_flags_table(flags: TrainLoopFlags) -> None:
             f"PSI>{flags.psi_threshold} / L1>{flags.l1_threshold} (train vs Val)",
         ),
         ("RUN_FEATURE_SELECT", flags.run_shap_select, f"SHAP RecursiveByShapValues → {flags.shap_n_features}"),
+        (
+            "RUN_NOISE_CUT",
+            flags.run_noise_cut and flags.run_shap_select,
+            "после FS: отсев фич слабее FE_NOISE_UNIFORM",
+        ),
         ("RUN_FIT", flags.run_fit, "финальный fit (+ HPO/cal если включены)"),
         ("RUN_HPO", flags.run_hpo and flags.run_fit, "Optuna+MLflow (только при RUN_FIT)"),
         ("RUN_CALIBRATION", flags.run_calibration and flags.run_fit, "калибровка freq на Cal"),
@@ -325,6 +335,8 @@ def run_train_loop_new(
 
     # SHAP select → фиксируем пул до HPO/fit
     shap_training: TrainingArtifacts | None = None
+    freq_noise: NoiseCutResult | None = None
+    sev_noise: NoiseCutResult | None = None
     if flags.run_shap_select and freq_features and sev_features:
         stage_start(
             "feature_select",
@@ -349,26 +361,123 @@ def run_train_loop_new(
         sev_features = list(shap_training.severity_features)
         freq_mvp = slice_mvp_types(resolved_mvp, freq_features)
         sev_mvp = slice_mvp_types(resolved_mvp, sev_features)
+        stage_done(
+            "feature_select",
+            detail=f"freq={len(freq_features)} sev={len(sev_features)}",
+        )
+
+        # После FS: шум + отсев всего не сильнее шума (шум в итог не входит).
+        if flags.run_noise_cut and freq_features and sev_features:
+            stage_start("noise_cut", detail="FE_NOISE_UNIFORM vs selected")
+            freq_noise = filter_features_by_noise(
+                df,
+                features=freq_features,
+                target_column=base.frequency_target,
+                train_index=splits.train,
+                eval_index=splits.val,
+                task_type="classification",
+                mvp_types=freq_mvp,
+                random_state=base.frequency_random_state,
+                iterations=base.frequency_select_iterations,
+                early_stopping_rounds=base.frequency_select_early_stopping_rounds,
+            )
+            sev_noise = filter_features_by_noise(
+                df,
+                features=sev_features,
+                target_column=base.severity_target,
+                train_index=splits.train,
+                eval_index=splits.val,
+                task_type="regression",
+                mvp_types=sev_mvp,
+                positive_target=base.severity_range is None,
+                random_state=base.severity_random_state,
+                iterations=base.severity_select_iterations,
+                early_stopping_rounds=base.severity_select_early_stopping_rounds,
+            )
+            print(
+                f"[B] noise-cut freq: rank={freq_noise.noise_rank}/"
+                f"{len(freq_noise.importances)} "
+                f"drop={list(freq_noise.dropped_below_noise) or '(none)'} "
+                f"kept={len(freq_noise.kept_features)}"
+            )
+            print(
+                f"[B] noise-cut sev: rank={sev_noise.noise_rank}/"
+                f"{len(sev_noise.importances)} "
+                f"drop={list(sev_noise.dropped_below_noise) or '(none)'} "
+                f"kept={len(sev_noise.kept_features)}"
+            )
+            freq_features = list(freq_noise.kept_features)
+            sev_features = list(sev_noise.kept_features)
+            if not freq_features or not sev_features:
+                raise ValueError(
+                    "Noise-cut обнулил пул (шум важнее всех отобранных). "
+                    f"freq kept={len(freq_features)} sev kept={len(sev_features)}"
+                )
+            freq_mvp = slice_mvp_types(resolved_mvp, freq_features)
+            sev_mvp = slice_mvp_types(resolved_mvp, sev_features)
+            shap_training = replace(
+                shap_training,
+                frequency_features=freq_features,
+                severity_features=sev_features,
+                frequency_categorical_features=[
+                    c
+                    for c in shap_training.frequency_categorical_features
+                    if c in freq_features
+                ],
+                severity_categorical_features=[
+                    c
+                    for c in shap_training.severity_categorical_features
+                    if c in sev_features
+                ],
+            )
+            stage_done(
+                "noise_cut",
+                detail=(
+                    f"freq={len(freq_features)} sev={len(sev_features)}"
+                ),
+            )
+        else:
+            stage_skipped("noise_cut", "RUN_NOISE_CUT / пустой пул")
+
+        freq_summary = dict(shap_training.frequency_feature_selection_summary or {})
+        sev_summary = dict(shap_training.severity_feature_selection_summary or {})
+        if freq_noise is not None:
+            freq_summary["noise_cut"] = {
+                "noise_feature": freq_noise.noise_feature,
+                "noise_rank": freq_noise.noise_rank,
+                "noise_was_last": freq_noise.noise_was_last,
+                "dropped_below_noise": list(freq_noise.dropped_below_noise),
+            }
+        if sev_noise is not None:
+            sev_summary["noise_cut"] = {
+                "noise_feature": sev_noise.noise_feature,
+                "noise_rank": sev_noise.noise_rank,
+                "noise_was_last": sev_noise.noise_was_last,
+                "dropped_below_noise": list(sev_noise.dropped_below_noise),
+            }
+        shap_training = replace(
+            shap_training,
+            frequency_feature_selection_summary=freq_summary or None,
+            severity_feature_selection_summary=sev_summary or None,
+        )
         save_feature_selection(
             stack="new",
             task="frequency",
             selected_features=freq_features,
-            summary=shap_training.frequency_feature_selection_summary,
+            summary=freq_summary,
             directory=out_dir,
         )
         save_feature_selection(
             stack="new",
             task="severity",
             selected_features=sev_features,
-            summary=shap_training.severity_feature_selection_summary,
+            summary=sev_summary,
             directory=out_dir,
         )
-        stage_done(
-            "feature_select",
-            detail=f"freq={len(freq_features)} sev={len(sev_features)} → {out_dir}",
-        )
+        print(f"[B] feature select artifacts → {out_dir}")
     else:
         stage_skipped("feature_select", "RUN_FEATURE_SELECT")
+        stage_skipped("noise_cut", "нет feature_select")
 
     # Только отбор фич: без HPO / финального fit / cal
     if not flags.run_fit:
@@ -396,6 +505,8 @@ def run_train_loop_new(
             artifacts_dir=out_dir,
             psi_dropped=psi_dropped,
             psi_report=psi_report,
+            frequency_noise_cut=freq_noise,
+            severity_noise_cut=sev_noise,
         )
 
     freq_hpo: HpoResult | None = None
@@ -562,4 +673,6 @@ def run_train_loop_new(
         artifacts_dir=out_dir,
         psi_dropped=psi_dropped,
         psi_report=psi_report,
+        frequency_noise_cut=freq_noise,
+        severity_noise_cut=sev_noise,
     )

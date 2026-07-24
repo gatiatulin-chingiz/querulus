@@ -13,6 +13,7 @@ from querulus.training.feature_selection_io import (
     save_feature_selection,
 )
 from querulus.training.hpo import HpoResult, run_hpo
+from querulus.training.noise_cut import NoiseCutResult, filter_features_by_noise
 from querulus.training.pipeline import (
     TrainingArtifacts,
     format_features_table,
@@ -70,6 +71,7 @@ __all__ = [
     "expected_calibration_error",
     "feature_drift_report",
     "filter_features_by_drift",
+    "filter_features_by_noise",
     "fit_probability_calibrator",
     "format_features_table",
     "format_metrics_table",
@@ -78,6 +80,7 @@ __all__ = [
     "load_feature_selection_latest",
     "log_training_summary",
     "monthly_target_drift",
+    "NoiseCutResult",
     "run_hpo",
     "run_model_diagnostics_visualizations",
     "run_mvp_frequency_eda",
