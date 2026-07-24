@@ -135,9 +135,37 @@
 |------|----------|----------------|
 | `FE_VICTIM_LOSS_COUNT_BIN` | Число прошлых убытков victim | 0/1/2/3+ из `VICTIM_LOSS_COUNT` |
 | `FE_VICTIM_REPEAT` | Повторный клиент victim | `VICTIM_LOSS_COUNT > 0` |
-| `FE_VICTIM_LOSS_SUM_BIN` | Сумма прошлых убытков | бакеты из `VICTIM_LOSS_SUM` |
+| `FE_VICTIM_LOSS_SUM_BIN` | Сумма прошлых убытков | бакеты 50k/200k из `VICTIM_LOSS_SUM` |
 | `FE_GUILTY_LOSS_COUNT_BIN` | Число прошлых убытков виновника | из `GUILTY_LOSS_COUNT` |
 | `FE_GUILTY_REPEAT` | Повторный виновник | `GUILTY_LOSS_COUNT > 0` |
+
+### K. Сигналы ПСР / ДТП (`_add_frequency_risk_features`)
+
+| Фича | Описание | Как собирается |
+|------|----------|----------------|
+| `FE_DTPOSAGO_TYPE` | Тип ДТП ОСАГО | копия `DTPOSAGOType` / `DTPOSAGO_TYPE` |
+| `FE_EVENT_SCHEME` | Схема ДТП | копия `EventSchemeDescription` |
+| `FE_REGRESS_FLAG` | Признак регресса | флаг из `Regress` / `REGRESS*` |
+| `FE_JOINT_LIABILITY` | Солидарная ответственность | флаг из `JointLiability` |
+
+### Полный список fixed `FE_*` из `derived.py` (68)
+
+`FE_DAYS_LOSS_TO_PAYMENT_ORDER`, `FE_DAYS_EVENT_TO_LOSS`, `FE_DAYS_TO_PH_CONTRACT_END`, `FE_DAYS_TO_VICTIM_CONTRACT_END`, `FE_IS_WEEKEND_EVENT`, `FE_SEASON_EVENT`, `FE_HOUR_BUCKET_EVENT`, `FE_HIGH_APPLY_DELAY`, `FE_PARTICIPANTS_BIN`, `FE_DELAY_AND_NO_NOTIFY`, `FE_VICTIM_AGE_BIN`, `FE_VICTIM_POWER_PER_TON`, `FE_VICTIM_HEAVY`, `FE_VICTIM_DOORS_BIN`, `FE_VICTIM_SEATS_BIN`, `FE_VICTIM_JAPAN_RF`, `FE_VICTIM_ENGINE_BUCKET`, `FE_VICTIM_BODY_BUCKET`, `FE_GUILTY_AGE_BIN`, `FE_GUILTY_POWER_PER_TON`, `FE_GUILTY_HEAVY`, `FE_GUILTY_ENGINE_BUCKET`, `FE_DIFF_VEHICLE_POWER`, `FE_RATIO_VEHICLE_POWER`, `FE_DIFF_VEHICLE_WEIGHT`, `FE_SAME_VEHICLE_CATEGORY`, `FE_SAME_VEHICLE_COUNTRY`, `FE_SAME_VEHICLE_BRAND`, `FE_SAME_VEHICLE_BODY`, `FE_SAME_VEHICLE_DRIVE`, `FE_JAPAN_MISMATCH`, `FE_EV_MISMATCH`, `FE_SAME_TS_REGION`, `FE_SAME_POLICY_ISSUER_GROUP`, `FE_SAME_REGION_EVENT`, `FE_REGION_CORRECTED`, `FE_SAME_ACCEPTED_LOSS_UNIT`, `FE_KBM_BIN`, `FE_COMMERCIAL_USE`, `FE_HAS_FRANCHISE`, `FE_PREMIUM_PER_POLICY`, `FE_INSURANCE_AMOUNT_BIN`, `FE_REFUND_FORM_MATCH`, `FE_REFUND_FORM_MISMATCH`, `FE_REFUND_IS_CASH`, `FE_REFUND_IS_REPAIR`, `FE_MINIMIZATION_GAP`, `FE_HAS_MINIMIZATION`, `FE_SHARE_WORK_TIER`, `FE_VALUE_BEFORE_WITHOUT_BIN`, `FE_HIGH_VALUE_BEFORE_WITHOUT`, `FE_VALUE_BEFORE_WITH_BIN`, `FE_HIGH_VALUE_BEFORE_WITH`, `FE_VALUE_BEFORE_WITH_REAL_2020`, `FE_VALUE_BEFORE_WITHOUT_REAL_2020`, `FE_VALUE_BEFORE_DIFF`, `FE_VALUE_BEFORE_RATIO`, `FE_WEAROUT_RUB_FROM_VALUES`, `FE_VALUE_WITH_TO_WITHOUT_RATIO`, `FE_DTPOSAGO_TYPE`, `FE_EVENT_SCHEME`, `FE_REGRESS_FLAG`, `FE_JOINT_LIABILITY`, `FE_VICTIM_LOSS_COUNT_BIN`, `FE_VICTIM_REPEAT`, `FE_VICTIM_LOSS_SUM_BIN`, `FE_GUILTY_LOSS_COUNT_BIN`, `FE_GUILTY_REPEAT`.
+
+---
+
+## 2b. Incident pretensions `FE_INCIDENT_*` (`features/incident_pretensions.py`)
+
+Агрегаты претензий **текущего** инцидента с `PRETENSION_GET_DATE ≤ T0` (без утечки будущих).
+
+| Фича / шаблон | Описание | Как собирается |
+|---------------|----------|----------------|
+| `FE_INCIDENT_PRET_COUNT` | Число претензий до T0 | count строк pretensions |
+| `FE_INCIDENT_DECLARED_{FIELD}_SUM` | Сумма по Declared_* | sum каждой колонки `DECLARED_*` |
+| `FE_INCIDENT_PRETENSION_VALUE_SUM` | Сумма претензии | sum `PRETENSION_VALUE` (если есть) |
+| `FE_INCIDENT_UTSVALUE_SUM` | Сумма УТС | sum `UTSVALUE` (если есть) |
+
+Набор `DECLARED_*` зависит от сырых колонок претензий.
 
 ---
 
@@ -166,12 +194,14 @@
 
 | Шаблон фичи | Описание | Как собирается |
 |-------------|----------|----------------|
-| `FE_PERSON_PRET_{ROLE}_FE_PERSON_PRET_COUNT` | Число претензий в истории | count строк после фильтра |
+| `FE_PERSON_PRET_{ROLE}_FE_PERSON_PRET_COUNT` | Число претензий в истории | count после фильтра as-of T0 |
 | `FE_PERSON_PRET_{ROLE}_FE_PERSON_PRET_PRETENSION_NUMBER_NUNIQUE` | Уникальные номера претензий | nunique `PRETENSION_NUMBER` |
 | `FE_PERSON_PRET_{ROLE}_FE_PERSON_PRET_TYPES_NUNIQUE` | Уникальные типы | nunique `PRETENSION_TYPES` |
 | `FE_PERSON_PRET_{ROLE}_FE_PERSON_PRET_GET_METHOD_MODE` | Мода способа подачи | mode `PRETENSION_GET_METHOD` |
 | `FE_PERSON_PRET_{ROLE}_FE_PERSON_PRET_ANSWER_TYPE_MODE` | Мода типа ответа | mode `ANSWER_TYPE` |
-| `FE_PERSON_PRET_{ROLE}_FE_PERSON_PRET_{MONEY}_SUM` | Сумма по статье | sum для `PRETENSION_VALUE`, `SURCHARGE_VALUE`, `UTS_SURCHARGE_VALUE`, `PRETENSION_VALUE_PENALTY`, `SURCHARGE_VALUE_PENALTY` |
+| `FE_PERSON_PRET_{ROLE}_FE_PERSON_PRET_{MONEY}_SUM` | Сумма по статье | sum: `PRETENSION_VALUE`, `SURCHARGE_VALUE`, `UTS_SURCHARGE_VALUE`, `PRETENSION_VALUE_PENALTY`, `SURCHARGE_VALUE_PENALTY` |
+
+> Имена с двойным префиксом — так собирает `add_prefix(FE_PERSON_PRET_{ROLE}_)` поверх колонок `FE_PERSON_PRET_*`.
 
 ### 3.3 Court history (`history_court.py`)
 
@@ -288,8 +318,9 @@
 | Блок | Порядок величины |
 |------|------------------|
 | Victim raw | ~230 колонок |
-| `FE_*` derived | 59 |
-| `FE_PERSON_STATIC` | ~55 |
+| `FE_*` derived (`derived.py`) | **68** fixed |
+| `FE_INCIDENT_*` | ~3 + N×`DECLARED_*` |
+| `FE_PERSON_STATIC` | ~55 (пары ролей + ages) |
 | `FE_PERSON_PRET_{ROLE}_*` | ~9 × 10 ролей ≈ 90 |
 | `FE_PERSON_COURT_{ROLE}_*` | ~80+ × 10 ролей ≈ 800+ |
 | **Итого в df_final_3** | **~1100+ колонок** |
@@ -297,4 +328,4 @@
 
 ---
 
-*Файл: `configs/features_catalog.md`. Код-источник: `features/derived.py`, `features/person/*`, `dataset/steps/*`, `training/mvp_types.py`.*
+*Файл: `configs/features_catalog.md`. Код-источник: `features/derived.py`, `features/incident_pretensions.py`, `features/person/*`, `dataset/steps/*`, `training/mvp_types.py`.*
