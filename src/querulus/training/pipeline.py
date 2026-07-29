@@ -125,16 +125,74 @@ def _require_model_diagnostics(config: TrainingConfig):
 
 
 def _stringify_categorical_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    """Привести категориальные признаки к строкам, как в model_learn.py."""
+    """Привести категориальные признаки к строкам (CatBoost не принимает float в cat).
+
+    Целочисленные/бинарные float (0.0/1.0) → ``\"0\"``/``\"1\"``, не ``\"1.0\"``.
+    """
     result = df.copy()
     for column in columns:
         if column not in result.columns:
             continue
+        series = result[column]
+        numeric = pd.to_numeric(series, errors="coerce")
+        # Если все non-null — целые (в т.ч. 0.0/1.0) — пишем без десятичной точки
+        finite = numeric.dropna()
+        if not finite.empty and bool((finite == finite.round()).all()):
+            as_int = numeric.round().astype("Int64")
+            result[column] = as_int.astype(str).replace({"<NA>": "nan", "None": "nan"})
+            continue
         try:
-            result[column] = result[column].apply(lambda value: int(float(value))).astype(str)
+            result[column] = series.map(
+                lambda value: (
+                    "nan"
+                    if value is None or (isinstance(value, float) and pd.isna(value))
+                    or value is pd.NA
+                    else str(int(float(value)))
+                    if _looks_numeric(value)
+                    else str(value)
+                )
+            )
         except (ValueError, TypeError):
-            result[column] = result[column].astype(str)
+            result[column] = series.astype(str).replace({"<NA>": "nan", "None": "nan"})
     return result
+
+
+def _make_pool(
+    features: pd.DataFrame,
+    label: pd.Series | np.ndarray | None = None,
+    *,
+    cat_features: list[str],
+    feature_names: list[str] | None = None,
+    weight: pd.Series | np.ndarray | None = None,
+):
+    """Pool с гарантированным stringify cat-колонок (защита от float 1.0)."""
+    from catboost import Pool
+
+    names = feature_names or list(features.columns)
+    data = _stringify_categorical_columns(features[names], cat_features)
+    kwargs: dict[str, object] = {
+        "data": data,
+        "cat_features": cat_features,
+        "feature_names": names,
+    }
+    if label is not None:
+        kwargs["label"] = label
+    if weight is not None:
+        kwargs["weight"] = weight
+    return Pool(**kwargs)
+
+
+def _looks_numeric(value: object) -> bool:
+    """True, если значение можно привести к float (для cat→str)."""
+    if value is None or value is pd.NA:
+        return False
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return not pd.isna(value)
+    try:
+        float(value)
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 def _fe_categorical_in_frame(df: pd.DataFrame) -> list[str]:
@@ -156,7 +214,7 @@ def _apply_mvp_types(
     df: pd.DataFrame,
     config: TrainingConfig,
 ) -> tuple[pd.DataFrame, dict[str, list[str]]]:
-    """value_type → stringify cat → correct_types с учётом FE-бакетов."""
+    """value_type → stringify cat → correct_types → stringify финальных cat."""
     try:
         from querulus.AutoMVP import MVP
     except Exception as exc:
@@ -182,6 +240,12 @@ def _apply_mvp_types(
     )
     mvp.correct_types(input_types, other_cols)
     types = {key: list(value) for key, value in mvp.types_dict.items()}
+
+    # correct_types мог добавить в cat колонки, ещё оставшиеся float (0.0/1.0)
+    final_categorical = list(
+        dict.fromkeys(types.get("BINARY", []) + types.get("CATEGORIAL", []) + fe_cat)
+    )
+    data = _stringify_categorical_columns(data, final_categorical)
     return data, types
 
 
@@ -496,9 +560,7 @@ def frequency_predict_proba(
             dtype=float,
         )
     if cat_features:
-        from catboost import Pool
-
-        pool = Pool(features, cat_features=cat_features)
+        pool = _make_pool(features, cat_features=cat_features)
         return np.asarray(training.frequency_model.predict_proba(pool)[:, 1], dtype=float)
     return np.asarray(training.frequency_model.predict_proba(features)[:, 1], dtype=float)
 
@@ -757,7 +819,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         "severity",
     )
 
-    CatBoostClassifier, CatBoostRegressor, Pool, EFeaturesSelectionAlgorithm, EShapCalcType = (
+    CatBoostClassifier, CatBoostRegressor, _, EFeaturesSelectionAlgorithm, EShapCalcType = (
         _require_catboost()
     )
     ModelDiagnostics = _require_model_diagnostics(config)
@@ -770,13 +832,13 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         config,
         full_frame=True,
     )
-    frequency_test_pool = Pool(
+    frequency_test_pool = _make_pool(
         frequency_split.x_test,
         frequency_split.y_test.astype(int),
         cat_features=frequency_cat_features,
         feature_names=frequency_features,
     )
-    frequency_train_pool = Pool(
+    frequency_train_pool = _make_pool(
         frequency_split.x_train,
         frequency_split.y_train.astype(int),
         cat_features=frequency_cat_features,
@@ -804,13 +866,13 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         ]
         frequency_hyperparameters["num_features_to_select"] = config.frequency_num_features_to_select
         frequency_hyperparameters["feature_selection"] = "RecursiveByShapValues"
-        frequency_train_pool = Pool(
+        frequency_train_pool = _make_pool(
             frequency_split.x_train[frequency_features],
             frequency_split.y_train.astype(int),
             cat_features=frequency_cat_features,
             feature_names=frequency_features,
         )
-        frequency_test_pool = Pool(
+        frequency_test_pool = _make_pool(
             frequency_split.x_test[frequency_features],
             frequency_split.y_test.astype(int),
             cat_features=frequency_cat_features,
@@ -872,7 +934,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         positive_target=config.severity_range is None,
         full_frame=True,
     )
-    severity_train_pool = Pool(
+    severity_train_pool = _make_pool(
         severity_split.x_train[severity_features],
         severity_train_target(
             severity_split.y_train, config.severity_target_transform
@@ -883,7 +945,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
             severity_split.y_train, config.severity_sample_weight
         ),
     )
-    severity_test_pool = Pool(
+    severity_test_pool = _make_pool(
         severity_split.x_test[severity_features],
         severity_train_target(severity_split.y_test, config.severity_target_transform),
         cat_features=severity_cat_features,
@@ -908,7 +970,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         ]
         severity_hyperparameters["num_features_to_select"] = config.severity_num_features_to_select
         severity_hyperparameters["feature_selection"] = "RecursiveByShapValues"
-        severity_train_pool = Pool(
+        severity_train_pool = _make_pool(
             severity_split.x_train[severity_features],
             severity_train_target(
                 severity_split.y_train, config.severity_target_transform
@@ -919,7 +981,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
                 severity_split.y_train, config.severity_sample_weight
             ),
         )
-        severity_test_pool = Pool(
+        severity_test_pool = _make_pool(
             severity_split.x_test[severity_features],
             severity_train_target(
                 severity_split.y_test, config.severity_target_transform
