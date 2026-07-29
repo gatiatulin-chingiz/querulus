@@ -61,7 +61,7 @@
 | Фича | Описание | Как собирается |
 |------|----------|----------------|
 | `FE_GUILTY_AGE_BIN` | Возраст ТС виновника | бакеты как у victim |
-| `FE_GUILTY_POWER_PER_TON` | Мощность/тонна виновника | `GUILTY_CAPACITY_ENGINE / GUILTY_MAX_WEIGHT` |
+| `FE_GUILTY_POWER_PER_TON` | Мощность/тонна виновника | `(GUILTY_CAPACITY_ENGINE / GUILTY_MAX_WEIGHT) * 10000` |
 | `FE_GUILTY_HEAVY` | Тяжёлое ТС виновника | `GUILTY_MAX_WEIGHT > 3500` |
 | `FE_GUILTY_ENGINE_BUCKET` | Тип двигателя виновника | `GUILTY_TYPE_ENGINE` |
 

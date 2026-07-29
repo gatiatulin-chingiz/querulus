@@ -15,6 +15,7 @@ from querulus.training.corr_filter import correlation_filter_features, slice_mvp
 from querulus.training.drift_thresholds import DEFAULT_L1_THRESHOLD, DEFAULT_PSI_THRESHOLD
 from querulus.training.drift import filter_features_by_drift, format_psi_filter_report
 from querulus.training.feature_selection_io import save_feature_selection
+from querulus.training.feature_selection_report import save_feature_selection_report
 from querulus.training.hpo import HpoResult, run_hpo
 from querulus.training.noise_cut import NoiseCutResult, filter_features_by_noise
 from querulus.training.pipeline import (
@@ -474,7 +475,27 @@ def run_train_loop_new(
             summary=sev_summary,
             directory=out_dir,
         )
+        # HTML для бизнеса: RU-нейминг + EDA-графики + severity-only
+        cat_feats = list(
+            dict.fromkeys(
+                [
+                    *shap_training.frequency_categorical_features,
+                    *shap_training.severity_categorical_features,
+                ]
+            )
+        )
+        report_path = save_feature_selection_report(
+            df,
+            frequency_features=freq_features,
+            severity_features=sev_features,
+            categorical_features=cat_feats,
+            frequency_target=base.frequency_target,
+            severity_target=base.severity_target,
+            stack="new",
+            directory=out_dir,
+        )
         print(f"[B] feature select artifacts → {out_dir}")
+        print(f"[B] feature select report → {report_path}")
     else:
         stage_skipped("feature_select", "RUN_FEATURE_SELECT")
         stage_skipped("noise_cut", "нет feature_select")

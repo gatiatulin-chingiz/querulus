@@ -253,10 +253,11 @@ def _add_guilty_vehicle_features(df: pd.DataFrame, config: FeatureConfig) -> pd.
     age_bins = config.vehicle_age_bins
 
     df["FE_GUILTY_AGE_BIN"] = _vehicle_age_bin(_series(df, "GUILTY_VEHICLE_AGE"), age_bins)
+    # ×10000: raw л.с./кг слишком мал для модели; шкала ближе к л.с./10 т
     df["FE_GUILTY_POWER_PER_TON"] = _safe_div(
         _series(df, "GUILTY_CAPACITY_ENGINE"),
         _series(df, "GUILTY_MAX_WEIGHT"),
-    )
+    ) * 10000
     weight = pd.to_numeric(_series(df, "GUILTY_MAX_WEIGHT"), errors="coerce")
     df["FE_GUILTY_HEAVY"] = (weight > th.vehicle_weight_heavy).astype("Int64")
     df["FE_GUILTY_ENGINE_BUCKET"] = _series(df, "GUILTY_TYPE_ENGINE").astype("string")

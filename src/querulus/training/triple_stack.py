@@ -85,6 +85,9 @@ def train_triple_stacks(
                     f"freq={len(shared_freq)} sev={len(shared_sev)} → reuse on other stacks"
                 )
                 from querulus.training.feature_selection_io import save_feature_selection
+                from querulus.training.feature_selection_report import (
+                    save_feature_selection_report,
+                )
 
                 freq_path = save_feature_selection(
                     stack=stack_name,
@@ -100,6 +103,26 @@ def train_triple_stacks(
                 )
                 print(f"  feature selection saved: {freq_path}")
                 print(f"  feature selection saved: {sev_path}")
+                art = trainings[stack_name]
+                cat_feats = list(
+                    dict.fromkeys(
+                        [
+                            *art.frequency_categorical_features,
+                            *art.severity_categorical_features,
+                        ]
+                    )
+                )
+                report_path = save_feature_selection_report(
+                    df,
+                    frequency_features=list(shared_freq),
+                    severity_features=list(shared_sev),
+                    categorical_features=cat_feats,
+                    frequency_target=freq_target,
+                    severity_target=sev_target,
+                    stack=stack_name,
+                    directory=freq_path.parent,
+                )
+                print(f"  feature selection report: {report_path}")
             continue
 
         if select_on and shared_freq is not None and shared_sev is not None:

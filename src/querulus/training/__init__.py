@@ -12,6 +12,7 @@ from querulus.training.feature_selection_io import (
     load_feature_selection_latest,
     save_feature_selection,
 )
+from querulus.training.feature_selection_report import save_feature_selection_report
 from querulus.training.hpo import HpoResult, run_hpo
 from querulus.training.noise_cut import NoiseCutResult, filter_features_by_noise
 from querulus.training.pipeline import (
@@ -90,6 +91,7 @@ __all__ = [
     "run_triple_fin_effects",
     "run_triple_stack",
     "save_feature_selection",
+    "save_feature_selection_report",
     "severity_error_by_quantile",
     "split_by_date_periods",
     "train_models",
