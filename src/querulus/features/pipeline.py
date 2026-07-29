@@ -62,12 +62,14 @@ def run_features(
     cols_before = df.shape[1]
 
     df = cleanup_merge_columns(df, feature_config)
-    # Возраст/год и 0/1-флаги часто float из SQL — приводим к Int64
+    # Возраст/год и 0/1-флаги часто float из SQL — приводим к Int64 (in-place)
     df = cast_integer_like_columns(df)
+    gc.collect()
 
     pret_base = None
     if include_fe_features:
         df = add_derived_features(df, feature_config)
+        gc.collect()
 
         from querulus.features.incident_pretensions import add_incident_pretension_features
         from querulus.features.person.loaders import load_pretensions_base
@@ -76,12 +78,22 @@ def run_features(
             paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint
         )
         pret_incident = _filter_pretensions_for_incidents(df, pret_base)
+        # Полный pret не нужен без person-FE — сразу освобождаем пик ОЗУ
+        if not include_person_features:
+            del pret_base
+            pret_base = None
+            gc.collect()
         df = add_incident_pretension_features(df, pret_incident, feature_config)
         del pret_incident
+        gc.collect()
 
         if include_person_features:
             from querulus.features.person.pipeline import run_person_features
 
+            logger.info(
+                "Person FE включены — пик ОЗУ высокий; "
+                "при нехватке памяти поставьте INCLUDE_PERSON_FEATURES=False"
+            )
             df = run_person_features(
                 df,
                 paths,
@@ -90,6 +102,9 @@ def run_features(
                 save_checkpoint=save_checkpoint,
                 pretensions_base=pret_base,
             )
+            del pret_base
+            pret_base = None
+            gc.collect()
             # Person money-FE появляются только здесь → REAL после сборки.
             from querulus.features.inflation import (
                 MONETARY_COLUMNS_FOR_REAL,
@@ -107,7 +122,8 @@ def run_features(
             )
         else:
             logger.info("Person features пропущены (include_person_features=False).")
-        del pret_base
+        if pret_base is not None:
+            del pret_base
         gc.collect()
     else:
         logger.info("Derived/incident FE пропущены (include_fe_features=False).")

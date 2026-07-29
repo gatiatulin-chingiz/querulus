@@ -13,11 +13,9 @@ def cleanup_merge_columns(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFra
     if not sources:
         return df
 
-    out = df.copy()
-    merged = out[target] if target in out.columns else pd.Series(pd.NA, index=out.index)
-
+    # In-place: полный copy на широком df удваивает пик ОЗУ
+    merged = df[target] if target in df.columns else pd.Series(pd.NA, index=df.index)
     for col in sources:
-        merged = merged.fillna(out[col])
-
-    out[target] = merged
-    return out
+        merged = merged.fillna(df[col])
+    df[target] = merged
+    return df

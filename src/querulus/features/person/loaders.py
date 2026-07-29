@@ -84,6 +84,27 @@ def load_pretensions_base(
       LEFT JOIN [OISUU_report].[dbo].[oisuu81_t_IncidentToLoss] AS ITL ON ITL.LossID=P.LossID
     """
     _conn = _require_conn(conn, use_sql)
+    columns: list[str] | None = None
+    if not use_sql:
+        # Не тащим весь wide-parquet в ОЗУ — только нужные колонки
+        path = paths.resolve_artifact(paths.raw_dir, "df_pretensions.parquet")
+        if path is not None and path.exists():
+            try:
+                import pyarrow.parquet as pq
+
+                names = {str(n) for n in pq.read_schema(path).names}
+                upper_map = {n.upper(): n for n in names}
+                wanted = []
+                for pref in _PRETENSION_HISTORY_COLUMNS:
+                    if pref in names:
+                        wanted.append(pref)
+                    elif pref.upper() in upper_map:
+                        wanted.append(upper_map[pref.upper()])
+                # DECLARED_* тоже нужны для incident-FE
+                wanted.extend(n for n in names if str(n).upper().startswith("DECLARED_"))
+                columns = list(dict.fromkeys(wanted)) or None
+            except Exception:
+                columns = None
     df = load_sql_artifact(
         paths,
         _conn,
@@ -92,6 +113,7 @@ def load_pretensions_base(
         query,
         use_sql=use_sql,
         save_checkpoint=save_checkpoint,
+        columns=columns,
     )
     df.columns = df.columns.str.upper()
     df = _subset_columns(df, _PRETENSION_HISTORY_COLUMNS)

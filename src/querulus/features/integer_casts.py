@@ -1,4 +1,4 @@
-"""Приведение age/year и бинарных float-флагов к Int64."""
+"""Приведение age/year и бинарных float-флагов к Int64 (без полного copy)."""
 from __future__ import annotations
 
 import re
@@ -36,31 +36,41 @@ _BINARY_NAME_RE = re.compile(
 
 
 def _is_binary_values(series: pd.Series) -> bool:
-    """True, если ненулевые значения ⊆ {0, 1}."""
+    """True, если ненулевые значения ⊆ {0, 1} (без построения set всех unique)."""
     values = pd.to_numeric(series, errors="coerce")
-    uniq = set(values.dropna().unique().tolist())
-    if not uniq:
+    finite = values.dropna()
+    if finite.empty:
         return False
-    return uniq.issubset({0, 1, 0.0, 1.0})
+    if float(finite.min()) < 0.0 or float(finite.max()) > 1.0:
+        return False
+    return bool(((finite == 0) | (finite == 1)).all())
+
+
+def _should_try_binary(upper: str) -> bool:
+    return bool(_BINARY_NAME_RE.search(upper)) or (
+        "MADE_IN" in upper or upper.endswith("_FLAG") or "_IS_" in upper
+    )
 
 
 def cast_integer_like_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Возраст/год/счётчики и бинарные флаги → Int64 (NaN сохраняются)."""
-    out = df.copy()
-    for col in out.columns:
-        name = str(col)
-        upper = name.upper()
+    """Возраст/год/счётчики и бинарные флаги → Int64.
+
+    Мутирует ``df`` на месте (без ``df.copy()``), чтобы не удваивать ОЗУ.
+    """
+    for col in list(df.columns):
+        if pd.api.types.is_integer_dtype(df[col]):
+            continue
+        upper = str(col).upper()
         as_int = upper in _INT_EXACT or bool(_INT_NAME_RE.search(upper))
-        as_bin = bool(_BINARY_NAME_RE.search(upper)) and _is_binary_values(out[col])
-        if not as_int and not as_bin:
-            # Бинарный float без «флагового» имени, но значения только 0/1
-            # (например VICTIM_VEHICLE_MADE_IN_RF) — тоже Int64.
-            if _is_binary_values(out[col]) and (
-                "MADE_IN" in upper or upper.endswith("_FLAG") or "_IS_" in upper
-            ):
-                as_bin = True
+        as_bin = False
+        if _should_try_binary(upper):
+            # Бинарная проверка только для кандидатов по имени
+            try:
+                as_bin = _is_binary_values(df[col])
+            except (TypeError, ValueError):
+                as_bin = False
         if not as_int and not as_bin:
             continue
-        numeric = pd.to_numeric(out[col], errors="coerce")
-        out[col] = numeric.round().astype("Int64")
-    return out
+        numeric = pd.to_numeric(df[col], errors="coerce")
+        df[col] = numeric.round().astype("Int64")
+    return df

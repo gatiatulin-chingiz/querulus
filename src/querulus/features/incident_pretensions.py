@@ -42,7 +42,7 @@ def add_incident_pretension_features(
 ) -> pd.DataFrame:
     """Агрегаты Declared_* и сумм по претензиям текущего инцидента до T0."""
     config = config or FeatureConfig()
-    out = df.copy()
+    out = df  # без полного copy — пик ОЗУ на wide df
     if df_pretensions.empty:
         return out
 
@@ -66,12 +66,13 @@ def add_incident_pretension_features(
         how="left",
         suffixes=("", "_pret"),
     )
+    del pret
     mask = merged["_pret_date"].notna() & (merged["_pret_date"] <= merged["_t0"])
-    filtered = merged.loc[mask].copy()
+    filtered = merged.loc[mask]
+    del merged
 
     if filtered.empty:
-        out = out.drop(columns=["_incident", "_t0"], errors="ignore")
-        return out
+        return out.drop(columns=["_incident", "_t0"], errors="ignore")
 
     declared_cols = [
         column
@@ -95,6 +96,7 @@ def add_incident_pretension_features(
     grouped = filtered.groupby("_incident").agg(
         **{name: (agg_map[name], agg_funcs[name]) for name in agg_map}
     ).reset_index()
+    del filtered
 
     out = out.merge(grouped, on="_incident", how="left")
     for column in grouped.columns:

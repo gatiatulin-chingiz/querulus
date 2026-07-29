@@ -499,8 +499,8 @@ def _add_loss_history_features(df: pd.DataFrame, config: FeatureConfig) -> pd.Da
 
 
 def add_derived_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
-    """Добавить все FE_* колонки по каталогу v4."""
-    out = df.copy()
+    """Добавить все FE_* колонки по каталогу v4 (мутирует df, без полного copy)."""
+    out = df
     out = _add_timeline_features(out, config)
     out = _add_accident_features(out, config)
     out = _add_victim_vehicle_features(out, config)
