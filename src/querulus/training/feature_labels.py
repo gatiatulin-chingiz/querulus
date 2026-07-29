@@ -7,7 +7,7 @@ from pathlib import Path
 
 from querulus import PROJECT_ROOT
 
-# Сырые колонки (не FE_*), которых нет как отдельных строк в catalog.
+# Сырые колонки и частые FE без отдельной строки в catalog.
 RAW_FEATURE_RU: dict[str, str] = {
     "EVENT_CREATED_BY_GIBDD_FLAG": "Оформление ДТП через ГИБДД",
     "FILIAL": "Филиал",
@@ -19,18 +19,30 @@ RAW_FEATURE_RU: dict[str, str] = {
     "VICTIM_VEHICLE_COUNTRY": "Страна ТС потерпевшего",
     "VICTIM_VEHICLE_AGE": "Возраст ТС потерпевшего",
     "VICTIM_VEHICLE_BRAND": "Бренд ТС потерпевшего",
+    "VICTIM_VEHICLE_MADE_IN_RF": "ТС потерпевшего произведено в РФ",
+    "VICTIM_VEHICLE_IS_JAPAN": "Японское ТС потерпевшего",
     "VICTIM_MAX_WEIGHT": "Макс. масса ТС потерпевшего",
     "VICTIM_CAPACITY_ENGINE": "Мощность двигателя потерпевшего",
+    "VICTIM_NUM_DOORS": "Число дверей ТС потерпевшего",
+    "VICTIM_NUM_PLACE": "Число мест ТС потерпевшего",
+    "VICTIM_TYPE_ENGINE": "Тип двигателя потерпевшего",
+    "VICTIM_TYPE_BODY": "Тип кузова потерпевшего",
+    "VICTIM_AGE": "Возраст потерпевшего",
     "GUILTY_CAPACITY_ENGINE": "Мощность двигателя виновника",
     "GUILTY_MAX_WEIGHT": "Макс. масса ТС виновника",
     "GUILTY_VEHICLE_AGE": "Возраст ТС виновника",
     "GUILTY_VEHICLE_CATEGORY": "Категория ТС виновника",
     "GUILTY_VEHICLE_COUNTRY": "Страна ТС виновника",
+    "GUILTY_OBJECT_YEAR": "Год выпуска ТС виновника",
+    "GUILTY_AGE": "Возраст виновника",
+    "DRIVER_AGE": "Возраст водителя",
     "APPLICANT_AGE": "Возраст заявителя",
     "APPLICANT_SEX": "Пол заявителя",
+    "PAYMENT_RECIPIENT_AGE": "Возраст получателя выплаты",
     "EVENT_YEAR": "Год ДТП",
     "EVENT_MONTH": "Месяц ДТП",
     "EVENT_HOUR": "Час ДТП",
+    "EVENT_DAY": "День недели ДТП",
     "APPLY_DELAY": "Задержка подачи заявления (дни)",
     "PARTICIPANTS_COUNT": "Число участников ДТП",
     "REGION": "Регион убытка",
@@ -46,6 +58,38 @@ RAW_FEATURE_RU: dict[str, str] = {
     "USED_AS_CARSH": "Использование как каршеринг",
     "DTPOSAGO_TYPE": "Тип ДТП ОСАГО",
     "DTPOSAGOType": "Тип ДТП ОСАГО",
+    "FE_VALUE_BEFORE_WITHOUT_REAL_2020": "Калькуляция без износа (руб. 2020)",
+    "FE_VALUE_BEFORE_WITH_REAL_2020": "Калькуляция с износом (руб. 2020)",
+    "FE_PREMIUM_SUM_ALL_REAL_2020": "Сумма премий (руб. 2020)",
+}
+
+_TOKEN_RU: dict[str, str] = {
+    "FE": "признак",
+    "PERSON": "лицо",
+    "STATIC": "статический",
+    "PRET": "претензии",
+    "INCIDENT": "инцидент",
+    "DECLARED": "заявлено",
+    "DIFF": "разница",
+    "SUM": "сумма",
+    "COUNT": "число",
+    "AGE": "возраст",
+    "YEAR": "год",
+    "APPLICANT": "заявитель",
+    "VICTIM": "потерпевший",
+    "GUILTY": "виновник",
+    "DRIVER": "водитель",
+    "OWNER": "собственник",
+    "POLICYHOLDER": "страхователь",
+    "PAYMENT": "выплата",
+    "RECIPIENT": "получатель",
+    "PH": "страхователь",
+    "COURT": "суд",
+    "SURCHARGE": "доплата",
+    "PRETENSION": "претензия",
+    "VALUE": "сумма",
+    "UTSVALUE": "УТС",
+    "UTS": "УТС",
 }
 
 _CATALOG_ROW_RE = re.compile(
@@ -66,7 +110,6 @@ def load_catalog_ru_labels(catalog_path: str | None = None) -> dict[str, str]:
         if not match:
             continue
         name, description = match.group(1).strip(), match.group(2).strip()
-        # Пропуск шаблонов вида FE_*_{FIELD}_*
         if "{" in name or name.lower() in {"фича", "колонки", "фича / шаблон", "шаблон фичи"}:
             continue
         if description.lower() in {"описание", "------"}:
@@ -75,20 +118,30 @@ def load_catalog_ru_labels(catalog_path: str | None = None) -> dict[str, str]:
     return labels
 
 
+def _humanize_ru(feature: str) -> str:
+    """Собрать русское имя из токенов, если нет готового словаря."""
+    parts = [p for p in feature.split("_") if p]
+    translated = [_TOKEN_RU.get(p.upper(), p.lower()) for p in parts]
+    return " ".join(translated)
+
+
 def feature_ru_name(feature: str, catalog_path: str | None = None) -> str:
-    """Русское имя фичи: catalog → RAW → человекочитаемый fallback."""
+    """Русское имя фичи: RAW → catalog → шаблоны → токены (без английского fallback)."""
+    if feature in RAW_FEATURE_RU:
+        return RAW_FEATURE_RU[feature]
     catalog = load_catalog_ru_labels(catalog_path)
     if feature in catalog:
         return catalog[feature]
-    if feature in RAW_FEATURE_RU:
-        return RAW_FEATURE_RU[feature]
-    # Префиксные шаблоны person / incident
-    for prefix, title in (
-        ("FE_PERSON_STATIC_", "Person static"),
-        ("FE_PERSON_PRET_", "Person pretensions"),
-        ("FE_INCIDENT_DECLARED_", "Сумма Declared по претензиям инцидента"),
-        ("FE_INCIDENT_", "Агрегат претензий инцидента"),
-    ):
-        if feature.startswith(prefix):
-            return f"{title}: {feature[len(prefix):]}"
-    return feature.replace("_", " ").strip()
+    if feature.startswith("FE_PERSON_STATIC_"):
+        return "Статический признак лица: " + _humanize_ru(feature[len("FE_PERSON_STATIC_") :])
+    if feature.startswith("FE_PERSON_PRET_"):
+        return "История претензий лица: " + _humanize_ru(feature[len("FE_PERSON_PRET_") :])
+    if feature.startswith("FE_PERSON_COURT_"):
+        return "Судебная история лица: " + _humanize_ru(feature[len("FE_PERSON_COURT_") :])
+    if feature.startswith("FE_INCIDENT_DECLARED_"):
+        return "Сумма заявленного по претензиям инцидента: " + _humanize_ru(
+            feature[len("FE_INCIDENT_DECLARED_") :]
+        )
+    if feature.startswith("FE_INCIDENT_"):
+        return "Агрегат претензий инцидента: " + _humanize_ru(feature[len("FE_INCIDENT_") :])
+    return _humanize_ru(feature)

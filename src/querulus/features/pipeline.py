@@ -11,6 +11,7 @@ from querulus.dataset.paths import DataPaths
 from querulus.features.cleanup import cleanup_merge_columns
 from querulus.features.config import FeatureConfig, load_feature_config
 from querulus.features.derived import add_derived_features
+from querulus.features.integer_casts import cast_integer_like_columns
 
 logger = logging.getLogger("querulus.features")
 
@@ -61,6 +62,8 @@ def run_features(
     cols_before = df.shape[1]
 
     df = cleanup_merge_columns(df, feature_config)
+    # Возраст/год и 0/1-флаги часто float из SQL — приводим к Int64
+    df = cast_integer_like_columns(df)
 
     pret_base = None
     if include_fe_features:
