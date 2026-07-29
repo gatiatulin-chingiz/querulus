@@ -18,8 +18,31 @@ import pandas as pd  # noqa: E402
 
 from querulus.training.feature_labels import feature_ru_name
 from querulus.training.feature_selection_io import DEFAULT_FEATURE_SELECTION_DIR
+from querulus.training.selected_features import (
+    DEFAULT_FREQUENCY_FEATURES,
+    DEFAULT_SEVERITY_FEATURES,
+)
 
 _EXPOSURE = "expos"
+
+
+def _importance_map(frame: pd.DataFrame | None) -> dict[str, float]:
+    """feature → importance из DataFrame (колонки feature / importance)."""
+    if frame is None or getattr(frame, "empty", True):
+        return {}
+    if "feature" not in frame.columns or "importance" not in frame.columns:
+        return {}
+    out: dict[str, float] = {}
+    for row in frame.itertuples(index=False):
+        out[str(row.feature)] = float(row.importance)
+    return out
+
+
+def _fmt_weight(value: float | None) -> str:
+    """Формат веса для таблицы."""
+    if value is None:
+        return "—"
+    return f"{value:.2f}"
 
 
 def _ensure_exposure(df: pd.DataFrame) -> pd.DataFrame:
@@ -154,6 +177,8 @@ def _build_html(
     severity_only: list[str],
     frequency_only: list[str],
     shared: list[str],
+    n_from_old: int,
+    n_new: int,
     rows_html: str,
     cards_html: str,
     saved_at: str,
@@ -207,6 +232,10 @@ def _build_html(
   .badge-sev {{ background: #f6ece2; color: var(--sev); }}
   .badge-only {{ background: #f3d9dd; color: var(--only); }}
   .badge-shared {{ background: #dfeaf6; color: var(--shared); }}
+  .badge-old {{ background: #e8e8e8; color: #444; }}
+  .badge-new {{ background: #e8f5e4; color: #2a6b1f; }}
+  tr.is-new {{ background: #f3faf0; }}
+  .num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
   .stats {{ display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 0; }}
   .stat {{
     background: #f3eee4; border-radius: 8px; padding: 10px 14px; min-width: 120px;
@@ -232,13 +261,14 @@ def _build_html(
 <header>
   <h1>Отобранные признаки модели</h1>
   <p>Стек: <b>{html.escape(stack)}</b> · сохранено UTC: {html.escape(saved_at)}</p>
-  <p>Графики: экспозиция (столбцы) и частота / severity (линия) — как в EDA.</p>
   <div class="stats">
     <div class="stat"><b>{len(frequency_features)}</b><span>классификация (freq)</span></div>
     <div class="stat"><b>{len(severity_features)}</b><span>регрессия (sev)</span></div>
     <div class="stat"><b>{len(shared)}</b><span>общие</span></div>
     <div class="stat"><b>{len(severity_only)}</b><span>только регрессия</span></div>
     <div class="stat"><b>{len(frequency_only)}</b><span>только классификация</span></div>
+    <div class="stat"><b>{n_from_old}</b><span>были в старой модели</span></div>
+    <div class="stat"><b>{n_new}</b><span>новые (не в старой)</span></div>
   </div>
 </header>
 <main>
@@ -253,12 +283,18 @@ def _build_html(
 
   <section id="summary">
     <h2>Сводная таблица</h2>
+    <p class="muted">«Vs старая» — сравнение с фичами прод-моделей
+      (<code>selected_features.py</code> / config_cf_3 + config_rg_3).
+      Вес — CatBoost feature importance после отбора.</p>
     <table>
       <thead>
         <tr>
           <th>#</th>
           <th>Признак</th>
           <th>Название (RU)</th>
+          <th class="num">Вес freq</th>
+          <th class="num">Вес sev</th>
+          <th>Vs старая</th>
           <th>Модели</th>
         </tr>
       </thead>
@@ -290,6 +326,10 @@ def save_feature_selection_report(
     frequency_features: Iterable[str],
     severity_features: Iterable[str],
     categorical_features: Iterable[str] | None = None,
+    frequency_importance: pd.DataFrame | None = None,
+    severity_importance: pd.DataFrame | None = None,
+    old_frequency_features: Iterable[str] | None = None,
+    old_severity_features: Iterable[str] | None = None,
     frequency_target: str = "TARGET_FREQ",
     severity_target: str = "TARGET_SEV",
     stack: str = "new",
@@ -300,15 +340,48 @@ def save_feature_selection_report(
 
     Путь: ``{directory}/{stack}_selected_features_report_{ts}.html``
     + ``{stack}_selected_features_report_latest.html``.
+
+    Таблица и карточки: сначала классификация (freq), затем только severity;
+    внутри группы — по CatBoost importance убыв.
+    «Vs старая» — сравнение с ``selected_features`` (прод config_cf/rg).
     """
     freq = list(dict.fromkeys(frequency_features))
     sev = list(dict.fromkeys(severity_features))
     freq_set, sev_set = set(freq), set(sev)
     union = list(dict.fromkeys([*freq, *sev]))
-    shared = [f for f in union if f in freq_set and f in sev_set]
-    severity_only = [f for f in sev if f not in freq_set]
-    frequency_only = [f for f in freq if f not in sev_set]
     cat_set = set(categorical_features or ())
+
+    old_freq = list(
+        old_frequency_features
+        if old_frequency_features is not None
+        else DEFAULT_FREQUENCY_FEATURES
+    )
+    old_sev = list(
+        old_severity_features
+        if old_severity_features is not None
+        else DEFAULT_SEVERITY_FEATURES
+    )
+    old_set = set(old_freq) | set(old_sev)
+
+    freq_w = _importance_map(frequency_importance)
+    sev_w = _importance_map(severity_importance)
+
+    def _sort_key(name: str) -> tuple[int, float, str]:
+        # 0 — классификация (в т.ч. общие), 1 — только регрессия
+        in_freq = name in freq_set
+        group = 0 if in_freq else 1
+        if in_freq:
+            weight = freq_w.get(name, -1.0)
+        else:
+            weight = sev_w.get(name, -1.0)
+        return (group, -float(weight), name)
+
+    union = sorted(union, key=_sort_key)
+    shared = [f for f in union if f in freq_set and f in sev_set]
+    severity_only = [f for f in union if f in sev_set and f not in freq_set]
+    frequency_only = [f for f in union if f in freq_set and f not in sev_set]
+    from_old = [f for f in union if f in old_set]
+    new_feats = [f for f in union if f not in old_set]
 
     plot_df = _ensure_exposure(df)
     saved_at = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -320,6 +393,10 @@ def save_feature_selection_report(
         in_freq = feature in freq_set
         in_sev = feature in sev_set
         sev_only = in_sev and not in_freq
+        is_old = feature in old_set
+        w_freq = freq_w.get(feature) if in_freq else None
+        w_sev = sev_w.get(feature) if in_sev else None
+
         badges = []
         if in_freq and in_sev:
             badges.append(_badge("общая", "shared"))
@@ -329,11 +406,21 @@ def save_feature_selection_report(
             badges.append(_badge("регрессия", "sev"))
         if sev_only:
             badges.append(_badge("только регрессия", "only"))
-        row_cls = ' class="sev-only"' if sev_only else ""
+        vs_old = _badge("в старой", "old") if is_old else _badge("новая", "new")
+
+        row_classes = []
+        if sev_only:
+            row_classes.append("sev-only")
+        if not is_old:
+            row_classes.append("is-new")
+        row_cls = f' class="{" ".join(row_classes)}"' if row_classes else ""
         rows.append(
             f"<tr{row_cls}><td>{idx}</td>"
             f"<td><code>{html.escape(feature)}</code></td>"
             f"<td>{html.escape(ru)}</td>"
+            f'<td class="num">{_fmt_weight(w_freq)}</td>'
+            f'<td class="num">{_fmt_weight(w_sev)}</td>'
+            f"<td>{vs_old}</td>"
             f"<td>{''.join(badges)}</td></tr>"
         )
 
@@ -358,19 +445,29 @@ def save_feature_selection_report(
                     f"</figcaption></figure>"
                 )
             else:
-                label = "Частота (классификация)" if model_type == "frequency" else "Severity (регрессия)"
+                label = (
+                    "Частота (классификация)"
+                    if model_type == "frequency"
+                    else "Severity (регрессия)"
+                )
                 figures.append(
                     f"<figure><img alt='{html.escape(feature)} {model_type}' "
                     f"src='data:image/png;base64,{b64}'/>"
                     f"<figcaption>{label}</figcaption></figure>"
                 )
 
+        weight_bits = []
+        if in_freq:
+            weight_bits.append(f"freq={_fmt_weight(w_freq)}")
+        if in_sev:
+            weight_bits.append(f"sev={_fmt_weight(w_sev)}")
         plot_cls = "plots two" if len(figures) == 2 else "plots"
         cards.append(
             f"<article class='card' id='f-{html.escape(feature)}'>"
             f"<h3>{html.escape(ru)}</h3>"
             f"<div class='code'>{html.escape(feature)}</div>"
-            f"<div style='margin-top:6px'>{''.join(badges)}</div>"
+            f"<div style='margin-top:6px'>{''.join(badges)}{vs_old}</div>"
+            f"<p class='muted' style='margin:6px 0 0'>Вес: {', '.join(weight_bits)}</p>"
             f"<div class='{plot_cls}'>{''.join(figures)}</div>"
             f"</article>"
         )
@@ -382,6 +479,8 @@ def save_feature_selection_report(
         severity_only=severity_only,
         frequency_only=frequency_only,
         shared=shared,
+        n_from_old=len(from_old),
+        n_new=len(new_feats),
         rows_html="\n".join(rows),
         cards_html="\n".join(cards) if cards else "<p class='muted'>Нет отобранных фич.</p>",
         saved_at=saved_at,

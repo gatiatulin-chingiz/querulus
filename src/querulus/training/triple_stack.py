@@ -117,6 +117,8 @@ def train_triple_stacks(
                     frequency_features=list(shared_freq),
                     severity_features=list(shared_sev),
                     categorical_features=cat_feats,
+                    frequency_importance=art.frequency_importance,
+                    severity_importance=art.severity_importance,
                     frequency_target=freq_target,
                     severity_target=sev_target,
                     stack=stack_name,

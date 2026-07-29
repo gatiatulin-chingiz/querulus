@@ -489,6 +489,8 @@ def run_train_loop_new(
             frequency_features=freq_features,
             severity_features=sev_features,
             categorical_features=cat_feats,
+            frequency_importance=shap_training.frequency_importance,
+            severity_importance=shap_training.severity_importance,
             frequency_target=base.frequency_target,
             severity_target=base.severity_target,
             stack="new",
