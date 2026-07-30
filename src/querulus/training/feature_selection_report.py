@@ -25,6 +25,12 @@ from querulus.training.selected_features import (
 
 _EXPOSURE = "expos"
 _MAX_CAT_LEVELS = 25
+# EDA для износа: больше бинов + квантили; суммы > cap не рисуем
+_AMOUNT_PLOT_FEATURES = frozenset({"FE_VALUE_BEFORE_DIFF"})
+_AMOUNT_PLOT_CAP = 400_000.0
+_AMOUNT_EQUAL_BINS = 20
+_AMOUNT_QUANTILE_BINS = 10
+_NAN_LABEL = "NaN"
 
 
 def _importance_map(frame: pd.DataFrame | None) -> dict[str, float]:
@@ -89,15 +95,38 @@ def _pretty_edges(lo: float, hi: float, n_bins: int) -> np.ndarray:
     return np.unique(edges)
 
 
-def _bin_continuous(series: pd.Series, numeric_bins: int) -> pd.Series:
-    """Равные «круглые» бины вместо qcut с произвольными квантилями."""
+def _bin_continuous(
+    series: pd.Series,
+    numeric_bins: int,
+    *,
+    method: str = "equal",
+) -> pd.Series:
+    """Бины continuous → ordered categorical (+ ``NaN`` в конце при пропусках).
+
+    ``method``: ``equal`` — равные «круглые» края; ``quantile`` — ``qcut``.
+    """
     values = pd.to_numeric(series, errors="coerce")
     finite = values[np.isfinite(values.to_numpy(dtype=float))]
     if finite.size < 2 or finite.nunique() < 2:
         raise ValueError("insufficient unique finite values for binning")
     n_bins = max(2, min(int(numeric_bins), int(finite.nunique())))
-    edges = _pretty_edges(float(finite.min()), float(finite.max()), n_bins)
-    return pd.cut(values, bins=edges, include_lowest=True, duplicates="drop")
+
+    if method == "quantile":
+        cut = pd.qcut(values, q=n_bins, duplicates="drop")
+    else:
+        edges = _pretty_edges(float(finite.min()), float(finite.max()), n_bins)
+        cut = pd.cut(values, bins=edges, include_lowest=True, duplicates="drop")
+
+    # Interval → строка; пропуски — отдельная категория NaN
+    labels = cut.astype("string")
+    mapped = labels.fillna(_NAN_LABEL)
+    cats = [str(c) for c in cut.cat.categories]
+    if (mapped == _NAN_LABEL).any() and _NAN_LABEL not in cats:
+        cats = cats + [_NAN_LABEL]
+    return pd.Series(
+        pd.Categorical(mapped, categories=cats, ordered=True),
+        index=series.index,
+    )
 
 
 def _infer_amount_bin_order(levels: list[str]) -> list[str] | None:
@@ -164,7 +193,7 @@ def _as_ordered_string_categories(
     categories: list[str],
 ) -> pd.Series:
     """Строковая серия → ordered categorical с заданным порядком уровней."""
-    mapped = series.astype("string").fillna("NaN")
+    mapped = series.astype("string").fillna(_NAN_LABEL)
     present = [c for c in categories if c in set(mapped.unique().tolist())]
     return pd.Series(
         pd.Categorical(mapped, categories=present, ordered=True),
@@ -177,20 +206,30 @@ def _prepare_feature_column(
     *,
     is_categorical: bool,
     numeric_bins: int,
+    bin_method: str = "equal",
 ) -> tuple[pd.Series, bool]:
     """Подготовить колонку для группировки; вернуть (series, as_categorical)."""
     if _is_binary_series(series):
         # 0 / 1 / NaN — три категории, не один float-бин
         mapped = pd.to_numeric(series, errors="coerce").round()
         cats = pd.Categorical(
-            mapped.map({0.0: "0", 1.0: "1"}).fillna("NaN"),
-            categories=["0", "1", "NaN"],
+            mapped.map({0.0: "0", 1.0: "1"}).fillna(_NAN_LABEL),
+            categories=["0", "1", _NAN_LABEL],
             ordered=True,
         )
         return pd.Series(cats, index=series.index), True
 
-    # Уже ordered categorical (amount bins из FE) — сохраняем порядок
+    # Уже ordered categorical (amount bins из FE) — сохраняем порядок, NaN → метка
     if isinstance(series.dtype, pd.CategoricalDtype) and series.dtype.ordered:
+        if series.isna().any():
+            cats = [str(c) for c in series.dtype.categories]
+            if _NAN_LABEL not in cats:
+                cats = cats + [_NAN_LABEL]
+            mapped = series.astype("string").fillna(_NAN_LABEL)
+            return pd.Series(
+                pd.Categorical(mapped, categories=cats, ordered=True),
+                index=series.index,
+            ), True
         return series, True
 
     if is_categorical or series.dtype == object or str(series.dtype) in {
@@ -201,40 +240,43 @@ def _prepare_feature_column(
         as_str = series.astype("string")
         uniq = [str(x) for x in as_str.dropna().unique().tolist()]
         if as_str.isna().any():
-            uniq = uniq + ["NaN"]
+            uniq = uniq + [_NAN_LABEL]
         amount_order = _infer_amount_bin_order(uniq)
         if amount_order is not None:
             return _as_ordered_string_categories(series, amount_order), True
         numeric_order = _infer_numeric_level_order(uniq)
         if numeric_order is not None:
             return _as_ordered_string_categories(series, numeric_order), True
-        return as_str, True
+        # unordered cat: явная метка NaN
+        mapped = as_str.fillna(_NAN_LABEL)
+        return mapped, True
 
     # Int64 / float-годы с небольшим числом уровней — категории по возрастанию
     if (
         pd.api.types.is_numeric_dtype(series)
         and not pd.api.types.is_bool_dtype(series)
         and series.nunique(dropna=True) <= 15
+        and bin_method == "equal"
     ):
         def _lab(x: object) -> str:
             if pd.isna(x):
-                return "NaN"
+                return _NAN_LABEL
             num = float(x)
             if abs(num - round(num)) < 1e-9:
                 return str(int(round(num)))
             return f"{num:g}"
 
         mapped = series.map(_lab)
-        uniq = [str(x) for x in mapped.unique().tolist() if str(x) != "NaN"]
-        if (mapped == "NaN").any():
-            uniq = uniq + ["NaN"]
+        uniq = [str(x) for x in mapped.unique().tolist() if str(x) != _NAN_LABEL]
+        if (mapped == _NAN_LABEL).any():
+            uniq = uniq + [_NAN_LABEL]
         numeric_order = _infer_numeric_level_order(uniq) or uniq
         return pd.Series(
             pd.Categorical(mapped, categories=numeric_order, ordered=True),
             index=series.index,
         ), True
 
-    return _bin_continuous(series, numeric_bins), False
+    return _bin_continuous(series, numeric_bins, method=bin_method), True
 
 
 def _group_for_plot(
@@ -246,6 +288,7 @@ def _group_for_plot(
     frequency_target: str,
     severity_target: str,
     numeric_bins: int,
+    bin_method: str = "equal",
 ) -> pd.DataFrame:
     """Агрегация экспозиции и ratio (frequency / severity)."""
     data = df.copy()
@@ -253,6 +296,7 @@ def _group_for_plot(
         data[feature],
         is_categorical=is_categorical,
         numeric_bins=numeric_bins,
+        bin_method=bin_method,
     )
     data[feature] = prepared
     ordered_cats = (
@@ -263,7 +307,6 @@ def _group_for_plot(
         cols = [feature, _EXPOSURE, frequency_target]
         grouped = (
             data[cols]
-            .dropna(subset=[feature])
             .groupby(feature, dropna=False, observed=True)
             .sum()
         )
@@ -272,7 +315,6 @@ def _group_for_plot(
         cols = [feature, _EXPOSURE, frequency_target, severity_target]
         grouped = (
             data[cols]
-            .dropna(subset=[feature])
             .groupby(feature, dropna=False, observed=True)
             .sum()
         )
@@ -280,25 +322,48 @@ def _group_for_plot(
     else:
         raise ValueError(f"Unknown model_type: {model_type!r}")
 
+    # индекс без pandas.NA — единообразная метка
+    grouped.index = pd.Index(
+        [_NAN_LABEL if (pd.isna(x) or str(x) in {"nan", "<NA>", "None"}) else x for x in grouped.index]
+    )
+
     if as_cat and not _is_binary_series(df[feature]):
-        # Высокая кардинальность: топ по экспозиции + «прочие»
+        # Высокая кардинальность: топ по экспозиции + «прочие» (NaN отдельно)
         if len(grouped) > _MAX_CAT_LEVELS:
-            top = grouped.nlargest(_MAX_CAT_LEVELS - 1, _EXPOSURE)
-            other = grouped.drop(index=top.index).sum(numeric_only=True)
+            nan_part = None
+            work = grouped
+            if _NAN_LABEL in grouped.index:
+                nan_part = grouped.loc[[_NAN_LABEL]]
+                work = grouped.drop(index=[_NAN_LABEL])
+            n_top = max(1, _MAX_CAT_LEVELS - 1 - (1 if nan_part is not None else 0))
+            top = work.nlargest(n_top, _EXPOSURE)
+            other = work.drop(index=top.index).sum(numeric_only=True)
             other_row = other.to_frame().T
             other_row.index = pd.Index(["прочие"])
             if model_type == "frequency":
                 other_row["ratio"] = other_row[frequency_target] / other_row[_EXPOSURE]
             else:
                 other_row["ratio"] = other_row[severity_target] / other_row[frequency_target]
-            grouped = pd.concat([top, other_row])
-            grouped = grouped.sort_values(by="ratio", ascending=False)
+            parts = [top, other_row]
+            if nan_part is not None:
+                parts.append(nan_part)
+            grouped = pd.concat(parts)
+            # топ+прочие по ratio; NaN в конце
+            if nan_part is not None:
+                head = grouped.drop(index=[_NAN_LABEL]).sort_values(
+                    by="ratio", ascending=False
+                )
+                grouped = pd.concat([head, grouped.loc[[_NAN_LABEL]]])
+            else:
+                grouped = grouped.sort_values(by="ratio", ascending=False)
         elif ordered_cats:
-            # amount bins / годы / ordered FE: не сортировать по ratio
-            cats = [c for c in prepared.dtype.categories if c in grouped.index]
+            cats = list(prepared.dtype.categories)
+            # NaN в конце, даже если не в categories dtype
+            if _NAN_LABEL in grouped.index and _NAN_LABEL not in cats:
+                cats = cats + [_NAN_LABEL]
+            cats = [c for c in cats if c in grouped.index]
             grouped = grouped.reindex(cats).dropna(how="all")
         else:
-            # fallback: если уровни числовые — по значению, иначе по ratio
             idx_str = [str(x) for x in grouped.index.tolist()]
             numeric_order = _infer_numeric_level_order(idx_str)
             if numeric_order is not None:
@@ -307,7 +372,14 @@ def _group_for_plot(
                     sorted(grouped.index, key=lambda x: order_map.get(str(x), 10**9))
                 ]
             else:
-                grouped = grouped.sort_values(by="ratio", ascending=False)
+                # ratio ↓, NaN в конце
+                if _NAN_LABEL in grouped.index:
+                    head = grouped.drop(index=[_NAN_LABEL]).sort_values(
+                        by="ratio", ascending=False
+                    )
+                    grouped = pd.concat([head, grouped.loc[[_NAN_LABEL]]])
+                else:
+                    grouped = grouped.sort_values(by="ratio", ascending=False)
     return grouped
 
 
@@ -338,6 +410,7 @@ def _plot_to_base64(
     feature: str,
     model_type: str,
     *,
+    title_note: str = "",
     figsize: tuple[float, float] | None = None,
 ) -> str:
     """Нарисовать EDA-график и вернуть PNG как base64."""
@@ -364,7 +437,10 @@ def _plot_to_base64(
     ax2.tick_params(axis="y", labelsize=9)
 
     title_suffix = "FREQUENCY" if model_type == "frequency" else "SEVERITY"
-    ax.set_title(f"{feature} — {title_suffix}", fontsize=13)
+    title = f"{feature} — {title_suffix}"
+    if title_note:
+        title = f"{title} ({title_note})"
+    ax.set_title(title, fontsize=13)
     fig.tight_layout()
 
     buf = io.BytesIO()
@@ -373,7 +449,7 @@ def _plot_to_base64(
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def _render_feature_plot(
+def _render_feature_plots(
     df: pd.DataFrame,
     feature: str,
     *,
@@ -382,39 +458,77 @@ def _render_feature_plot(
     frequency_target: str,
     severity_target: str,
     numeric_bins: int,
-) -> str | None:
-    """Собрать base64 PNG или None при ошибке.
+) -> list[tuple[str, str]]:
+    """Список ``(подпись, base64 PNG)``; пустой список при ошибке.
 
-    Severity-графики — только на ``severity_target > 0`` (как выборка обучения).
+    Severity — только ``severity_target > 0``.
+    ``FE_VALUE_BEFORE_DIFF``: cap ≤400k, равные бины + квантили.
     """
     if feature not in df.columns:
-        return None
+        return []
     plot_df = df
     if model_type == "severity":
         if severity_target not in df.columns:
-            return None
+            return []
         sev = pd.to_numeric(df[severity_target], errors="coerce")
         plot_df = df.loc[sev > 0]
         if plot_df.empty:
-            return None
+            return []
+
+    # Спец. правила для износа в рублях
+    if feature in _AMOUNT_PLOT_FEATURES:
+        vals = pd.to_numeric(plot_df[feature], errors="coerce")
+        plot_df = plot_df.loc[vals.isna() | (vals <= _AMOUNT_PLOT_CAP)]
+        if plot_df.empty:
+            return []
+        specs: list[tuple[str, str, int]] = [
+            (
+                f"равные бины, <= {_AMOUNT_PLOT_CAP:,.0f}".replace(",", " "),
+                "equal",
+                _AMOUNT_EQUAL_BINS,
+            ),
+            (
+                f"квантили, <= {_AMOUNT_PLOT_CAP:,.0f}".replace(",", " "),
+                "quantile",
+                _AMOUNT_QUANTILE_BINS,
+            ),
+        ]
+        force_cat = False
+    else:
+        specs = [("", "equal", numeric_bins)]
+        force_cat = is_categorical
+
+    out: list[tuple[str, str]] = []
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            grouped = _group_for_plot(
-                plot_df,
-                feature,
-                model_type=model_type,
-                is_categorical=is_categorical,
-                frequency_target=frequency_target,
-                severity_target=severity_target,
-                numeric_bins=numeric_bins,
-            )
-        if grouped.empty:
-            return None
-        return _plot_to_base64(grouped, feature, model_type)
+            for note, method, n_bins in specs:
+                grouped = _group_for_plot(
+                    plot_df,
+                    feature,
+                    model_type=model_type,
+                    is_categorical=force_cat,
+                    frequency_target=frequency_target,
+                    severity_target=severity_target,
+                    numeric_bins=n_bins,
+                    bin_method=method,
+                )
+                if grouped.empty:
+                    continue
+                b64 = _plot_to_base64(
+                    grouped, feature, model_type, title_note=note
+                )
+                base_label = (
+                    "Частота (классификация)"
+                    if model_type == "frequency"
+                    else "Severity (регрессия)"
+                )
+                caption = f"{base_label}" + (f" — {note}" if note else "")
+                out.append((caption, b64))
     except (ValueError, TypeError, ZeroDivisionError, KeyError) as exc:
         print(f"[FS-report] skip plot {feature!r}/{model_type}: {exc}")
-        return None
+        return []
+    return out
 
 
 def _badge(text: str, kind: str) -> str:
@@ -700,7 +814,7 @@ def save_feature_selection_report(
 
     def _one_figure(feature: str, model_type: str) -> str:
         is_cat = feature in cat_set
-        b64 = _render_feature_plot(
+        plots = _render_feature_plots(
             plot_df,
             feature,
             model_type=model_type,
@@ -709,22 +823,25 @@ def save_feature_selection_report(
             severity_target=severity_target,
             numeric_bins=numeric_bins,
         )
-        label = (
+        base_label = (
             "Частота (классификация)"
             if model_type == "frequency"
             else "Severity (регрессия)"
         )
-        if b64 is None:
+        if not plots:
             return (
                 f"<figure><figcaption class='muted'>"
-                f"Нет графика ({label}) для {html.escape(feature)}"
+                f"Нет графика ({base_label}) для {html.escape(feature)}"
                 f"</figcaption></figure>"
             )
-        return (
-            f"<figure><img alt='{html.escape(feature)} {model_type}' "
-            f"src='data:image/png;base64,{b64}'/>"
-            f"<figcaption>{label}</figcaption></figure>"
-        )
+        parts: list[str] = []
+        for caption, b64 in plots:
+            parts.append(
+                f"<figure><img alt='{html.escape(feature)} {model_type}' "
+                f"src='data:image/png;base64,{b64}'/>"
+                f"<figcaption>{html.escape(caption)}</figcaption></figure>"
+            )
+        return "".join(parts)
 
     cards: list[str] = []
     freq_set = set(freq)
