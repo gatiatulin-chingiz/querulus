@@ -14,6 +14,7 @@ from querulus.training.config import TrainingConfig, resolve_features_config
 from querulus.training.corr_filter import correlation_filter_features, slice_mvp_types
 from querulus.training.drift_thresholds import DEFAULT_L1_THRESHOLD, DEFAULT_PSI_THRESHOLD
 from querulus.training.drift import filter_features_by_drift, format_psi_filter_report
+from querulus.features.data_quality import apply_data_quality
 from querulus.training.feature_selection_io import (
     drop_zero_importance_features,
     save_feature_selection,
@@ -252,6 +253,58 @@ def run_train_loop_new(
     print(
         f"[B] mvp pools (value_type): freq={len(freq_features)} sev={len(sev_features)} "
         f"cats={len(freq_mvp.get('CATEGORIAL', ())) + len(freq_mvp.get('BINARY', ()))}"
+    )
+
+    # DQ: clip ≥0 (money/DIFF) + winsorize IQR(log1p)→expm1; границы с train
+    stage_start("data_quality", detail="clip≥0 + winsorize log1p-IQR on train")
+    numeric_for_dq = [
+        c
+        for c in resolved_types.get("NUMERIC", [])
+        if c in df.columns
+        and c not in resolve_cfg.drop_columns
+        and c
+        not in {
+            base.frequency_target,
+            base.severity_target,
+            base.date_column,
+        }
+    ]
+    df, dq_report = apply_data_quality(
+        df,
+        train_index=splits.train,
+        numeric_columns=numeric_for_dq,
+    )
+    dq_payload = dq_report.to_dict()
+    dq_payload["pipeline_context"] = {
+        "when": "after MVP types, before corr/PSI/FS",
+        "fit_split": "train",
+        "train_period": [str(train_core[0]), str(train_core[1])],
+        "numeric_columns_considered": numeric_for_dq,
+        "n_numeric_considered": len(numeric_for_dq),
+        "downstream_stages": [
+            "corr_filter (may drop features, not rows)",
+            "psi_filter (may drop features, not rows)",
+            "feature_select / noise_cut / backward_elim / zero_importance",
+        ],
+        "not_used": ["row_drop", "nan_impute", "percentile_winsor"],
+    }
+    (out_dir / "data_quality_report.json").write_text(
+        json.dumps(dq_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    summary = dq_payload["summary"]
+    print(
+        f"[B] data_quality: hard_clip_cells={summary['n_hard_clip_cells']} "
+        f"winsor_cols={summary['n_winsorize_columns']} "
+        f"winsor_cells={summary['n_winsorize_cells']} "
+        f"skipped={summary['n_skipped_columns']}"
+    )
+    stage_done(
+        "data_quality",
+        detail=(
+            f"winsor={summary['n_winsorize_columns']} cols, "
+            f"clip_cells={summary['n_hard_clip_cells']}"
+        ),
     )
 
     train_df = df.loc[splits.train]

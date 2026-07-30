@@ -80,11 +80,11 @@ def build_synthetic_final_dataset(
     )
     freq_amount = pret_amount + claims_amount
 
-    # VALUE_BEFORE: половина positive sev ниже 50k, половина выше.
+    # VALUE_BEFORE: WITHOUT ≥ WITH (износ ≥ 0); половина positive sev ниже 50k.
     value_before = rng.uniform(15_000, 45_000, size=n_rows)
     high_mask = (target_freq == 1) & (np.arange(n_rows) % 2 == 0)
     value_before[high_mask] = rng.uniform(55_000, 180_000, size=int(high_mask.sum()))
-    value_before_without = value_before * rng.uniform(0.85, 1.0, size=n_rows)
+    value_before_without = value_before * rng.uniform(1.0, 1.25, size=n_rows)
 
     event_year = pd.to_datetime(loss_dates).year.astype(int)
     loss_dt = pd.Series(pd.to_datetime(loss_dates), name="LOSS_DATE_TIME")

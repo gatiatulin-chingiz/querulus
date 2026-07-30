@@ -100,6 +100,43 @@ def _bin_continuous(series: pd.Series, numeric_bins: int) -> pd.Series:
     return pd.cut(values, bins=edges, include_lowest=True, duplicates="drop")
 
 
+def _infer_amount_bin_order(levels: list[str]) -> list[str] | None:
+    """Порядок ``<a``, ``a-b``, ``>b`` (и опционально NaN), иначе None."""
+    import re
+
+    clean = [str(x) for x in levels if str(x) not in {"nan", "NaN", "<NA>", "None"}]
+    if len(clean) < 2:
+        return None
+    low_pat = re.compile(r"^<(\d+(?:\.\d+)?)$")
+    mid_pat = re.compile(r"^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$")
+    high_pat = re.compile(r"^>(\d+(?:\.\d+)?)$")
+    lows, mids, highs, other = [], [], [], []
+    for label in clean:
+        if low_pat.match(label):
+            lows.append(label)
+        elif mid_pat.match(label):
+            mids.append(label)
+        elif high_pat.match(label):
+            highs.append(label)
+        else:
+            other.append(label)
+    if other or not lows or not highs:
+        return None
+    # Сортируем внутри группы по числу порога
+    def _num(label: str) -> float:
+        m = low_pat.match(label) or high_pat.match(label) or mid_pat.match(label)
+        return float(m.group(1)) if m else 0.0
+
+    ordered = (
+        sorted(lows, key=_num)
+        + sorted(mids, key=lambda s: (float(mid_pat.match(s).group(1)), float(mid_pat.match(s).group(2))))
+        + sorted(highs, key=_num)
+    )
+    if any(str(x) in {"nan", "NaN", "<NA>"} for x in levels):
+        ordered = ordered + ["NaN"]
+    return ordered
+
+
 def _prepare_feature_column(
     series: pd.Series,
     *,
@@ -117,12 +154,31 @@ def _prepare_feature_column(
         )
         return pd.Series(cats, index=series.index), True
 
+    # Уже ordered categorical (amount bins из FE) — сохраняем порядок
+    if isinstance(series.dtype, pd.CategoricalDtype) and series.dtype.ordered:
+        return series, True
+
     if is_categorical or series.dtype == object or str(series.dtype) in {
         "string",
         "category",
         "boolean",
     }:
-        return series.astype("string"), True
+        as_str = series.astype("string")
+        uniq = [str(x) for x in as_str.dropna().unique().tolist()]
+        amount_order = _infer_amount_bin_order(uniq)
+        if amount_order is not None:
+            mapped = as_str.fillna("NaN")
+            present = [c for c in amount_order if c != "NaN" and c in set(uniq)]
+            if as_str.isna().any():
+                present = present + ["NaN"]
+            return (
+                pd.Series(
+                    pd.Categorical(mapped, categories=present, ordered=True),
+                    index=series.index,
+                ),
+                True,
+            )
+        return as_str, True
 
     # Int64 с небольшим числом уровней — как категории
     if pd.api.types.is_integer_dtype(series) and series.nunique(dropna=True) <= 15:
@@ -149,6 +205,9 @@ def _group_for_plot(
         numeric_bins=numeric_bins,
     )
     data[feature] = prepared
+    ordered_cats = (
+        isinstance(prepared.dtype, pd.CategoricalDtype) and bool(prepared.dtype.ordered)
+    )
 
     if model_type == "frequency":
         cols = [feature, _EXPOSURE, frequency_target]
@@ -183,7 +242,13 @@ def _group_for_plot(
             else:
                 other_row["ratio"] = other_row[severity_target] / other_row[frequency_target]
             grouped = pd.concat([top, other_row])
-        grouped = grouped.sort_values(by="ratio", ascending=False)
+            grouped = grouped.sort_values(by="ratio", ascending=False)
+        elif ordered_cats:
+            # amount bins / ordered FE: не сортировать по ratio
+            cats = [c for c in prepared.dtype.categories if c in grouped.index]
+            grouped = grouped.reindex(cats).dropna(how="all")
+        else:
+            grouped = grouped.sort_values(by="ratio", ascending=False)
     return grouped
 
 

@@ -11,6 +11,7 @@ from querulus.dataset.paths import DataPaths
 from querulus.features.cleanup import cleanup_merge_columns
 from querulus.features.config import FeatureConfig, load_feature_config
 from querulus.features.derived import add_derived_features
+from querulus.features.data_quality import clip_negative_value_before_diff
 from querulus.features.integer_casts import cast_integer_like_columns
 
 logger = logging.getLogger("querulus.features")
@@ -129,6 +130,17 @@ def run_features(
         logger.info("Derived/incident FE пропущены (include_fe_features=False).")
         if include_person_features:
             logger.info("Person FE пропущены: нужен include_fe_features=True.")
+
+    # Аномалии: WITHOUT < WITH → отрицательный «износ» → клип в 0 (без drop)
+    if "FE_VALUE_BEFORE_DIFF" in df.columns:
+        before = pd.to_numeric(df["FE_VALUE_BEFORE_DIFF"], errors="coerce")
+        n_neg = int((before < 0).sum())
+        df = clip_negative_value_before_diff(df)
+        if n_neg:
+            logger.info(
+                "FE_VALUE_BEFORE_DIFF < 0: clipped %s cells to 0",
+                n_neg,
+            )
 
     fe_added = [col for col in feature_config.fe_columns if col in df.columns]
     logger.info(

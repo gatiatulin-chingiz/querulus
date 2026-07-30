@@ -76,7 +76,7 @@ def _count_bin(count: pd.Series) -> pd.Series:
 
 
 def _amount_bins(amount: pd.Series, edges: tuple[float, ...]) -> pd.Series:
-    """Трёхуровневые бакеты суммы."""
+    """Трёхуровневые бакеты суммы (ordered: ``<low``, ``low-high``, ``>high``)."""
     values = pd.to_numeric(amount, errors="coerce")
     low, high = edges
     labels = [f"<{int(low)}", f"{int(low)}-{int(high)}", f">{int(high)}"]
@@ -85,11 +85,12 @@ def _amount_bins(amount: pd.Series, edges: tuple[float, ...]) -> pd.Series:
         bins=[-np.inf, low, high, np.inf],
         labels=labels,
         right=False,
-    ).astype(str).replace("nan", np.nan)
+        ordered=True,
+    )
 
 
 def _tier_from_bins(value: pd.Series, edges: tuple[float, ...], labels: tuple[str, ...]) -> pd.Series:
-    """Универсальные tier-бакеты."""
+    """Универсальные tier-бакеты (ordered по порядку ``labels``)."""
     values = pd.to_numeric(value, errors="coerce")
     low, high = edges
     return pd.cut(
@@ -97,7 +98,8 @@ def _tier_from_bins(value: pd.Series, edges: tuple[float, ...], labels: tuple[st
         bins=[-np.inf, low, high, np.inf],
         labels=list(labels),
         right=False,
-    ).astype(str).replace("nan", np.nan)
+        ordered=True,
+    )
 
 
 def _season(month: pd.Series) -> pd.Series:
@@ -450,6 +452,13 @@ def _add_repair_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
         both_positive
     )
     return df
+
+
+def drop_negative_value_before_diff(df: pd.DataFrame) -> pd.DataFrame:
+    """Устаревший alias: клип ``FE_VALUE_BEFORE_DIFF < 0`` → 0 (без drop строк)."""
+    from querulus.features.data_quality import clip_negative_value_before_diff
+
+    return clip_negative_value_before_diff(df)
 
 
 def _add_frequency_risk_features(df: pd.DataFrame) -> pd.DataFrame:
