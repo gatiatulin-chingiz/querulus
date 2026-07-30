@@ -51,6 +51,7 @@ class TrainLoopFlags:
 
     use_fe_features: bool = True
     run_corr_filter: bool = True
+    corr_filter_threshold: float = 0.95
     run_psi_filter: bool = True
     psi_threshold: float = DEFAULT_PSI_THRESHOLD
     l1_threshold: float = DEFAULT_L1_THRESHOLD
@@ -121,7 +122,11 @@ def print_flags_table(flags: TrainLoopFlags) -> None:
     """Сводка флагов блока B."""
     rows = [
         ("USE_FE_FEATURES", flags.use_fe_features, "derived/incident FE_* в пуле"),
-        ("RUN_CORR_FILTER", flags.run_corr_filter, "Pearson-filter числовых, раздельно freq/sev"),
+        (
+            "RUN_CORR_FILTER",
+            flags.run_corr_filter,
+            f"Pearson |r|>{flags.corr_filter_threshold:g}, раздельно freq/sev",
+        ),
         (
             "RUN_PSI_FILTER",
             flags.run_psi_filter,
@@ -249,18 +254,19 @@ def run_train_loop_new(
     train_df = df.loc[splits.train]
 
     if flags.run_corr_filter and freq_features and sev_features:
-        stage_start("corr_filter", detail="freq + sev on train")
+        thr = float(flags.corr_filter_threshold)
+        stage_start("corr_filter", detail=f"|r|>{thr:g}; freq + sev on train")
         freq_corr = correlation_filter_features(
             train_df,
             freq_features,
             base.frequency_target,
-            threshold=base.corr_filter_threshold,
+            threshold=thr,
         )
         sev_corr = correlation_filter_features(
             train_df,
             sev_features,
             base.severity_target,
-            threshold=base.corr_filter_threshold,
+            threshold=thr,
         )
         freq_features = list(freq_corr.kept_features)
         sev_features = list(sev_corr.kept_features)
@@ -277,6 +283,7 @@ def run_train_loop_new(
         (out_dir / "corr_filter_new.json").write_text(
             json.dumps(
                 {
+                    "threshold": thr,
                     "frequency": {
                         "kept": freq_features,
                         "eliminated": list(freq_corr.eliminated_features),
