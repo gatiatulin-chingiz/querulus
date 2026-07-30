@@ -14,7 +14,10 @@ from querulus.training.config import TrainingConfig, resolve_features_config
 from querulus.training.corr_filter import correlation_filter_features, slice_mvp_types
 from querulus.training.drift_thresholds import DEFAULT_L1_THRESHOLD, DEFAULT_PSI_THRESHOLD
 from querulus.training.drift import filter_features_by_drift, format_psi_filter_report
-from querulus.training.feature_selection_io import save_feature_selection
+from querulus.training.feature_selection_io import (
+    drop_zero_importance_features,
+    save_feature_selection,
+)
 from querulus.training.feature_selection_report import save_feature_selection_report
 from querulus.training.hpo import HpoResult, run_hpo
 from querulus.training.backward_elim import (
@@ -551,6 +554,60 @@ def run_train_loop_new(
         else:
             stage_skipped("backward_elim", "RUN_BACKWARD_ELIM / пустой пул")
 
+        # CatBoost может оставить фичи с importance == 0 — выкидываем их.
+        stage_start("zero_importance", detail="drop importance ≤ 0")
+        freq_features, freq_zero_drop, freq_imp = drop_zero_importance_features(
+            freq_features,
+            shap_training.frequency_importance,
+        )
+        sev_features, sev_zero_drop, sev_imp = drop_zero_importance_features(
+            sev_features,
+            shap_training.severity_importance,
+        )
+        print(
+            f"[B] zero-importance freq drop={list(freq_zero_drop) or '(none)'} "
+            f"kept={len(freq_features)}"
+        )
+        print(
+            f"[B] zero-importance sev drop={list(sev_zero_drop) or '(none)'} "
+            f"kept={len(sev_features)}"
+        )
+        if not freq_features or not sev_features:
+            raise ValueError(
+                "После drop importance≤0 пустой пул. "
+                f"freq={len(freq_features)} sev={len(sev_features)}"
+            )
+        freq_mvp = slice_mvp_types(resolved_mvp, freq_features)
+        sev_mvp = slice_mvp_types(resolved_mvp, sev_features)
+        shap_training = replace(
+            shap_training,
+            frequency_features=freq_features,
+            severity_features=sev_features,
+            frequency_importance=(
+                freq_imp if freq_imp is not None else shap_training.frequency_importance
+            ),
+            severity_importance=(
+                sev_imp if sev_imp is not None else shap_training.severity_importance
+            ),
+            frequency_categorical_features=[
+                c
+                for c in shap_training.frequency_categorical_features
+                if c in freq_features
+            ],
+            severity_categorical_features=[
+                c
+                for c in shap_training.severity_categorical_features
+                if c in sev_features
+            ],
+        )
+        stage_done(
+            "zero_importance",
+            detail=(
+                f"freq drop={len(freq_zero_drop)} kept={len(freq_features)}; "
+                f"sev drop={len(sev_zero_drop)} kept={len(sev_features)}"
+            ),
+        )
+
         freq_summary = dict(shap_training.frequency_feature_selection_summary or {})
         sev_summary = dict(shap_training.severity_feature_selection_summary or {})
         if freq_noise is not None:
@@ -597,6 +654,10 @@ def run_train_loop_new(
                     for step in sev_back.history
                 ],
             }
+        if freq_zero_drop:
+            freq_summary["zero_importance_dropped"] = list(freq_zero_drop)
+        if sev_zero_drop:
+            sev_summary["zero_importance_dropped"] = list(sev_zero_drop)
         shap_training = replace(
             shap_training,
             frequency_feature_selection_summary=freq_summary or None,
@@ -608,6 +669,8 @@ def run_train_loop_new(
             selected_features=freq_features,
             summary=freq_summary,
             directory=out_dir,
+            importance=shap_training.frequency_importance,
+            categorical_features=list(shap_training.frequency_categorical_features),
         )
         save_feature_selection(
             stack="new",
@@ -615,6 +678,8 @@ def run_train_loop_new(
             selected_features=sev_features,
             summary=sev_summary,
             directory=out_dir,
+            importance=shap_training.severity_importance,
+            categorical_features=list(shap_training.severity_categorical_features),
         )
         # HTML для бизнеса: RU-нейминг + EDA-графики + severity-only
         cat_feats = list(

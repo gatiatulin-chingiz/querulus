@@ -288,7 +288,8 @@ def _build_html(
     n_from_old: int,
     n_new: int,
     old_rows_html: str,
-    rows_html: str,
+    freq_rows_html: str,
+    sev_rows_html: str,
     cards_html: str,
     saved_at: str,
 ) -> str:
@@ -331,6 +332,8 @@ def _build_html(
     overflow-x: auto;
   }}
   h2 {{ margin: 0 0 12px; font-size: 1.25rem; }}
+  h3.sub {{ margin: 18px 0 10px; font-size: 1.05rem; color: var(--ink); }}
+  h3.sub:first-of-type {{ margin-top: 4px; }}
   table {{
     width: 100%; border-collapse: collapse; font-size: 0.88rem;
     table-layout: fixed;
@@ -342,9 +345,9 @@ def _build_html(
   }}
   th {{ background: #f3eee4; font-weight: 600; }}
   th.col-idx, td.col-idx {{ width: 3.2rem; }}
-  th.col-code, td.col-code {{ width: 28%; font-family: Consolas, monospace; font-size: 0.8rem; }}
-  th.col-ru, td.col-ru {{ width: 34%; }}
-  th.col-w, td.col-w {{ width: 6.5rem; }}
+  th.col-code, td.col-code {{ width: 32%; font-family: Consolas, monospace; font-size: 0.8rem; }}
+  th.col-ru, td.col-ru {{ width: 42%; }}
+  th.col-w, td.col-w {{ width: 7rem; }}
   th.col-model, td.col-model {{ width: 8.5rem; }}
   .badge {{
     display: inline-block; padding: 2px 8px; border-radius: 999px;
@@ -395,7 +398,8 @@ def _build_html(
     <h2>Навигация</h2>
     <nav>
       <a href="#old-model">Признаки старой модели</a>
-      <a href="#summary">Сводная таблица</a>
+      <a href="#summary-freq">Сводка: классификация</a>
+      <a href="#summary-sev">Сводка: регрессия</a>
       <a href="#plots">Графики по признакам</a>
     </nav>
   </section>
@@ -419,8 +423,8 @@ def _build_html(
     </table>
   </section>
 
-  <section id="summary">
-    <h2>Сводная таблица (после отбора)</h2>
+  <section id="summary-freq">
+    <h2>Сводная таблица — классификация</h2>
     <p class="legend muted">
       Подсветка:
       <span class="lg-old">была в старой модели</span>
@@ -433,11 +437,32 @@ def _build_html(
           <th class="col-code">Признак</th>
           <th class="col-ru">Название (RU)</th>
           <th class="col-w num">Значимость</th>
-          <th class="col-model">Модель</th>
         </tr>
       </thead>
       <tbody>
-        {rows_html}
+        {freq_rows_html}
+      </tbody>
+    </table>
+  </section>
+
+  <section id="summary-sev">
+    <h2>Сводная таблица — регрессия</h2>
+    <p class="legend muted">
+      Подсветка:
+      <span class="lg-old">была в старой модели</span>
+      <span class="lg-new">новая</span>
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th class="col-idx">#</th>
+          <th class="col-code">Признак</th>
+          <th class="col-ru">Название (RU)</th>
+          <th class="col-w num">Значимость</th>
+        </tr>
+      </thead>
+      <tbody>
+        {sev_rows_html}
       </tbody>
     </table>
   </section>
@@ -470,12 +495,11 @@ def save_feature_selection_report(
 ) -> Path:
     """Построить HTML-отчёт по отобранным фичам и сохранить рядом с JSON FS.
 
-    Порядок строк: классификация (по importance ↓), затем регрессия (по importance ↓).
-    Фича в обеих моделях — две строки. Старые прод-фичи — отдельная таблица выше.
+    Две сводные таблицы: классификация и регрессия (каждая по importance ↓).
+    Старые прод-фичи — отдельная таблица выше.
     """
     freq = list(dict.fromkeys(frequency_features))
     sev = list(dict.fromkeys(severity_features))
-    freq_set, sev_set = set(freq), set(sev)
     cat_set = set(categorical_features or ())
 
     old_freq = list(
@@ -493,12 +517,12 @@ def save_feature_selection_report(
     freq_w = _importance_map(frequency_importance)
     sev_w = _importance_map(severity_importance)
 
-    # Строки отчёта: (feature, model_type) — сначала freq, потом sev
-    entries: list[tuple[str, str]] = []
-    for name in sorted(freq, key=lambda n: (-freq_w.get(n, -1.0), n)):
-        entries.append((name, "frequency"))
-    for name in sorted(sev, key=lambda n: (-sev_w.get(n, -1.0), n)):
-        entries.append((name, "severity"))
+    freq_ordered = sorted(freq, key=lambda n: (-freq_w.get(n, -1.0), n))
+    sev_ordered = sorted(sev, key=lambda n: (-sev_w.get(n, -1.0), n))
+    entries: list[tuple[str, str]] = [
+        *((name, "frequency") for name in freq_ordered),
+        *((name, "severity") for name in sev_ordered),
+    ]
 
     selected_names = list(dict.fromkeys([*freq, *sev]))
     from_old = [f for f in selected_names if f in old_set]
@@ -529,26 +553,35 @@ def save_feature_selection_report(
     plot_df = _ensure_exposure(df)
     saved_at = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
-    rows: list[str] = []
+    def _summary_rows(
+        names: list[str],
+        weights: dict[str, float],
+    ) -> str:
+        if not names:
+            return "<tr><td colspan='4'>Нет отобранных признаков</td></tr>"
+        lines: list[str] = []
+        for idx, feature in enumerate(names, start=1):
+            ru = feature_ru_name(feature)
+            is_old = feature in old_set
+            weight = weights.get(feature)
+            row_cls = ' class="is-old"' if is_old else ' class="is-new"'
+            lines.append(
+                f"<tr{row_cls}><td class='col-idx'>{idx}</td>"
+                f"<td class='col-code'>{html.escape(feature)}</td>"
+                f"<td class='col-ru'>{html.escape(ru)}</td>"
+                f"<td class='col-w num'>{_fmt_weight(weight)}</td></tr>"
+            )
+        return "\n".join(lines)
+
     cards: list[str] = []
-    for idx, (feature, model_type) in enumerate(entries, start=1):
+    for feature, model_type in entries:
         ru = feature_ru_name(feature)
-        is_old = feature in old_set
         weight = freq_w.get(feature) if model_type == "frequency" else sev_w.get(feature)
         model_badge = (
             _badge("классификация", "freq")
             if model_type == "frequency"
             else _badge("регрессия", "sev")
         )
-        row_cls = ' class="is-old"' if is_old else ' class="is-new"'
-        rows.append(
-            f"<tr{row_cls}><td class='col-idx'>{idx}</td>"
-            f"<td class='col-code'>{html.escape(feature)}</td>"
-            f"<td class='col-ru'>{html.escape(ru)}</td>"
-            f"<td class='col-w num'>{_fmt_weight(weight)}</td>"
-            f"<td class='col-model'>{model_badge}</td></tr>"
-        )
-
         is_cat = feature in cat_set
         b64 = _render_feature_plot(
             plot_df,
@@ -593,7 +626,8 @@ def save_feature_selection_report(
         n_from_old=len(from_old),
         n_new=len(new_feats),
         old_rows_html="\n".join(old_rows) if old_rows else "<tr><td colspan='4'>Нет данных</td></tr>",
-        rows_html="\n".join(rows),
+        freq_rows_html=_summary_rows(freq_ordered, freq_w),
+        sev_rows_html=_summary_rows(sev_ordered, sev_w),
         cards_html="\n".join(cards) if cards else "<p class='muted'>Нет отобранных фич.</p>",
         saved_at=saved_at,
     )
@@ -605,3 +639,91 @@ def save_feature_selection_report(
     stamped.write_text(content, encoding="utf-8")
     latest.write_text(content, encoding="utf-8")
     return latest
+
+
+def _importance_frame_from_payload(payload: dict) -> pd.DataFrame | None:
+    """DataFrame importance из JSON FS (или None)."""
+    rows = payload.get("importance") or []
+    if not rows:
+        return None
+    return pd.DataFrame(rows)
+
+
+def rebuild_feature_selection_report(
+    df: pd.DataFrame,
+    *,
+    stack: str = "new",
+    directory: Path | str | None = None,
+    frequency_target: str = "TARGET_FREQ",
+    severity_target: str = "TARGET_SEV",
+    numeric_bins: int = 10,
+) -> Path:
+    """Пересобрать HTML из ``{stack}_{frequency|severity}_latest.json`` без повторного FS.
+
+    Нужны ранее сохранённые списки фич (+ опционально importance / categorical).
+    """
+    from querulus.training.feature_selection_io import load_feature_selection_latest
+
+    out_dir = Path(directory) if directory is not None else DEFAULT_FEATURE_SELECTION_DIR
+    freq_payload = load_feature_selection_latest(stack, "frequency", directory=out_dir)
+    sev_payload = load_feature_selection_latest(stack, "severity", directory=out_dir)
+    if freq_payload is None or sev_payload is None:
+        raise FileNotFoundError(
+            f"Нет FS JSON в {out_dir}: ожидаются "
+            f"{stack}_frequency_latest.json и {stack}_severity_latest.json. "
+            "Сначала прогоните feature select."
+        )
+    freq_feats = list(freq_payload.get("selected_features") or [])
+    sev_feats = list(sev_payload.get("selected_features") or [])
+    freq_imp = _importance_frame_from_payload(freq_payload)
+    sev_imp = _importance_frame_from_payload(sev_payload)
+    from querulus.training.feature_selection_io import (
+        drop_zero_importance_features,
+        save_feature_selection,
+    )
+
+    freq_feats, freq_zero, freq_imp = drop_zero_importance_features(freq_feats, freq_imp)
+    sev_feats, sev_zero, sev_imp = drop_zero_importance_features(sev_feats, sev_imp)
+    if freq_zero or sev_zero:
+        # Обновить latest JSON, чтобы набор без нулей сохранился
+        save_feature_selection(
+            stack=stack,
+            task="frequency",
+            selected_features=freq_feats,
+            summary={"zero_importance_dropped": freq_zero},
+            directory=out_dir,
+            importance=freq_imp,
+            categorical_features=list(freq_payload.get("categorical_features") or []),
+        )
+        save_feature_selection(
+            stack=stack,
+            task="severity",
+            selected_features=sev_feats,
+            summary={"zero_importance_dropped": sev_zero},
+            directory=out_dir,
+            importance=sev_imp,
+            categorical_features=list(sev_payload.get("categorical_features") or []),
+        )
+    cat_feats = list(
+        dict.fromkeys(
+            [
+                c
+                for c in list(freq_payload.get("categorical_features") or [])
+                + list(sev_payload.get("categorical_features") or [])
+                if c in freq_feats or c in sev_feats
+            ]
+        )
+    )
+    return save_feature_selection_report(
+        df,
+        frequency_features=freq_feats,
+        severity_features=sev_feats,
+        categorical_features=cat_feats,
+        frequency_importance=freq_imp,
+        severity_importance=sev_imp,
+        frequency_target=frequency_target,
+        severity_target=severity_target,
+        stack=stack,
+        directory=out_dir,
+        numeric_bins=numeric_bins,
+    )

@@ -94,12 +94,20 @@ def train_triple_stacks(
                     task="frequency",
                     selected_features=list(shared_freq),
                     summary=trainings[stack_name].frequency_feature_selection_summary,
+                    importance=trainings[stack_name].frequency_importance,
+                    categorical_features=list(
+                        trainings[stack_name].frequency_categorical_features
+                    ),
                 )
                 sev_path = save_feature_selection(
                     stack=stack_name,
                     task="severity",
                     selected_features=list(shared_sev),
                     summary=trainings[stack_name].severity_feature_selection_summary,
+                    importance=trainings[stack_name].severity_importance,
+                    categorical_features=list(
+                        trainings[stack_name].severity_categorical_features
+                    ),
                 )
                 print(f"  feature selection saved: {freq_path}")
                 print(f"  feature selection saved: {sev_path}")
