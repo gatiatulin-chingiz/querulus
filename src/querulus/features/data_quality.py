@@ -2,11 +2,15 @@
 
 Без NaN/drop строк: отрицательные денежные → 0; выбросы зажимаются в Tukey-fence
 на шкале ``log1p``, затем ``expm1`` обратно.
+
+Вызов на этапе сборки датасета: ``apply_dataset_data_quality`` (см. ``features.pipeline``).
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from typing import Any
+from pathlib import Path
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
@@ -18,6 +22,9 @@ from querulus.features.inflation import (
 )
 
 IQR_K: float = 1.5
+# Совпадает с TrainingConfig.train_period / date_column (без импорта training).
+DEFAULT_DQ_DATE_COLUMN: str = "LOSS_DATE_TIME"
+DEFAULT_DQ_TRAIN_PERIOD: tuple[str, str] = ("2022-01-01", "2024-05-31")
 
 
 def _default_monetary_columns(base_year: int = INFLATION_BASE_YEAR) -> tuple[str, ...]:
@@ -243,3 +250,101 @@ def clip_negative_value_before_diff(df: pd.DataFrame) -> pd.DataFrame:
     """``FE_VALUE_BEFORE_DIFF < 0`` → 0 (без удаления строк)."""
     out, _ = clip_nonnegative_columns(df, ["FE_VALUE_BEFORE_DIFF"])
     return out
+
+
+def train_index_by_period(
+    df: pd.DataFrame,
+    *,
+    date_column: str = DEFAULT_DQ_DATE_COLUMN,
+    train_period: tuple[str, str] = DEFAULT_DQ_TRAIN_PERIOD,
+) -> pd.Index:
+    """Индекс строк с датой в ``train_period`` (включительно)."""
+    if date_column not in df.columns:
+        raise ValueError(f"Нет колонки даты для DQ: {date_column}")
+    dates = pd.to_datetime(df[date_column], errors="coerce")
+    start = pd.Timestamp(train_period[0])
+    end = pd.Timestamp(train_period[1])
+    mask = (dates >= start) & (dates <= end)
+    return df.index[mask]
+
+
+def infer_numeric_feature_columns(
+    df: pd.DataFrame,
+    *,
+    exclude_columns: Iterable[str],
+) -> list[str]:
+    """Числовые фичи для winsorize: не ID/таргеты/дата, не бинарные 0/1."""
+    exclude = set(exclude_columns)
+    out: list[str] = []
+    for column in df.columns:
+        if column in exclude:
+            continue
+        series = df[column]
+        if pd.api.types.is_bool_dtype(series):
+            continue
+        if not pd.api.types.is_numeric_dtype(series):
+            continue
+        values = pd.to_numeric(series, errors="coerce").dropna()
+        if values.empty:
+            continue
+        uniq = set(np.round(values.to_numpy(dtype=float), 12))
+        if len(uniq) <= 2 and uniq.issubset({0.0, 1.0}):
+            continue
+        out.append(column)
+    return out
+
+
+def apply_dataset_data_quality(
+    df: pd.DataFrame,
+    *,
+    date_column: str = DEFAULT_DQ_DATE_COLUMN,
+    train_period: tuple[str, str] = DEFAULT_DQ_TRAIN_PERIOD,
+    exclude_columns: Iterable[str] | None = None,
+    report_path: Path | str | None = None,
+    iqr_k: float = IQR_K,
+    base_year: int = INFLATION_BASE_YEAR,
+) -> tuple[pd.DataFrame, DataQualityReport]:
+    """DQ на сборке датасета: clip≥0 + winsorize; IQR fit на train_period.
+
+    ``exclude_columns`` по умолчанию — ``DEFAULT_OTHER_COLS`` + дата.
+    """
+    if exclude_columns is None:
+        from querulus.training.mvp_types import DEFAULT_OTHER_COLS
+
+        exclude = list(DEFAULT_OTHER_COLS)
+    else:
+        exclude = list(exclude_columns)
+    exclude = list(dict.fromkeys([*exclude, date_column]))
+
+    numeric_columns = infer_numeric_feature_columns(df, exclude_columns=exclude)
+    train_index = train_index_by_period(
+        df, date_column=date_column, train_period=train_period
+    )
+    result, report = apply_data_quality(
+        df,
+        train_index=train_index,
+        numeric_columns=numeric_columns,
+        iqr_k=iqr_k,
+        base_year=base_year,
+    )
+
+    if report_path is not None:
+        payload = report.to_dict()
+        payload["pipeline_context"] = {
+            "when": "dataset assembly (features.pipeline / load synthetic|final)",
+            "fit_split": "train_period",
+            "date_column": date_column,
+            "train_period": [str(train_period[0]), str(train_period[1])],
+            "train_rows_matched": int(len(train_index)),
+            "numeric_columns_considered": numeric_columns,
+            "n_numeric_considered": len(numeric_columns),
+            "not_used": ["row_drop", "nan_impute", "percentile_winsor"],
+        }
+        path = Path(report_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    return result, report

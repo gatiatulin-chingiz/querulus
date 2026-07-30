@@ -318,14 +318,25 @@ def _render_feature_plot(
     severity_target: str,
     numeric_bins: int,
 ) -> str | None:
-    """Собрать base64 PNG или None при ошибке."""
+    """Собрать base64 PNG или None при ошибке.
+
+    Severity-графики — только на ``severity_target > 0`` (как выборка обучения).
+    """
     if feature not in df.columns:
         return None
+    plot_df = df
+    if model_type == "severity":
+        if severity_target not in df.columns:
+            return None
+        sev = pd.to_numeric(df[severity_target], errors="coerce")
+        plot_df = df.loc[sev > 0]
+        if plot_df.empty:
+            return None
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             grouped = _group_for_plot(
-                df,
+                plot_df,
                 feature,
                 model_type=model_type,
                 is_categorical=is_categorical,

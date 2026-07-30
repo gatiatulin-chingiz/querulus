@@ -11,7 +11,7 @@ from querulus.dataset.paths import DataPaths
 from querulus.features.cleanup import cleanup_merge_columns
 from querulus.features.config import FeatureConfig, load_feature_config
 from querulus.features.derived import add_derived_features
-from querulus.features.data_quality import clip_negative_value_before_diff
+from querulus.features.data_quality import apply_dataset_data_quality
 from querulus.features.integer_casts import cast_integer_like_columns
 
 logger = logging.getLogger("querulus.features")
@@ -131,16 +131,18 @@ def run_features(
         if include_person_features:
             logger.info("Person FE пропущены: нужен include_fe_features=True.")
 
-    # Аномалии: WITHOUT < WITH → отрицательный «износ» → клип в 0 (без drop)
-    if "FE_VALUE_BEFORE_DIFF" in df.columns:
-        before = pd.to_numeric(df["FE_VALUE_BEFORE_DIFF"], errors="coerce")
-        n_neg = int((before < 0).sum())
-        df = clip_negative_value_before_diff(df)
-        if n_neg:
-            logger.info(
-                "FE_VALUE_BEFORE_DIFF < 0: clipped %s cells to 0",
-                n_neg,
-            )
+    # DQ: clip≥0 (money/DIFF) + winsorize IQR(log1p); границы по train_period
+    dq_report_path = paths.processed_dir / "data_quality_report.json"
+    df, dq_report = apply_dataset_data_quality(df, report_path=dq_report_path)
+    dq_summary = dq_report.to_dict()["summary"]
+    logger.info(
+        "DQ: hard_clip_cells=%s winsor_cols=%s winsor_cells=%s skipped=%s report=%s",
+        dq_summary["n_hard_clip_cells"],
+        dq_summary["n_winsorize_columns"],
+        dq_summary["n_winsorize_cells"],
+        dq_summary["n_skipped_columns"],
+        dq_report_path,
+    )
 
     fe_added = [col for col in feature_config.fe_columns if col in df.columns]
     logger.info(
