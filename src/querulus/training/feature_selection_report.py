@@ -428,7 +428,7 @@ def _build_html(
     severity_features: list[str],
     n_from_old: int,
     n_new: int,
-    old_rows_html: str,
+    n_dropped: int,
     freq_rows_html: str,
     sev_rows_html: str,
     cards_html: str,
@@ -453,6 +453,8 @@ def _build_html(
     --shared: #1f4b7a;
     --old-bg: #eef2f7;
     --new-bg: #eef8ea;
+    --drop-bg: #fdecea;
+    --drop-ink: #b42318;
   }}
   * {{ box-sizing: border-box; }}
   body {{
@@ -498,12 +500,15 @@ def _build_html(
   .badge-sev {{ background: #f6ece2; color: var(--sev); }}
   tr.is-old {{ background: var(--old-bg); }}
   tr.is-new {{ background: var(--new-bg); }}
+  tr.is-dropped {{ background: var(--drop-bg); color: var(--drop-ink); }}
+  tr.is-dropped td.col-code {{ color: var(--drop-ink); font-weight: 600; }}
   .legend span {{
     display: inline-block; padding: 2px 10px; border-radius: 6px;
     margin-right: 10px; font-size: 0.85rem;
   }}
   .legend .lg-old {{ background: var(--old-bg); }}
   .legend .lg-new {{ background: var(--new-bg); }}
+  .legend .lg-drop {{ background: var(--drop-bg); color: var(--drop-ink); }}
   .num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
   .stats {{ display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 0; }}
   .stat {{
@@ -532,44 +537,26 @@ def _build_html(
     <div class="stat"><b>{len(severity_features)}</b><span>регрессия</span></div>
     <div class="stat"><b>{n_from_old}</b><span>из старой модели</span></div>
     <div class="stat"><b>{n_new}</b><span>новые</span></div>
+    <div class="stat"><b>{n_dropped}</b><span>не вошли (старые)</span></div>
   </div>
 </header>
 <main>
   <section>
     <h2>Навигация</h2>
     <nav>
-      <a href="#old-model">Признаки старой модели</a>
       <a href="#summary-freq">Сводка: классификация</a>
       <a href="#summary-sev">Сводка: регрессия</a>
       <a href="#plots">Графики по признакам</a>
     </nav>
   </section>
 
-  <section id="old-model">
-    <h2>Признаки старой (прод) модели</h2>
-    <p class="muted">Источник: <code>PROD_*_FEATURES</code> в <code>selected_features.py</code>
-      (= фичи из <code>config_cf_3.json</code> / <code>config_rg_3.json</code>).</p>
-    <table>
-      <thead>
-        <tr>
-          <th class="col-idx">#</th>
-          <th class="col-code">Признак</th>
-          <th class="col-ru">Название (RU)</th>
-          <th class="col-model">Модель</th>
-        </tr>
-      </thead>
-      <tbody>
-        {old_rows_html}
-      </tbody>
-    </table>
-  </section>
-
   <section id="summary-freq">
     <h2>Сводная таблица — классификация</h2>
     <p class="legend muted">
       Подсветка:
-      <span class="lg-old">была в старой модели</span>
+      <span class="lg-old">была в старой и осталась</span>
       <span class="lg-new">новая</span>
+      <span class="lg-drop">была в старой, не вошла</span>
     </p>
     <table>
       <thead>
@@ -590,8 +577,9 @@ def _build_html(
     <h2>Сводная таблица — регрессия</h2>
     <p class="legend muted">
       Подсветка:
-      <span class="lg-old">была в старой модели</span>
+      <span class="lg-old">была в старой и осталась</span>
       <span class="lg-new">новая</span>
+      <span class="lg-drop">была в старой, не вошла</span>
     </p>
     <table>
       <thead>
@@ -636,8 +624,8 @@ def save_feature_selection_report(
 ) -> Path:
     """Построить HTML-отчёт по отобранным фичам и сохранить рядом с JSON FS.
 
-    Две сводные таблицы: классификация и регрессия (каждая по importance ↓).
-    Старые прод-фичи — отдельная таблица выше.
+    Две сводные таблицы: классификация и регрессия (importance ↓);
+    в конце красным — прод-фичи, не вошедшие в новую модель.
     """
     freq = list(dict.fromkeys(frequency_features))
     sev = list(dict.fromkeys(severity_features))
@@ -653,7 +641,9 @@ def save_feature_selection_report(
         if old_severity_features is not None
         else PROD_SEVERITY_FEATURES
     )
-    old_set = set(old_freq) | set(old_sev)
+    old_freq_set = set(old_freq)
+    old_sev_set = set(old_sev)
+    old_set = old_freq_set | old_sev_set
 
     freq_w = _importance_map(frequency_importance)
     sev_w = _importance_map(severity_importance)
@@ -666,49 +656,45 @@ def save_feature_selection_report(
     selected_names = list(dict.fromkeys([*freq, *sev]))
     from_old = [f for f in selected_names if f in old_set]
     new_feats = [f for f in selected_names if f not in old_set]
-
-    # Таблица старой модели (freq, затем sev; дубли если в обеих)
-    old_entries: list[tuple[str, str]] = []
-    for name in old_freq:
-        old_entries.append((name, "frequency"))
-    for name in old_sev:
-        old_entries.append((name, "severity"))
-
-    old_rows: list[str] = []
-    for idx, (feature, model_type) in enumerate(old_entries, start=1):
-        ru = feature_ru_name(feature)
-        model_badge = (
-            _badge("классификация", "freq")
-            if model_type == "frequency"
-            else _badge("регрессия", "sev")
-        )
-        old_rows.append(
-            f"<tr><td class='col-idx'>{idx}</td>"
-            f"<td class='col-code'>{html.escape(feature)}</td>"
-            f"<td class='col-ru'>{html.escape(ru)}</td>"
-            f"<td class='col-model'>{model_badge}</td></tr>"
-        )
+    freq_dropped = [f for f in old_freq if f not in set(freq)]
+    sev_dropped = [f for f in old_sev if f not in set(sev)]
+    n_dropped = len(set(freq_dropped) | set(sev_dropped))
 
     plot_df = _ensure_exposure(df)
     saved_at = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     def _summary_rows(
-        names: list[str],
+        selected: list[str],
+        dropped: list[str],
         weights: dict[str, float],
+        *,
+        old_for_task: set[str],
     ) -> str:
-        if not names:
-            return "<tr><td colspan='4'>Нет отобранных признаков</td></tr>"
+        if not selected and not dropped:
+            return "<tr><td colspan='4'>Нет признаков</td></tr>"
         lines: list[str] = []
-        for idx, feature in enumerate(names, start=1):
+        idx = 0
+        for feature in selected:
+            idx += 1
             ru = feature_ru_name(feature)
-            is_old = feature in old_set
             weight = weights.get(feature)
-            row_cls = ' class="is-old"' if is_old else ' class="is-new"'
+            row_cls = (
+                ' class="is-old"' if feature in old_for_task else ' class="is-new"'
+            )
             lines.append(
                 f"<tr{row_cls}><td class='col-idx'>{idx}</td>"
                 f"<td class='col-code'>{html.escape(feature)}</td>"
                 f"<td class='col-ru'>{html.escape(ru)}</td>"
                 f"<td class='col-w num'>{_fmt_weight(weight)}</td></tr>"
+            )
+        for feature in dropped:
+            idx += 1
+            ru = feature_ru_name(feature)
+            lines.append(
+                f"<tr class='is-dropped'><td class='col-idx'>{idx}</td>"
+                f"<td class='col-code'>{html.escape(feature)}</td>"
+                f"<td class='col-ru'>{html.escape(ru)}</td>"
+                f"<td class='col-w num'>—</td></tr>"
             )
         return "\n".join(lines)
 
@@ -777,9 +763,13 @@ def save_feature_selection_report(
         severity_features=sev,
         n_from_old=len(from_old),
         n_new=len(new_feats),
-        old_rows_html="\n".join(old_rows) if old_rows else "<tr><td colspan='4'>Нет данных</td></tr>",
-        freq_rows_html=_summary_rows(freq_ordered, freq_w),
-        sev_rows_html=_summary_rows(sev_ordered, sev_w),
+        n_dropped=n_dropped,
+        freq_rows_html=_summary_rows(
+            freq_ordered, freq_dropped, freq_w, old_for_task=old_freq_set
+        ),
+        sev_rows_html=_summary_rows(
+            sev_ordered, sev_dropped, sev_w, old_for_task=old_sev_set
+        ),
         cards_html="\n".join(cards) if cards else "<p class='muted'>Нет отобранных фич.</p>",
         saved_at=saved_at,
     )
