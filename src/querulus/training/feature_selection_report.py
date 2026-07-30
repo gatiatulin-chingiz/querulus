@@ -137,6 +137,41 @@ def _infer_amount_bin_order(levels: list[str]) -> list[str] | None:
     return ordered
 
 
+def _infer_numeric_level_order(levels: list[str]) -> list[str] | None:
+    """Если уровни — числа/годы, вернуть ascending (+ NaN в конце), иначе None."""
+    parsed: list[tuple[float, str]] = []
+    has_nan = False
+    for label in levels:
+        text = str(label).strip()
+        if text in {"nan", "NaN", "<NA>", "None", ""}:
+            has_nan = True
+            continue
+        try:
+            parsed.append((float(text), text))
+        except ValueError:
+            return None
+    if len(parsed) < 2:
+        return None
+    parsed.sort(key=lambda item: item[0])
+    ordered = [text for _, text in parsed]
+    if has_nan:
+        ordered.append("NaN")
+    return ordered
+
+
+def _as_ordered_string_categories(
+    series: pd.Series,
+    categories: list[str],
+) -> pd.Series:
+    """Строковая серия → ordered categorical с заданным порядком уровней."""
+    mapped = series.astype("string").fillna("NaN")
+    present = [c for c in categories if c in set(mapped.unique().tolist())]
+    return pd.Series(
+        pd.Categorical(mapped, categories=present, ordered=True),
+        index=series.index,
+    )
+
+
 def _prepare_feature_column(
     series: pd.Series,
     *,
@@ -165,24 +200,39 @@ def _prepare_feature_column(
     }:
         as_str = series.astype("string")
         uniq = [str(x) for x in as_str.dropna().unique().tolist()]
+        if as_str.isna().any():
+            uniq = uniq + ["NaN"]
         amount_order = _infer_amount_bin_order(uniq)
         if amount_order is not None:
-            mapped = as_str.fillna("NaN")
-            present = [c for c in amount_order if c != "NaN" and c in set(uniq)]
-            if as_str.isna().any():
-                present = present + ["NaN"]
-            return (
-                pd.Series(
-                    pd.Categorical(mapped, categories=present, ordered=True),
-                    index=series.index,
-                ),
-                True,
-            )
+            return _as_ordered_string_categories(series, amount_order), True
+        numeric_order = _infer_numeric_level_order(uniq)
+        if numeric_order is not None:
+            return _as_ordered_string_categories(series, numeric_order), True
         return as_str, True
 
-    # Int64 с небольшим числом уровней — как категории
-    if pd.api.types.is_integer_dtype(series) and series.nunique(dropna=True) <= 15:
-        return series.astype("string"), True
+    # Int64 / float-годы с небольшим числом уровней — категории по возрастанию
+    if (
+        pd.api.types.is_numeric_dtype(series)
+        and not pd.api.types.is_bool_dtype(series)
+        and series.nunique(dropna=True) <= 15
+    ):
+        def _lab(x: object) -> str:
+            if pd.isna(x):
+                return "NaN"
+            num = float(x)
+            if abs(num - round(num)) < 1e-9:
+                return str(int(round(num)))
+            return f"{num:g}"
+
+        mapped = series.map(_lab)
+        uniq = [str(x) for x in mapped.unique().tolist() if str(x) != "NaN"]
+        if (mapped == "NaN").any():
+            uniq = uniq + ["NaN"]
+        numeric_order = _infer_numeric_level_order(uniq) or uniq
+        return pd.Series(
+            pd.Categorical(mapped, categories=numeric_order, ordered=True),
+            index=series.index,
+        ), True
 
     return _bin_continuous(series, numeric_bins), False
 
@@ -244,11 +294,20 @@ def _group_for_plot(
             grouped = pd.concat([top, other_row])
             grouped = grouped.sort_values(by="ratio", ascending=False)
         elif ordered_cats:
-            # amount bins / ordered FE: не сортировать по ratio
+            # amount bins / годы / ordered FE: не сортировать по ratio
             cats = [c for c in prepared.dtype.categories if c in grouped.index]
             grouped = grouped.reindex(cats).dropna(how="all")
         else:
-            grouped = grouped.sort_values(by="ratio", ascending=False)
+            # fallback: если уровни числовые — по значению, иначе по ratio
+            idx_str = [str(x) for x in grouped.index.tolist()]
+            numeric_order = _infer_numeric_level_order(idx_str)
+            if numeric_order is not None:
+                order_map = {lab: i for i, lab in enumerate(numeric_order)}
+                grouped = grouped.loc[
+                    sorted(grouped.index, key=lambda x: order_map.get(str(x), 10**9))
+                ]
+            else:
+                grouped = grouped.sort_values(by="ratio", ascending=False)
     return grouped
 
 
@@ -263,6 +322,12 @@ def _format_tick_label(value: object) -> str:
         text = f"({_fmt(left)}, {_fmt(right)}]"
     else:
         text = str(value)
+        try:
+            num = float(text)
+            if abs(num - round(num)) < 1e-9:
+                text = str(int(round(num)))
+        except ValueError:
+            pass
     if len(text) > 28:
         return text[:25] + "…"
     return text
@@ -595,10 +660,8 @@ def save_feature_selection_report(
 
     freq_ordered = sorted(freq, key=lambda n: (-freq_w.get(n, -1.0), n))
     sev_ordered = sorted(sev, key=lambda n: (-sev_w.get(n, -1.0), n))
-    entries: list[tuple[str, str]] = [
-        *((name, "frequency") for name in freq_ordered),
-        *((name, "severity") for name in sev_ordered),
-    ]
+    # Одна карточка на фичу: freq-порядок, затем sev-only
+    plot_features = list(dict.fromkeys([*freq_ordered, *sev_ordered]))
 
     selected_names = list(dict.fromkeys([*freq, *sev]))
     from_old = [f for f in selected_names if f in old_set]
@@ -649,15 +712,7 @@ def save_feature_selection_report(
             )
         return "\n".join(lines)
 
-    cards: list[str] = []
-    for feature, model_type in entries:
-        ru = feature_ru_name(feature)
-        weight = freq_w.get(feature) if model_type == "frequency" else sev_w.get(feature)
-        model_badge = (
-            _badge("классификация", "freq")
-            if model_type == "frequency"
-            else _badge("регрессия", "sev")
-        )
+    def _one_figure(feature: str, model_type: str) -> str:
         is_cat = feature in cat_set
         b64 = _render_feature_plot(
             plot_df,
@@ -668,30 +723,51 @@ def save_feature_selection_report(
             severity_target=severity_target,
             numeric_bins=numeric_bins,
         )
+        label = (
+            "Частота (классификация)"
+            if model_type == "frequency"
+            else "Severity (регрессия)"
+        )
         if b64 is None:
-            figure = (
+            return (
                 f"<figure><figcaption class='muted'>"
-                f"Нет графика ({model_type}) для {html.escape(feature)}"
+                f"Нет графика ({label}) для {html.escape(feature)}"
                 f"</figcaption></figure>"
             )
-        else:
-            label = (
-                "Частота (классификация)"
-                if model_type == "frequency"
-                else "Severity (регрессия)"
-            )
-            figure = (
-                f"<figure><img alt='{html.escape(feature)} {model_type}' "
-                f"src='data:image/png;base64,{b64}'/>"
-                f"<figcaption>{label}</figcaption></figure>"
-            )
+        return (
+            f"<figure><img alt='{html.escape(feature)} {model_type}' "
+            f"src='data:image/png;base64,{b64}'/>"
+            f"<figcaption>{label}</figcaption></figure>"
+        )
+
+    cards: list[str] = []
+    freq_set = set(freq)
+    sev_set = set(sev)
+    for feature in plot_features:
+        ru = feature_ru_name(feature)
+        in_freq = feature in freq_set
+        in_sev = feature in sev_set
+        badge_bits: list[str] = []
+        weight_bits: list[str] = []
+        if in_freq:
+            badge_bits.append(_badge("классификация", "freq"))
+            weight_bits.append(f"класс.: {_fmt_weight(freq_w.get(feature))}")
+        if in_sev:
+            badge_bits.append(_badge("регрессия", "sev"))
+            weight_bits.append(f"регр.: {_fmt_weight(sev_w.get(feature))}")
+        figures: list[str] = []
+        if in_freq:
+            figures.append(_one_figure(feature, "frequency"))
+        if in_sev:
+            figures.append(_one_figure(feature, "severity"))
         cards.append(
-            f"<article class='card' id='f-{html.escape(feature)}-{model_type}'>"
+            f"<article class='card' id='f-{html.escape(feature)}'>"
             f"<h3>{html.escape(ru)}</h3>"
             f"<div class='code'>{html.escape(feature)}</div>"
-            f"<div style='margin-top:6px'>{model_badge}</div>"
-            f"<p class='muted' style='margin:6px 0 0'>Значимость: {_fmt_weight(weight)}</p>"
-            f"<div class='plots'>{figure}</div>"
+            f"<div style='margin-top:6px'>{''.join(badge_bits)}</div>"
+            f"<p class='muted' style='margin:6px 0 0'>Значимость: "
+            f"{' · '.join(weight_bits)}</p>"
+            f"<div class='plots'>{''.join(figures)}</div>"
             f"</article>"
         )
 
