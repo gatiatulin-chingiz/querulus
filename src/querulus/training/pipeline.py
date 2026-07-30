@@ -264,6 +264,22 @@ def _mvp_features(df: pd.DataFrame, config: TrainingConfig) -> tuple[pd.DataFram
         for column in types["BINARY"] + types["CATEGORIAL"] + types["NUMERIC"]
         if column in data.columns and column not in config.drop_columns
     ]
+    # Selected-фичи из конфига: если колонка есть в df, не теряем её из-за TO_DROP AutoMVP.
+    requested = list(
+        dict.fromkeys(
+            [
+                *(config.frequency_features or ()),
+                *(config.severity_features or ()),
+            ]
+        )
+    )
+    for column in requested:
+        if (
+            column in data.columns
+            and column not in features
+            and column not in config.drop_columns
+        ):
+            features.append(column)
     categorical = list(
         dict.fromkeys(
             [
@@ -282,6 +298,8 @@ def _select_model_features(
     available_cat_features: list[str],
     requested_features: tuple[str, ...] | None,
     model_name: str,
+    *,
+    data_columns: set[str] | frozenset[str] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Выбрать признаки для конкретной модели или использовать все MVP-признаки."""
     if requested_features is None:
@@ -289,8 +307,20 @@ def _select_model_features(
     else:
         missing = [column for column in requested_features if column not in available_features]
         if missing:
+            cols = data_columns or set()
+            absent = [column for column in missing if column not in cols]
+            other = [column for column in missing if column not in absent]
+            details: list[str] = []
+            if absent:
+                details.append(
+                    f"нет в df ({len(absent)}): {absent} "
+                    f"— для synthetic пересоберите parquet "
+                    f"(python -m querulus.synthetic_dataset)"
+                )
+            if other:
+                details.append(f"не попали в MVP-пул ({len(other)}): {other}")
             raise ValueError(
-                f"Для модели {model_name!r} указаны неизвестные признаки: {missing}"
+                f"Для модели {model_name!r} неизвестные признаки. " + "; ".join(details)
             )
         features = list(requested_features)
     cat_features = [column for column in available_cat_features if column in features]
@@ -811,12 +841,14 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         cat_features,
         config.frequency_features,
         "frequency",
+        data_columns=set(data.columns),
     )
     severity_features, severity_cat_features = _select_model_features(
         features,
         cat_features,
         config.severity_features,
         "severity",
+        data_columns=set(data.columns),
     )
 
     CatBoostClassifier, CatBoostRegressor, _, EFeaturesSelectionAlgorithm, EShapCalcType = (

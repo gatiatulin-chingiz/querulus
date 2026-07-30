@@ -19,8 +19,8 @@ import pandas as pd  # noqa: E402
 from querulus.training.feature_labels import feature_ru_name
 from querulus.training.feature_selection_io import DEFAULT_FEATURE_SELECTION_DIR
 from querulus.training.selected_features import (
-    DEFAULT_FREQUENCY_FEATURES,
-    DEFAULT_SEVERITY_FEATURES,
+    PROD_FREQUENCY_FEATURES,
+    PROD_SEVERITY_FEATURES,
 )
 
 _EXPOSURE = "expos"
@@ -402,7 +402,7 @@ def _build_html(
 
   <section id="old-model">
     <h2>Признаки старой (прод) модели</h2>
-    <p class="muted">Источник: <code>selected_features.py</code>
+    <p class="muted">Источник: <code>PROD_*_FEATURES</code> в <code>selected_features.py</code>
       (= фичи из <code>config_cf_3.json</code> / <code>config_rg_3.json</code>).</p>
     <table>
       <thead>
@@ -481,12 +481,12 @@ def save_feature_selection_report(
     old_freq = list(
         old_frequency_features
         if old_frequency_features is not None
-        else DEFAULT_FREQUENCY_FEATURES
+        else PROD_FREQUENCY_FEATURES
     )
     old_sev = list(
         old_severity_features
         if old_severity_features is not None
-        else DEFAULT_SEVERITY_FEATURES
+        else PROD_SEVERITY_FEATURES
     )
     old_set = set(old_freq) | set(old_sev)
 

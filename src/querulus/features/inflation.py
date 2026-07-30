@@ -82,7 +82,8 @@ def deflate_to_base_year(
     """Перевести номинал в рубли ``base_year``: amount / cpi_level."""
     nominal = pd.to_numeric(amounts, errors="coerce")
     dates = pd.to_datetime(event_dates, errors="coerce")
-    level = cpi_level_for_years(dates.dt.year, base_year=base_year, levels=levels)
+    years = dates.year if isinstance(dates, pd.DatetimeIndex) else dates.dt.year
+    level = cpi_level_for_years(years, base_year=base_year, levels=levels)
     return nominal / level.where(level > 0)
 
 

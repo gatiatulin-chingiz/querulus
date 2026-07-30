@@ -17,6 +17,10 @@ from querulus.training.drift import filter_features_by_drift, format_psi_filter_
 from querulus.training.feature_selection_io import save_feature_selection
 from querulus.training.feature_selection_report import save_feature_selection_report
 from querulus.training.hpo import HpoResult, run_hpo
+from querulus.training.backward_elim import (
+    BackwardElimResult,
+    backward_eliminate_by_metric,
+)
 from querulus.training.noise_cut import NoiseCutResult, filter_features_by_noise
 from querulus.training.pipeline import (
     TrainingArtifacts,
@@ -41,7 +45,8 @@ class TrainLoopFlags:
 
     Только отбор фич: ``run_shap_select=True``, ``run_fit=False``
     (HPO/cal тогда тоже пропускаются). После SHAP — опциональный
-    ``run_noise_cut`` (отсев слабее ``FE_NOISE_UNIFORM``).
+    ``run_noise_cut`` (отсев слабее ``FE_NOISE_UNIFORM``), затем
+    ``run_backward_elim`` (срез с конца по PR-AUC / MAE до 1 фичи).
     """
 
     use_fe_features: bool = True
@@ -52,6 +57,7 @@ class TrainLoopFlags:
     run_shap_select: bool = True
     shap_n_features: int = 30
     run_noise_cut: bool = True
+    run_backward_elim: bool = True
     run_fit: bool = True
     run_hpo: bool = False
     run_calibration: bool = True
@@ -83,6 +89,8 @@ class TrainLoopResult:
     psi_report: pd.DataFrame | None = None
     frequency_noise_cut: NoiseCutResult | None = None
     severity_noise_cut: NoiseCutResult | None = None
+    frequency_backward_elim: BackwardElimResult | None = None
+    severity_backward_elim: BackwardElimResult | None = None
 
 
 def _drop_fe_columns(features: list[str] | tuple[str, ...]) -> list[str]:
@@ -124,6 +132,11 @@ def print_flags_table(flags: TrainLoopFlags) -> None:
             "RUN_NOISE_CUT",
             flags.run_noise_cut and flags.run_shap_select,
             "после FS: отсев фич слабее FE_NOISE_UNIFORM",
+        ),
+        (
+            "RUN_BACKWARD_ELIM",
+            flags.run_backward_elim and flags.run_shap_select,
+            "после noise-cut: срез с конца, best PR-AUC / MAE",
         ),
         ("RUN_FIT", flags.run_fit, "финальный fit (+ HPO/cal если включены)"),
         ("RUN_HPO", flags.run_hpo and flags.run_fit, "Optuna+MLflow (только при RUN_FIT)"),
@@ -338,6 +351,8 @@ def run_train_loop_new(
     shap_training: TrainingArtifacts | None = None
     freq_noise: NoiseCutResult | None = None
     sev_noise: NoiseCutResult | None = None
+    freq_back: BackwardElimResult | None = None
+    sev_back: BackwardElimResult | None = None
     if flags.run_shap_select and freq_features and sev_features:
         stage_start(
             "feature_select",
@@ -440,6 +455,95 @@ def run_train_loop_new(
         else:
             stage_skipped("noise_cut", "RUN_NOISE_CUT / пустой пул")
 
+        # После noise-cut: снимаем с конца по одной до 1, берём best PR-AUC / MAE.
+        if flags.run_backward_elim and freq_features and sev_features:
+            stage_start(
+                "backward_elim",
+                detail="drop from end → best pr_auc / mae",
+            )
+
+            def _noise_order(noise: NoiseCutResult | None, pool: list[str]) -> list[str] | None:
+                if noise is None:
+                    return None
+                ranked = (
+                    noise.importances[
+                        noise.importances["feature"] != noise.noise_feature
+                    ]
+                    .sort_values(["importance", "feature"], ascending=[False, True])
+                )
+                ordered = [f for f in ranked["feature"].tolist() if f in pool]
+                return ordered or None
+
+            freq_back = backward_eliminate_by_metric(
+                df,
+                features=freq_features,
+                target_column=base.frequency_target,
+                train_index=splits.train,
+                eval_index=splits.val,
+                task_type="classification",
+                mvp_types=freq_mvp,
+                random_state=base.frequency_random_state,
+                iterations=base.frequency_select_iterations,
+                early_stopping_rounds=base.frequency_select_early_stopping_rounds,
+                importance_order=_noise_order(freq_noise, freq_features),
+            )
+            sev_back = backward_eliminate_by_metric(
+                df,
+                features=sev_features,
+                target_column=base.severity_target,
+                train_index=splits.train,
+                eval_index=splits.val,
+                task_type="regression",
+                mvp_types=sev_mvp,
+                positive_target=base.severity_range is None,
+                random_state=base.severity_random_state,
+                iterations=base.severity_select_iterations,
+                early_stopping_rounds=base.severity_select_early_stopping_rounds,
+                importance_order=_noise_order(sev_noise, sev_features),
+            )
+            print(
+                f"[B] backward-elim freq: best {freq_back.metric_name}="
+                f"{freq_back.best_metric:.4f} "
+                f"n={len(freq_back.selected_features)}/{len(freq_features)} "
+                f"(steps={len(freq_back.history)})"
+            )
+            print(
+                f"[B] backward-elim sev: best {sev_back.metric_name}="
+                f"{sev_back.best_metric:.4f} "
+                f"n={len(sev_back.selected_features)}/{len(sev_features)} "
+                f"(steps={len(sev_back.history)})"
+            )
+            freq_features = list(freq_back.selected_features)
+            sev_features = list(sev_back.selected_features)
+            if not freq_features or not sev_features:
+                raise ValueError(
+                    "Backward-elim обнулил пул. "
+                    f"freq={len(freq_features)} sev={len(sev_features)}"
+                )
+            freq_mvp = slice_mvp_types(resolved_mvp, freq_features)
+            sev_mvp = slice_mvp_types(resolved_mvp, sev_features)
+            shap_training = replace(
+                shap_training,
+                frequency_features=freq_features,
+                severity_features=sev_features,
+                frequency_categorical_features=[
+                    c
+                    for c in shap_training.frequency_categorical_features
+                    if c in freq_features
+                ],
+                severity_categorical_features=[
+                    c
+                    for c in shap_training.severity_categorical_features
+                    if c in sev_features
+                ],
+            )
+            stage_done(
+                "backward_elim",
+                detail=f"freq={len(freq_features)} sev={len(sev_features)}",
+            )
+        else:
+            stage_skipped("backward_elim", "RUN_BACKWARD_ELIM / пустой пул")
+
         freq_summary = dict(shap_training.frequency_feature_selection_summary or {})
         sev_summary = dict(shap_training.severity_feature_selection_summary or {})
         if freq_noise is not None:
@@ -455,6 +559,36 @@ def run_train_loop_new(
                 "noise_rank": sev_noise.noise_rank,
                 "noise_was_last": sev_noise.noise_was_last,
                 "dropped_below_noise": list(sev_noise.dropped_below_noise),
+            }
+        if freq_back is not None:
+            freq_summary["backward_elim"] = {
+                "metric_name": freq_back.metric_name,
+                "best_metric": freq_back.best_metric,
+                "n_selected": len(freq_back.selected_features),
+                "ordered_features": list(freq_back.ordered_features),
+                "history": [
+                    {
+                        "n_features": step.n_features,
+                        "metric": step.metric,
+                        "dropped_feature": step.dropped_feature,
+                    }
+                    for step in freq_back.history
+                ],
+            }
+        if sev_back is not None:
+            sev_summary["backward_elim"] = {
+                "metric_name": sev_back.metric_name,
+                "best_metric": sev_back.best_metric,
+                "n_selected": len(sev_back.selected_features),
+                "ordered_features": list(sev_back.ordered_features),
+                "history": [
+                    {
+                        "n_features": step.n_features,
+                        "metric": step.metric,
+                        "dropped_feature": step.dropped_feature,
+                    }
+                    for step in sev_back.history
+                ],
             }
         shap_training = replace(
             shap_training,
@@ -501,6 +635,7 @@ def run_train_loop_new(
     else:
         stage_skipped("feature_select", "RUN_FEATURE_SELECT")
         stage_skipped("noise_cut", "нет feature_select")
+        stage_skipped("backward_elim", "нет feature_select")
 
     # Только отбор фич: без HPO / финального fit / cal
     if not flags.run_fit:
@@ -530,6 +665,8 @@ def run_train_loop_new(
             psi_report=psi_report,
             frequency_noise_cut=freq_noise,
             severity_noise_cut=sev_noise,
+            frequency_backward_elim=freq_back,
+            severity_backward_elim=sev_back,
         )
 
     freq_hpo: HpoResult | None = None
@@ -698,4 +835,6 @@ def run_train_loop_new(
         psi_report=psi_report,
         frequency_noise_cut=freq_noise,
         severity_noise_cut=sev_noise,
+        frequency_backward_elim=freq_back,
+        severity_backward_elim=sev_back,
     )

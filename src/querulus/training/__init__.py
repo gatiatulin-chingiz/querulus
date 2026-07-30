@@ -1,5 +1,9 @@
 """Обучение моделей querulus."""
 
+from querulus.training.backward_elim import (
+    BackwardElimResult,
+    backward_eliminate_by_metric,
+)
 from querulus.training.calibration import expected_calibration_error, fit_probability_calibrator
 from querulus.training.config import TrainingConfig
 from querulus.training.corr_filter import CorrFilterResult, correlation_filter_features
@@ -52,6 +56,7 @@ from querulus.training.triple_stack import (
 )
 
 __all__ = [
+    "BackwardElimResult",
     "CorrFilterResult",
     "DateSplitParts",
     "HpoResult",
@@ -66,6 +71,7 @@ __all__ = [
     "TrainingArtifacts",
     "TrainingConfig",
     "TripleStackResult",
+    "backward_eliminate_by_metric",
     "build_metrics_summary",
     "compare_severity_log1p",
     "correlation_filter_features",

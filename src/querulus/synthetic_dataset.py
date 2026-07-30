@@ -87,7 +87,7 @@ def build_synthetic_final_dataset(
     value_before_without = value_before * rng.uniform(0.85, 1.0, size=n_rows)
 
     event_year = pd.to_datetime(loss_dates).year.astype(int)
-    loss_dt = pd.to_datetime(loss_dates)
+    loss_dt = pd.Series(pd.to_datetime(loss_dates), name="LOSS_DATE_TIME")
 
     from querulus.features.inflation import deflate_to_base_year, real_feature_name
 
