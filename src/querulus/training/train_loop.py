@@ -11,7 +11,7 @@ import pandas as pd
 from querulus import PROJECT_ROOT
 from querulus.training.calibration import expected_calibration_error, fit_probability_calibrator
 from querulus.training.config import TrainingConfig, resolve_features_config
-from querulus.training.corr_filter import correlation_filter_features, slice_mvp_types
+from querulus.training.mvp_types import slice_mvp_types
 from querulus.training.drift_thresholds import DEFAULT_L1_THRESHOLD, DEFAULT_PSI_THRESHOLD
 from querulus.training.drift import filter_features_by_drift, format_psi_filter_report
 from querulus.training.feature_selection_io import (
@@ -53,8 +53,6 @@ class TrainLoopFlags:
     """
 
     use_fe_features: bool = True
-    run_corr_filter: bool = True
-    corr_filter_threshold: float = 0.95
     run_psi_filter: bool = True
     psi_threshold: float = DEFAULT_PSI_THRESHOLD
     l1_threshold: float = DEFAULT_L1_THRESHOLD
@@ -125,11 +123,6 @@ def print_flags_table(flags: TrainLoopFlags) -> None:
     """Сводка флагов блока B."""
     rows = [
         ("USE_FE_FEATURES", flags.use_fe_features, "derived/incident FE_* в пуле"),
-        (
-            "RUN_CORR_FILTER",
-            flags.run_corr_filter,
-            f"Pearson |r|>{flags.corr_filter_threshold:g}, раздельно freq/sev",
-        ),
         (
             "RUN_PSI_FILTER",
             flags.run_psi_filter,
@@ -255,62 +248,6 @@ def run_train_loop_new(
     )
 
     # DQ (clip≥0 + winsorize) — в сборке датасета (features.pipeline), не в блоке B
-    train_df = df.loc[splits.train]
-
-    if flags.run_corr_filter and freq_features and sev_features:
-        thr = float(flags.corr_filter_threshold)
-        stage_start("corr_filter", detail=f"|r|>{thr:g}; freq + sev on train")
-        freq_corr = correlation_filter_features(
-            train_df,
-            freq_features,
-            base.frequency_target,
-            threshold=thr,
-        )
-        sev_corr = correlation_filter_features(
-            train_df,
-            sev_features,
-            base.severity_target,
-            threshold=thr,
-        )
-        freq_features = list(freq_corr.kept_features)
-        sev_features = list(sev_corr.kept_features)
-        freq_mvp = slice_mvp_types(resolved_mvp, freq_features)
-        sev_mvp = slice_mvp_types(resolved_mvp, sev_features)
-        print(
-            f"[B] corr-filter freq dropped ({len(freq_corr.eliminated_features)}): "
-            f"{list(freq_corr.eliminated_features) or '(none)'}"
-        )
-        print(
-            f"[B] corr-filter sev dropped ({len(sev_corr.eliminated_features)}): "
-            f"{list(sev_corr.eliminated_features) or '(none)'}"
-        )
-        (out_dir / "corr_filter_new.json").write_text(
-            json.dumps(
-                {
-                    "threshold": thr,
-                    "frequency": {
-                        "kept": freq_features,
-                        "eliminated": list(freq_corr.eliminated_features),
-                    },
-                    "severity": {
-                        "kept": sev_features,
-                        "eliminated": list(sev_corr.eliminated_features),
-                    },
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        stage_done(
-            "corr_filter",
-            detail=(
-                f"freq kept={len(freq_features)} drop={len(freq_corr.eliminated_features)}; "
-                f"sev kept={len(sev_features)} drop={len(sev_corr.eliminated_features)}"
-            ),
-        )
-    else:
-        stage_skipped("corr_filter", "RUN_CORR_FILTER")
 
     psi_dropped: list[str] = []
     psi_report: pd.DataFrame | None = None

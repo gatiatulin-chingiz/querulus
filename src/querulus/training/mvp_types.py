@@ -131,3 +131,15 @@ DEFAULT_OTHER_COLS: tuple[str, ...] = (
     'TARGET_FREQ_PRET_AMOUNT',
     'TARGET_SEV_CLAIMS_AMOUNT',
 )
+
+
+def slice_mvp_types(
+    mvp_types: dict[str, tuple[str, ...]],
+    features: list[str] | tuple[str, ...],
+) -> dict[str, tuple[str, ...]]:
+    """Оставить в types_dict только колонки из ``features``."""
+    feature_set = set(features)
+    return {
+        key: tuple(col for col in cols if col in feature_set)
+        for key, cols in mvp_types.items()
+    }

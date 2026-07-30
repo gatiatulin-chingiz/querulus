@@ -6,7 +6,6 @@ from querulus.training.backward_elim import (
 )
 from querulus.training.calibration import expected_calibration_error, fit_probability_calibrator
 from querulus.training.config import TrainingConfig
-from querulus.training.corr_filter import CorrFilterResult, correlation_filter_features
 from querulus.training.drift import (
     feature_drift_report,
     filter_features_by_drift,
@@ -61,7 +60,6 @@ from querulus.training.triple_stack import (
 
 __all__ = [
     "BackwardElimResult",
-    "CorrFilterResult",
     "DateSplitParts",
     "HpoResult",
     "TARGET_STACKS",
@@ -78,7 +76,6 @@ __all__ = [
     "backward_eliminate_by_metric",
     "build_metrics_summary",
     "compare_severity_log1p",
-    "correlation_filter_features",
     "drop_zero_importance_features",
     "expected_calibration_error",
     "feature_drift_report",

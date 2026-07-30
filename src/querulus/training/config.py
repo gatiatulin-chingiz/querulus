@@ -90,7 +90,6 @@ class TrainingConfig:
     severity_sample_weight: Literal["none", "sqrt", "linear"] = "none"
     # Train-loop (блок B): FE в пуле обучения
     use_fe_features: bool = True
-    corr_filter_threshold: float = 0.95
 
     @property
     def drop_columns(self) -> tuple[str, ...]:
