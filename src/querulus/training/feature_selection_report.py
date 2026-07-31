@@ -31,6 +31,18 @@ _AMOUNT_PLOT_CAP = 400_000.0
 _AMOUNT_EQUAL_BINS = 20
 _AMOUNT_QUANTILE_BINS = 10
 _NAN_LABEL = "NaN"
+# Годы / месяцы / часы — только дискретные уровни, без pd.cut / pretty-edges
+_DISCRETE_INT_FEATURES = frozenset(
+    {
+        "EVENT_YEAR",
+        "EVENT_MONTH",
+        "EVENT_HOUR",
+        "EVENT_DAY",
+        "GUILTY_OBJECT_YEAR",
+        "VICTIM_OBJECT_YEAR",
+        "POLICYHOLDER_OBJECT_YEAR",
+    }
+)
 
 
 def _importance_map(frame: pd.DataFrame | None) -> dict[str, float]:
@@ -201,14 +213,42 @@ def _as_ordered_string_categories(
     )
 
 
+def _as_discrete_int_categories(series: pd.Series) -> pd.Series:
+    """Год/месяц/… → целые строковые уровни по возрастанию (+ NaN)."""
+
+    def _lab(x: object) -> str:
+        if pd.isna(x):
+            return _NAN_LABEL
+        num = float(pd.to_numeric(x, errors="coerce"))
+        if not np.isfinite(num):
+            return _NAN_LABEL
+        return str(int(round(num)))
+
+    mapped = series.map(_lab)
+    uniq = [str(x) for x in mapped.unique().tolist() if str(x) != _NAN_LABEL]
+    if (mapped == _NAN_LABEL).any():
+        uniq = uniq + [_NAN_LABEL]
+    numeric_order = _infer_numeric_level_order(uniq) or sorted(uniq)
+    return pd.Series(
+        pd.Categorical(mapped, categories=numeric_order, ordered=True),
+        index=series.index,
+    )
+
+
 def _prepare_feature_column(
     series: pd.Series,
     *,
     is_categorical: bool,
     numeric_bins: int,
     bin_method: str = "equal",
+    feature_name: str | None = None,
 ) -> tuple[pd.Series, bool]:
     """Подготовить колонку для группировки; вернуть (series, as_categorical)."""
+    if feature_name in _DISCRETE_INT_FEATURES or (
+        feature_name is not None and feature_name.endswith("_YEAR")
+    ):
+        return _as_discrete_int_categories(series), True
+
     if _is_binary_series(series):
         # 0 / 1 / NaN — три категории, не один float-бин
         mapped = pd.to_numeric(series, errors="coerce").round()
@@ -246,37 +286,37 @@ def _prepare_feature_column(
             return _as_ordered_string_categories(series, amount_order), True
         numeric_order = _infer_numeric_level_order(uniq)
         if numeric_order is not None:
+            # "2024.0" → discrete int labels, без half-year cut
+            if all(
+                _looks_like_whole_number(x)
+                for x in uniq
+                if x != _NAN_LABEL
+            ):
+                return _as_discrete_int_categories(series), True
             return _as_ordered_string_categories(series, numeric_order), True
         # unordered cat: явная метка NaN
         mapped = as_str.fillna(_NAN_LABEL)
         return mapped, True
 
-    # Int64 / float-годы с небольшим числом уровней — категории по возрастанию
+    # Int64 / float с небольшим числом уровней — категории по возрастанию
     if (
         pd.api.types.is_numeric_dtype(series)
         and not pd.api.types.is_bool_dtype(series)
         and series.nunique(dropna=True) <= 15
         and bin_method == "equal"
     ):
-        def _lab(x: object) -> str:
-            if pd.isna(x):
-                return _NAN_LABEL
-            num = float(x)
-            if abs(num - round(num)) < 1e-9:
-                return str(int(round(num)))
-            return f"{num:g}"
-
-        mapped = series.map(_lab)
-        uniq = [str(x) for x in mapped.unique().tolist() if str(x) != _NAN_LABEL]
-        if (mapped == _NAN_LABEL).any():
-            uniq = uniq + [_NAN_LABEL]
-        numeric_order = _infer_numeric_level_order(uniq) or uniq
-        return pd.Series(
-            pd.Categorical(mapped, categories=numeric_order, ordered=True),
-            index=series.index,
-        ), True
+        return _as_discrete_int_categories(series), True
 
     return _bin_continuous(series, numeric_bins, method=bin_method), True
+
+
+def _looks_like_whole_number(text: str) -> bool:
+    """True, если строка — целое (в т.ч. ``2024.0``)."""
+    try:
+        num = float(text)
+    except ValueError:
+        return False
+    return bool(np.isfinite(num) and abs(num - round(num)) < 1e-9)
 
 
 def _group_for_plot(
@@ -297,6 +337,7 @@ def _group_for_plot(
         is_categorical=is_categorical,
         numeric_bins=numeric_bins,
         bin_method=bin_method,
+        feature_name=feature,
     )
     data[feature] = prepared
     ordered_cats = (
