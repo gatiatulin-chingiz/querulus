@@ -25,8 +25,13 @@ from querulus.training.selected_features import (
 
 _EXPOSURE = "expos"
 _MAX_CAT_LEVELS = 25
-# EDA для износа: больше бинов + квантили; суммы > cap не рисуем
-_AMOUNT_PLOT_FEATURES = frozenset({"FE_VALUE_BEFORE_DIFF"})
+# EDA для денежных FE: полный диапазон + ≤cap + квантили на ≤cap
+_AMOUNT_PLOT_FEATURES = frozenset(
+    {
+        "FE_VALUE_BEFORE_DIFF",
+        "FE_VALUE_BEFORE_WITH_REAL_2020",
+    }
+)
 _AMOUNT_PLOT_CAP = 400_000.0
 _AMOUNT_EQUAL_BINS = 20
 _AMOUNT_QUANTILE_BINS = 10
@@ -503,7 +508,7 @@ def _render_feature_plots(
     """Список ``(подпись, base64 PNG)``; пустой список при ошибке.
 
     Severity — только ``severity_target > 0``.
-    ``FE_VALUE_BEFORE_DIFF``: cap ≤400k, равные бины + квантили.
+    Денежные FE (DIFF / VALUE_BEFORE_WITH_REAL): полный + ≤400k + квантили ≤400k.
     """
     if feature not in df.columns:
         return []
@@ -516,36 +521,32 @@ def _render_feature_plots(
         if plot_df.empty:
             return []
 
-    # Спец. правила для износа в рублях
+    # (note, method, n_bins, apply_cap)
     if feature in _AMOUNT_PLOT_FEATURES:
-        vals = pd.to_numeric(plot_df[feature], errors="coerce")
-        plot_df = plot_df.loc[vals.isna() | (vals <= _AMOUNT_PLOT_CAP)]
-        if plot_df.empty:
-            return []
-        specs: list[tuple[str, str, int]] = [
-            (
-                f"равные бины, <= {_AMOUNT_PLOT_CAP:,.0f}".replace(",", " "),
-                "equal",
-                _AMOUNT_EQUAL_BINS,
-            ),
-            (
-                f"квантили, <= {_AMOUNT_PLOT_CAP:,.0f}".replace(",", " "),
-                "quantile",
-                _AMOUNT_QUANTILE_BINS,
-            ),
+        cap_note = f"<= {_AMOUNT_PLOT_CAP:,.0f}".replace(",", " ")
+        specs: list[tuple[str, str, int, bool]] = [
+            ("равные бины, полный диапазон", "equal", _AMOUNT_EQUAL_BINS, False),
+            (f"равные бины, {cap_note}", "equal", _AMOUNT_EQUAL_BINS, True),
+            (f"квантили, {cap_note}", "quantile", _AMOUNT_QUANTILE_BINS, True),
         ]
         force_cat = False
     else:
-        specs = [("", "equal", numeric_bins)]
+        specs = [("", "equal", numeric_bins, False)]
         force_cat = is_categorical
 
     out: list[tuple[str, str]] = []
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            for note, method, n_bins in specs:
+            for note, method, n_bins, apply_cap in specs:
+                slice_df = plot_df
+                if apply_cap:
+                    vals = pd.to_numeric(slice_df[feature], errors="coerce")
+                    slice_df = slice_df.loc[vals.isna() | (vals <= _AMOUNT_PLOT_CAP)]
+                if slice_df.empty:
+                    continue
                 grouped = _group_for_plot(
-                    plot_df,
+                    slice_df,
                     feature,
                     model_type=model_type,
                     is_categorical=force_cat,
