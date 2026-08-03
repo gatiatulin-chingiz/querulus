@@ -70,7 +70,11 @@ def victim_parquet_filter_query(filters: dict[str, Any] | None = None) -> str:
 
 
 def loss_object_types_sql(filters: dict[str, Any] | None = None) -> str:
-    """SQL: поля из oisuu81_t_Losses, отсутствующие в victim parquet."""
+    """SQL: VictimObjectType из Losses + форма ВФ из PaymentOrders.
+
+    ``REFUND_FORM_BY_PAYMENT_ORDER`` ← ``oisuu81_t_PaymentOrders.RefundFormByApplication``
+    (не Losses.RefundFormByPaymentOrder). На убыток — первая платёжка по PODateTime.
+    """
     filters_cfg = filters or load_dataset_filters()
     victim_cfg = filters_cfg["victim"]
     sql_cfg = filters_cfg["loss_object_types_sql"]
@@ -78,11 +82,24 @@ def loss_object_types_sql(filters: dict[str, Any] | None = None) -> str:
     risk = victim_cfg["risk"].replace("'", "''")
     insurance_type_group = sql_cfg["insurance_type_group"].replace("'", "''")
     return f"""
+    WITH po AS (
+        SELECT
+            po.LossNumber,
+            po.RefundFormByApplication,
+            ROW_NUMBER() OVER (
+                PARTITION BY po.LossNumber
+                ORDER BY po.PODateTime ASC, po.ID ASC
+            ) AS rn
+        FROM [OISUU_report].[dbo].[oisuu81_t_PaymentOrders] AS po
+    )
     SELECT
         l.LossNumber AS LOSS_NUMBER,
         l.VictimObjectType AS VICTIM_OBJECT_TYPE,
-        l.RefundFormByPaymentOrder AS REFUND_FORM_BY_PAYMENT_ORDER
+        po.RefundFormByApplication AS REFUND_FORM_BY_PAYMENT_ORDER
     FROM [OISUU_report].[dbo].[oisuu81_t_Losses] AS l
+    LEFT JOIN po
+        ON po.LossNumber = l.LossNumber
+       AND po.rn = 1
     WHERE l.InsuranceTypeGroup = '{insurance_type_group}'
       AND l.LossProcess IN ({processes})
       AND l.Risk = '{risk}'
@@ -90,7 +107,7 @@ def loss_object_types_sql(filters: dict[str, Any] | None = None) -> str:
 
 
 def merge_loss_object_types(df: pd.DataFrame, df_loss_types: pd.DataFrame) -> pd.DataFrame:
-    """Присоединить поля из oisuu81_t_Losses к victim по LOSS_NUMBER."""
+    """Присоединить VictimObjectType и форму ВФ (из PaymentOrders) к victim по LOSS_NUMBER."""
     loss_types = _normalize_victim_object_type_column(df_loss_types)
     columns = ["LOSS_NUMBER", VICTIM_OBJECT_TYPE_COLUMN]
     if "REFUND_FORM_BY_PAYMENT_ORDER" in loss_types.columns:

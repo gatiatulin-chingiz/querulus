@@ -21,7 +21,7 @@
   },
 
   "loss_object_types_sql": {
-    "_comment": "VictimObjectType из oisuu81_t_Losses (нет в victim parquet). loss_processes/risk — из victim.",
+    "_comment": "VictimObjectType из Losses; REFUND_FORM_BY_PAYMENT_ORDER ← PaymentOrders.RefundFormByApplication. loss_processes/risk — из victim.",
     "insurance_type_group": "ОСАГО"
   },
 

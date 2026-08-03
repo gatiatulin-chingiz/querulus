@@ -149,14 +149,27 @@
       <h3>1. Каркас строк</h3>
 <pre class="sql">FROM df_victim
 LEFT JOIN (
-    SELECT LossNumber, VictimObjectType, RefundFormByPaymentOrder
-    FROM OISUU_report.dbo.oisuu81_t_Losses
-    WHERE InsuranceTypeGroup = 'ОСАГО'
-      AND LossProcess IN (
+    WITH po AS (
+        SELECT LossNumber, RefundFormByApplication,
+               ROW_NUMBER() OVER (
+                   PARTITION BY LossNumber
+                   ORDER BY PODateTime ASC, ID ASC
+               ) AS rn
+        FROM OISUU_report.dbo.oisuu81_t_PaymentOrders
+    )
+    SELECT
+        l.LossNumber,
+        l.VictimObjectType,
+        po.RefundFormByApplication AS REFUND_FORM_BY_PAYMENT_ORDER
+    FROM OISUU_report.dbo.oisuu81_t_Losses AS l
+    LEFT JOIN po
+      ON po.LossNumber = l.LossNumber AND po.rn = 1
+    WHERE l.InsuranceTypeGroup = 'ОСАГО'
+      AND l.LossProcess IN (
             'Прямое ОСАГО (с 1 марта 2009)',
             'Традиционное ОСАГО'
           )
-      AND Risk = 'Ущерб имуществу третьих лиц'
+      AND l.Risk = 'Ущерб имуществу третьих лиц'
 ) df_loss_object_types
   ON df_victim.LOSS_NUMBER = df_loss_object_types.LossNumber
 
@@ -184,6 +197,12 @@ WHERE df_victim.REFUND_FORM_DETAILED IN (
           <code>VICTIM_POLICYHOLDER_TYPE = 'Физ. Лицо'</code> — тип страхователя
           <em>потерпевшего</em> (поле из victim). Не заявитель и не виновник.
           Юрлица и прочие типы отсекаются целиком.
+        </li>
+        <li>
+          <code>REFUND_FORM_BY_PAYMENT_ORDER</code> ←
+          <code>oisuu81_t_PaymentOrders.RefundFormByApplication</code>
+          (первая платёжка по убытку: min <code>PODateTime</code>), не
+          <code>Losses.RefundFormByPaymentOrder</code>.
         </li>
       </ul>
 
