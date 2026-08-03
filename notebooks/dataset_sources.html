@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Querulus — источники датасета</title>
+  <style>
+    :root {
+      --bg: #f7f5f1;
+      --surface: #fff;
+      --ink: #1a1a1a;
+      --muted: #5c5c5c;
+      --line: #ddd8ce;
+      --accent: #0d5c63;
+      --accent-soft: #e6f2f3;
+      --code-bg: #eeece7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.5;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse at 10% 0%, #e8f0ef 0%, transparent 45%),
+        radial-gradient(ellipse at 90% 10%, #f0e9df 0%, transparent 40%),
+        var(--bg);
+    }
+    header, main, nav {
+      max-width: 980px;
+      margin-left: auto;
+      margin-right: auto;
+      padding-left: 1.25rem;
+      padding-right: 1.25rem;
+    }
+    header { padding-top: 2rem; padding-bottom: 0.75rem; }
+    header h1 {
+      margin: 0 0 0.35rem;
+      font-size: 1.6rem;
+      color: var(--accent);
+      letter-spacing: -0.02em;
+    }
+    header p { margin: 0; color: var(--muted); }
+    nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1rem;
+      margin-bottom: 1rem;
+    }
+    nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+    nav a:hover { text-decoration: underline; }
+    main { padding-bottom: 2.5rem; }
+    section {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 1rem 1.2rem 1.15rem;
+      margin-bottom: 1rem;
+    }
+    h2 {
+      margin: 0 0 0.65rem;
+      font-size: 1.15rem;
+      color: var(--accent);
+      border-bottom: 2px solid var(--accent-soft);
+      padding-bottom: 0.3rem;
+    }
+    h3 { margin: 1rem 0 0.4rem; font-size: 1rem; }
+    p { margin: 0.4rem 0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+      margin: 0.5rem 0;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 0.4rem 0.55rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+    }
+    tr:nth-child(even) td { background: #fafaf8; }
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.86em;
+      background: var(--code-bg);
+      padding: 0.05em 0.3em;
+      border-radius: 3px;
+    }
+    pre.sql {
+      font-family: Consolas, "Courier New", monospace;
+      background: #1e2a2b;
+      color: #e8eeef;
+      padding: 0.75rem 0.9rem;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 0.78rem;
+      line-height: 1.4;
+      margin: 0.45rem 0 0.55rem;
+      white-space: pre-wrap;
+    }
+    ul { margin: 0.35rem 0 0.7rem; padding-left: 1.15rem; }
+    li { margin: 0.3rem 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Querulus — источники датасета</h1>
+    <p>TARGET_FREQ / TARGET_SEV: источники, фильтры, джойны.</p>
+  </header>
+
+  <nav>
+    <a href="#pitch">Выжимка</a>
+    <a href="#build">Сборка</a>
+    <a href="#targets">Таргеты</a>
+  </nav>
+
+  <main>
+    <section id="pitch">
+      <h2>Выжимка</h2>
+      <ul>
+        <li>
+          <strong>Модель.</strong>
+          На инцидент: <code>TARGET_FREQ</code> (0/1 — будет ли доплата после первичного УУ)
+          и <code>TARGET_SEV</code> (сумма доплаты, ₽).
+        </li>
+        <li>
+          <strong>Зерно.</strong>
+          Одна строка = один инцидент. Если в инциденте несколько убытков,
+          в каркас берётся убыток с наименьшим номером.
+        </li>
+        <li>
+          <strong>Метка.</strong>
+          По каждому иску — сумма с последней принятой инстанции; по претензиям —
+          доплаты с ответом «Выплата» / «Частичная выплата».
+          Freq = сумма по искам и претензиям &gt; 0; Sev = эта сумма в рублях.
+        </li>
+      </ul>
+    </section>
+
+    <section id="build">
+      <h2>Сборка df (источники, JOIN, WHERE)</h2>
+
+      <h3>1. Каркас строк</h3>
+<pre class="sql">FROM df_victim
+LEFT JOIN (
+    SELECT LossNumber, VictimObjectType, RefundFormByPaymentOrder
+    FROM OISUU_report.dbo.oisuu81_t_Losses
+    WHERE InsuranceTypeGroup = 'ОСАГО'
+      AND LossProcess IN (
+            'Прямое ОСАГО (с 1 марта 2009)',
+            'Традиционное ОСАГО'
+          )
+      AND Risk = 'Ущерб имуществу третьих лиц'
+) df_loss_object_types
+  ON df_victim.LOSS_NUMBER = df_loss_object_types.LossNumber
+
+WHERE df_victim.REFUND_FORM_DETAILED IN (
+        'Ремонт',
+        'Денежная',
+        'Денежная. Отказ от ремонта',
+        'Ремонт. Смена СТОА'
+      )
+  AND df_victim.PAYMENT_ORDER_DATE_TIME &gt;= '2020-01-01'
+  AND df_victim.PAYMENT_ORDER_DATE_TIME &lt;= '2025-06-30'
+  AND df_victim.LOSS_PROCESS IN (
+        'Прямое ОСАГО (с 1 марта 2009)',
+        'Традиционное ОСАГО'
+      )
+  AND df_victim.RISK = 'Ущерб имуществу третьих лиц'
+  AND df_loss_object_types.VictimObjectType = 'Автотранспорт'
+  AND VICTIM_POLICYHOLDER_TYPE = 'Физ. Лицо'</pre>
+      <ul>
+        <li>
+          На инцидент оставляем одну строку: сортировка по номеру убытка по возрастанию,
+          берём первую (первичный / минимальный убыток).
+        </li>
+        <li>
+          <code>VICTIM_POLICYHOLDER_TYPE = 'Физ. Лицо'</code> — тип страхователя
+          <em>потерпевшего</em> (поле из victim). Не заявитель и не виновник.
+          Юрлица и прочие типы отсекаются целиком.
+        </li>
+      </ul>
+
+      <h3>2. Калькуляция / износ — <code>oisuu81.dbo._InfoRg14746</code></h3>
+      <p>
+        Не таргет: признаки ремонта и износа на инцидент
+        (<code>AMOUNT_REPAIR</code>, <code>SHARE_WORK</code>, <code>SHARE_WEAROUT</code>).
+      </p>
+<pre class="sql">FROM oisuu81.dbo._InfoRg14746 AS i
+LEFT JOIN OISUU_report.dbo.oisuu81_t_Losses AS l
+  ON l.LossID = i._Fld14747RRef
+LEFT JOIN OISUU_report.dbo.oisuu81_t_IncidentToLoss AS itl
+  ON l.LossID = itl.LossID
+
+WHERE YEAR(l.IssueDate) IS NOT NULL
+  AND l.LossProcess IN (
+        'Прямое ОСАГО (с 1 марта 2009)',
+        'Традиционное ОСАГО'
+      )
+  AND l.Risk = 'Ущерб имуществу третьих лиц'
+
+-- на инцидент одна строка:
+--   ORDER BY LossNumber DESC, _Period DESC → берём первую
+--   (последний убыток инцидента + последний период расчёта)</pre>
+      <ul>
+        <li>
+          Из регистра: сумма ремонта без износа, стоимость запчастей, работы, материалы,
+          процент износа, стоимость с учётом износа, пробег, дата начала эксплуатации и др.
+        </li>
+        <li>
+          После выгрузки: процент износа выше 50 обрезается до 50;
+          <code>SHARE_WORK</code> = работы / сумма ремонта без износа;
+          в df уходят <code>AMOUNT_REPAIR</code>, <code>SHARE_WORK</code>, <code>SHARE_WEAROUT</code>
+          (LEFT JOIN к каркасу по номеру инцидента).
+        </li>
+        <li>
+          Важно: каркас строк — убыток с <em>минимальным</em> номером;
+          калькуляция — с <em>максимального</em> убытка инцидента.
+        </li>
+      </ul>
+
+      <h3>3. Иски → суммы на инцидент</h3>
+<pre class="sql">FROM OISUU_report.Datamart.oisuu81_t_IncomingClaimNewLogicByInst AS icnl
+LEFT JOIN OISUU_report.dbo.oisuu81_t_IncidentToLoss AS itl
+  ON itl.LossNumber = icnl.LinkLossNumber
+LEFT JOIN OISUU_report.dbo.oisuu81_t_Losses AS l
+  ON l.LossNumber = itl.LossNumber
+
+WHERE (icnl.ClaimOrigin IN ('ВСК', 'Обращение к ФУ') OR icnl.ClaimOrigin IS NULL)
+  AND (icnl.ClaimItem NOT IN ('ВСК - 3 лицо') OR icnl.ClaimItem IS NULL)
+  AND l.LossProcess IN (
+        'Прямое ОСАГО (с 1 марта 2009)',
+        'Традиционное ОСАГО'
+      )</pre>
+      <ul>
+        <li>
+          <code>ClaimOrigin IS NULL</code> — иски без заполненного происхождения не отбрасываем;
+          в выборку попадают и «ВСК» / «Обращение к ФУ», и пустое значение.
+        </li>
+        <li>
+          <strong>Отсев пустых инстанций.</strong>
+          Не берём строку, если решение = «не принято», либо одновременно пусты
+          (не заполнены) все суммы взыскания:
+          взыскано с госпошлиной, основной долг, износ, УТС.
+        </li>
+        <li>
+          <strong>Какая инстанция у иска.</strong>
+          У одного иска несколько инстанций во времени. Берём одну строку на пару
+          (номер убытка, номер иска): сортируем по дате периода заявленных требований
+          (<code>ClaimedValuePeriod</code>) и оставляем самую позднюю
+          <em>принятую</em> — это финальный исход иска для метки, а не промежуточный.
+        </li>
+        <li>
+          <strong>Финансовый уполномоченный (ФУ).</strong>
+          Строка считается ФУ, если номер инстанции в ОИСУУ = 6,
+          <em>или</em> номер = 1 и происхождение иска = «Обращение к ФУ»
+          (в первой инстанции ФУ помечается через происхождение, не только через код 6).
+          ФУ — досудебная стадия: если по этому иску уже есть хотя бы одна принятая
+          судебная инстанция (коды 1–5, кроме строк ФУ выше), сумму с ФУ не берём —
+          берём суд.
+        </li>
+        <li>
+          <strong>Сумма на инцидент.</strong>
+          После выбора одной инстанции на каждый иск:
+          сначала складываем суммы исков внутри одного убытка,
+          затем складываем по всем убыткам инцидента.
+          Для частоты — поле «взыскано с госпошлиной»;
+          для тяжести — основной долг + износ + УТС.
+        </li>
+      </ul>
+
+      <h3>4. Претензии → доплаты на инцидент</h3>
+<pre class="sql">FROM OISUU_report.dbo.oisuu81_t_Pretensions AS p
+LEFT JOIN OISUU_report.dbo.oisuu81_t_IncidentToLoss AS itl
+  ON p.LossID = itl.LossID
+
+WHERE p.InsuranceTypeGroups = 'ОСАГО'
+  AND p.AnswerType IN ('Выплата', 'Частичная выплата')</pre>
+      <ul>
+        <li>
+          После соединения с инцидентом одна претензия может дать несколько строк
+          (несколько убытков). Сначала на пару (инцидент, номер претензии) берём
+          максимум доплаты и доплаты УТС — чтобы не удвоить одну претензию.
+          Затем по инциденту складываем доплаты разных претензий.
+        </li>
+      </ul>
+
+      <h3>5. Склейка в итоговый df</h3>
+<pre class="sql">FROM df
+LEFT JOIN df_calc_agg
+  ON df.INCIDENT_NUMBER = df_calc_agg.INCIDENT_NUMBER
+LEFT JOIN claims_by_incident
+  ON df.INCIDENT_NUMBER = claims_by_incident.INCIDENT_NUMBER
+LEFT JOIN pretensions_by_incident
+  ON df.INCIDENT_NUMBER = pretensions_by_incident.INCIDENT_NUMBER</pre>
+    </section>
+
+    <section id="targets">
+      <h2>TARGET_FREQ / TARGET_SEV</h2>
+      <table>
+        <thead>
+          <tr><th>Таргет</th><th>Формула</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>TARGET_FREQ</code></td>
+            <td>
+              1, если сумма «взыскано с госпошлиной» по выбранным инстанциям исков
+              плюс доплаты претензий (включая УТС) &gt; 0; иначе 0
+            </td>
+          </tr>
+          <tr>
+            <td><code>TARGET_SEV</code></td>
+            <td>
+              сумма по искам (основной долг + износ + УТС с выбранных инстанций)
+              плюс доплаты претензий (включая УТС), ₽
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+  </main>
+</body>
+</html>

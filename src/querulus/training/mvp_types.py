@@ -114,7 +114,14 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': [],
              'FE_REFUND_FORM_MATCH',
              'FE_REFUND_FORM_MISMATCH',
              'FE_REFUND_IS_CASH',
-             'FE_REFUND_IS_REPAIR'],
+             'FE_REFUND_IS_REPAIR',
+             'TER_OSAGO',
+             'LOSS_UNIT_ZONE',
+             'FEDERAL_DISTRICT',
+             'GUILTY_OBJECT_POWER',
+             'MINIMIZATION_KIND',
+             'MULTIDRIVE',
+             'INSURANCE_TYPE_NAME'],
  'BINARY': ['VICTIM_VEHICLE_IS_JAPAN']}
 
 DEFAULT_OTHER_COLS: tuple[str, ...] = (

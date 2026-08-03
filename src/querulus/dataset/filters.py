@@ -56,12 +56,14 @@ def victim_parquet_filter_query(filters: dict[str, Any] | None = None) -> str:
     forms = _quote_list(cfg["refund_forms"])
     processes = _quote_list(cfg["loss_processes"])
     risk = json.dumps(cfg["risk"], ensure_ascii=False)
-    date_from = json.dumps(cfg["loss_date_from"])
-    date_to = json.dumps(cfg["loss_date_to"])
+    # Окно выборки: date_column / date_from / date_to (по умолчанию — поручение на выплату).
+    date_col = cfg.get("date_column") or cfg.get("loss_date_column") or "PAYMENT_ORDER_DATE_TIME"
+    date_from = json.dumps(cfg.get("date_from") or cfg.get("loss_date_from"))
+    date_to = json.dumps(cfg.get("date_to") or cfg.get("loss_date_to"))
     return (
         f"REFUND_FORM_DETAILED in [{forms}]"
-        f" and LOSS_DATE_TIME >= {date_from}"
-        f" and LOSS_DATE_TIME <= {date_to}"
+        f" and {date_col} >= {date_from}"
+        f" and {date_col} <= {date_to}"
         f" and LOSS_PROCESS in [{processes}]"
         f" and RISK == {risk}"
     )

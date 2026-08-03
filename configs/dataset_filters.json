@@ -2,15 +2,16 @@
   "_comment": "Единые фильтры пайплайна querulus.dataset. Редактируйте здесь, не в коде шагов.",
 
   "victim": {
-    "_comment": "Фильтр строк victim parquet (pandas query). T0 — заявление первичного убытка.",
+    "_comment": "Фильтр строк victim parquet. Окно выборки — по дате поручения на выплату (не LOSS_DATE_TIME); инфляционный базис денежных FE — 2020.",
     "refund_forms": [
       "Ремонт",
       "Денежная",
       "Денежная. Отказ от ремонта",
       "Ремонт. Смена СТОА"
     ],
-    "loss_date_from": "2022-01-01",
-    "loss_date_to": "2025-06-30",
+    "date_column": "PAYMENT_ORDER_DATE_TIME",
+    "date_from": "2020-01-01",
+    "date_to": "2025-06-30",
     "loss_processes": [
       "Прямое ОСАГО (с 1 марта 2009)",
       "Традиционное ОСАГО"
@@ -21,7 +22,7 @@
 
   "loss_object_types_sql": {
     "_comment": "VictimObjectType из oisuu81_t_Losses (нет в victim parquet). loss_processes/risk — из victim.",
-    "insurance_type_group": "ОСАГо"
+    "insurance_type_group": "ОСАГО"
   },
 
   "claims_sql": {

@@ -39,10 +39,9 @@ class DataDrift(BaseDataDrift):
             "mode_test": control.mode(dropna=False)[0],
             "mean_train": np.nan if type == 'CATEGORICAL' else base.mean(),
             "mean_test": np.nan if type == 'CATEGORICAL' else control.mean(),
+            "diff_train": self._stringify_diff_values(base_unique - control_unique),
+            "diff_test": self._stringify_diff_values(control_unique - base_unique),
         }
-
-        result["dif_train"] = self._stringify_diff_values(base_unique - control_unique)
-        result["dif_test"] = self._stringify_diff_values(control_unique - base_unique)
         return result
 
 
