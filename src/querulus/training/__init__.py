@@ -48,7 +48,17 @@ from querulus.training.severity_variant import (
 )
 from querulus.training.severity_zoo import SeverityZooCompare, run_severity_zoo_compare
 from querulus.training.splits import DateSplitParts, split_by_date_periods
-from querulus.training.stack_eval import StackEvalReport, evaluate_legacy_vs_new
+from querulus.training.stack_eval import (
+    StackEvalReport,
+    evaluate_legacy_vs_new,
+    score_stack_on_index,
+)
+from querulus.training.start_year_eval import (
+    DEFAULT_START_YEARS,
+    StartYearEvalReport,
+    evaluate_train_start_years,
+    payment_year_cohorts,
+)
 from querulus.training.train_loop import TrainLoopFlags, TrainLoopResult, run_train_loop_new
 from querulus.training.triple_stack import (
     TARGET_STACKS,
@@ -68,7 +78,9 @@ __all__ = [
     "SEVERITY_VARIANT_NAMES",
     "SeverityVariantSpec",
     "SeverityZooCompare",
+    "StartYearEvalReport",
     "StackEvalReport",
+    "DEFAULT_START_YEARS",
     "resolve_severity_variant",
     "TrainLoopFlags",
     "TrainLoopResult",
@@ -80,6 +92,9 @@ __all__ = [
     "compare_severity_log1p",
     "drop_zero_importance_features",
     "evaluate_legacy_vs_new",
+    "evaluate_train_start_years",
+    "payment_year_cohorts",
+    "score_stack_on_index",
     "expected_calibration_error",
     "feature_drift_report",
     "filter_features_by_drift",

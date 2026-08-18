@@ -180,6 +180,38 @@ def _coverage_table(
     return pd.DataFrame(rows)
 
 
+def score_stack_on_index(
+    df: pd.DataFrame,
+    training: TrainingArtifacts,
+    index: pd.Index,
+    *,
+    stack: str,
+    freq_target: str,
+    sev_target: str = _SEV_COL,
+    psr_col: str = _PSR_COL,
+) -> tuple[dict[str, object], pd.DataFrame]:
+    """Freq-метрики и ₽-квадранты одного стека на фиксированном index."""
+    if index.empty:
+        raise ValueError("Пустой holdout index")
+    holdout = df.loc[index]
+    for col in (freq_target, sev_target, psr_col):
+        if col not in holdout.columns:
+            raise KeyError(f"Для оценки нужна колонка {col}")
+    proba, pred_freq, pred_sev = _stack_predictions(training, df, index)
+    y_true = holdout[freq_target].fillna(0).astype(int)
+    y_true.name = freq_target
+    freq_row = _freq_metrics_row(stack, y_true, proba, pred_freq)
+    coverage = _coverage_table(
+        stack,
+        y_true,
+        pred_freq,
+        pred_sev,
+        holdout[sev_target].fillna(0),
+        holdout[psr_col].fillna(0),
+    )
+    return freq_row, coverage
+
+
 def evaluate_legacy_vs_new(
     df: pd.DataFrame,
     legacy: TrainingArtifacts,

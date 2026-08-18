@@ -289,26 +289,24 @@ def _build_comparison_result(
     key: str,
     top_n: int,
 ) -> TargetComparisonResult:
-    """Собрать отчёт и топ расхождений по первой (класс.) и второй (регр.) паре."""
+    """Собрать отчёт и топ расхождений: pairs[0] — класс., pairs[1] — регр. (если есть)."""
+    def _top(i: int) -> pd.DataFrame:
+        if i >= len(pairs):
+            return pd.DataFrame()
+        return top_pair_mismatches(
+            merged,
+            *pairs[i],
+            df_reference=df_reference,
+            df_candidate=df_candidate,
+            key=key,
+            n=top_n,
+        )
+
     return TargetComparisonResult(
         merged=merged,
         report=report,
-        top_classification=top_pair_mismatches(
-            merged,
-            *pairs[0],
-            df_reference=df_reference,
-            df_candidate=df_candidate,
-            key=key,
-            n=top_n,
-        ),
-        top_regression=top_pair_mismatches(
-            merged,
-            *pairs[1],
-            df_reference=df_reference,
-            df_candidate=df_candidate,
-            key=key,
-            n=top_n,
-        ),
+        top_classification=_top(0),
+        top_regression=_top(1),
     )
 
 
