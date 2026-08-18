@@ -20,11 +20,11 @@
         "2025-06-01"
       ],
       "period_column": [
-        "LOSS_DATE_TIME"
+        "PAYMENT_ORDER_DATE_TIME"
       ]
     },
     "extra_columns": [
-      "LOSS_DATE_TIME"
+      "PAYMENT_ORDER_DATE_TIME"
     ],
     "data": {
       "targetcolumns": [],

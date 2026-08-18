@@ -140,6 +140,12 @@
           доплаты с ответом «Выплата» / «Частичная выплата».
           Freq = сумма по искам и претензиям &gt; 0; Sev = эта сумма в рублях.
         </li>
+        <li>
+          <strong>Вызревание.</strong>
+          В датасет только поручения с <code>PAYMENT_ORDER_DATE_TIME + H ≤ S</code>
+          и без незакрытого суда (последняя инстанция иска «Не принято» / пустые взыскания).
+          Train/test и as-of фич — по дате поручения (<code>PAYMENT_ORDER_DATE_TIME</code>).
+        </li>
       </ul>
     </section>
 
@@ -343,6 +349,13 @@ LEFT JOIN pretensions_by_incident
           </tr>
         </tbody>
       </table>
+      <p>
+        После сборки таргетов строки фильтруются по вызреванию
+        (<code>configs/dataset_filters.json</code> → <code>target_maturity</code>):
+        горизонт <code>H</code> месяцев от <code>PAYMENT_ORDER_DATE_TIME</code> до снимка <code>S</code>,
+        плюс отсев исков с незакрытой последней инстанцией.
+        Отчёт: <code>data/processed/target_maturity_report.json</code> (лаги p50/p90/p95 — ориентир для <code>H</code>).
+      </p>
     </section>
 
   </main>

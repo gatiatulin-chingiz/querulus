@@ -38,5 +38,13 @@
   "primary_loss": {
     "_comment": "Строка victim: первичный (min) LossNumber. df_calc_agg — последний (max) LossNumber + max Period.",
     "order_by": "loss_number_asc"
+  },
+
+  "target_maturity": {
+    "_comment": "В датасет: PAYMENT_ORDER_DATE_TIME + horizon_months ≤ S и без незакрытого суда (последняя инстанция иска void). S = snapshot_date или max дат в target_3_claims. Один H на freq и sev. lag p90 в target_maturity_report.json — ориентир для H.",
+    "enabled": true,
+    "t0_column": "PAYMENT_ORDER_DATE_TIME",
+    "horizon_months": 24,
+    "snapshot_date": null
   }
 }

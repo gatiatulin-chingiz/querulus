@@ -14,7 +14,7 @@ class FinEffectConfig:
     fact_mode: FactMode = "icnl"
     incident_column: str = "INCIDENT_NUMBER"
     filial_column: str = "FILIAL"
-    date_column: str = "LOSS_DATE_TIME"
+    date_column: str = "PAYMENT_ORDER_DATE_TIME"
     frequency_target_column: str = "TARGET_FREQ"
     severity_target_column: str = "TARGET_SEV"
     fact_amount_column: str = "TARGET_FREQ_AMOUNT"

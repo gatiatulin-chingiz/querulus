@@ -1,7 +1,7 @@
 # Каталог признаков датасета querulus
 
 **Гранулярность:** 1 строка = 1 инцидент (victim: min `LOSS_NUMBER`; `AMOUNT_REPAIR` из calc — max `LOSS_NUMBER`).  
-**T0:** `LOSS_DATE_TIME` — якорь времени для сплита и as-of истории.  
+**T0 (as-of FE, сплит, вызревание):** `PAYMENT_ORDER_DATE_TIME`. В датасет — `T0 + H ≤ S` и без незакрытого суда; `H` / `S` — `configs/dataset_filters.json` → `target_maturity`.  
 **Итоговый артефакт:** `data/processed/df_final_3.parquet`.
 
 Формат: **фича** — описание — как собирается.

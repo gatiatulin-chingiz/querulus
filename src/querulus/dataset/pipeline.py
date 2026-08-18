@@ -7,6 +7,7 @@ import logging
 import pandas as pd
 
 from querulus.dataset.io import LazyOisuuConnection, checkpoint, setup_notebook_logging
+from querulus.dataset.maturity import apply_target_maturity_from_paths
 from querulus.dataset.paths import DataPaths
 from querulus.dataset.steps.claims import load_claims
 from querulus.dataset.steps.enrich import enrich_dataset
@@ -55,6 +56,7 @@ def run_pipeline(
                 save=False,
             )
             logger.info("Продолжение с df_after_targets.parquet, shape=%s", df.shape)
+            df = apply_target_maturity_from_paths(df, paths)
         else:
             df_victim = load_victim(
                 paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint

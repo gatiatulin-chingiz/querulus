@@ -1,5 +1,5 @@
 {
-  "t0_column": "LOSS_DATE_TIME",
+  "t0_column": "PAYMENT_ORDER_DATE_TIME",
   "thresholds": {
     "apply_delay_high": 30,
     "apply_delay_notify": 7,

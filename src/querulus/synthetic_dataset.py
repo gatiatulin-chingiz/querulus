@@ -105,6 +105,7 @@ def build_synthetic_final_dataset(
         {
             "INCIDENT_NUMBER": [f"SYN-{i:06d}" for i in range(n_rows)],
             "LOSS_DATE_TIME": loss_dt,
+            "PAYMENT_ORDER_DATE_TIME": loss_dt,
             "TARGET_2": target_2,
             "TARGET_3_SEV": target_3_sev,
             "TARGET_FREQ": target_freq,
@@ -185,7 +186,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     path = write_synthetic_final_dataset(args.output, n_rows=args.n_rows, seed=args.seed)
     df = pd.read_parquet(path)
-    train = df["LOSS_DATE_TIME"] < "2024-06-01"
+    train = df["PAYMENT_ORDER_DATE_TIME"] < "2024-06-01"
     print(f"Wrote {path}")
     print(f"shape={df.shape} train={int(train.sum())} test={int((~train).sum())}")
     print(f"TARGET_FREQ mean={df['TARGET_FREQ'].mean():.3f}")

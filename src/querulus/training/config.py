@@ -43,7 +43,8 @@ class TrainingConfig:
     - ``(low, high)`` — ``target.between(low, high)``.
     """
 
-    date_column: str = "LOSS_DATE_TIME"
+    # Сплит train/val/cal/test — по дате поручения на выплату (не LOSS_DATE_TIME).
+    date_column: str = "PAYMENT_ORDER_DATE_TIME"
     train_period: tuple[str, str] = ("2022-01-01", "2024-05-31")
     test_period: tuple[str, str] = ("2024-06-01", "2025-06-01")
     # Внутренние периоды (если None — режутся из train_period хвостом val/cal).

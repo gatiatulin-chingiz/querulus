@@ -176,7 +176,7 @@ def _pick_column(df: pd.DataFrame, *names: str) -> pd.Series:
 
 
 def _add_timeline_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
-    """Блок A: timeline. T0 = LOSS_DATE_TIME (сплит и as-of история)."""
+    """Блок A: timeline. As-of история — t0_column (PAYMENT_ORDER_DATE_TIME)."""
     t0 = _series(df, config.t0_column)
     th = config.thresholds
 

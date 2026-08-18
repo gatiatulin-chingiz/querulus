@@ -29,6 +29,7 @@ REDUNDANT_RAW_ARTIFACTS: tuple[str, ...] = (
 STALE_PROCESSED_ARTIFACTS: tuple[str, ...] = (
     "df_after_targets.parquet",
     "df_final_3.parquet",
+    "target_maturity_report.json",
 )
 
 

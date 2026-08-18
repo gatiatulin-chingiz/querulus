@@ -626,4 +626,10 @@ def build_targets(
 
     df = ensure_victim_object_type_column(df)
 
+    from querulus.dataset.maturity import MATURITY_REPORT_NAME, apply_target_maturity
+
+    report_path = paths.processed_dir / MATURITY_REPORT_NAME if save_checkpoint else None
+    df, _ = apply_target_maturity(
+        df, target_3_claims, report_path=report_path
+    )
     return df

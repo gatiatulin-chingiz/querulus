@@ -30,7 +30,7 @@ class FeatureThresholds:
 class FeatureConfig:
     """Параметры этапов 0–1 FE."""
 
-    t0_column: str = "LOSS_DATE_TIME"
+    t0_column: str = "PAYMENT_ORDER_DATE_TIME"
     thresholds: FeatureThresholds = field(default_factory=FeatureThresholds)
     vehicle_age_bins: tuple[float, ...] = (3.0, 7.0, 15.0)
     inflation_base_year: int = 2020
@@ -87,7 +87,7 @@ def load_feature_config(path: Path | None = None) -> FeatureConfig:
 
     dedup = data.get("dedup_columns", {})
     return FeatureConfig(
-        t0_column=str(data.get("t0_column", "LOSS_DATE_TIME")),
+        t0_column=str(data.get("t0_column", "PAYMENT_ORDER_DATE_TIME")),
         thresholds=thresholds,
         vehicle_age_bins=tuple(data.get("vehicle_age_bins", [3, 7, 15])),
         inflation_base_year=int(data.get("inflation_base_year", 2020)),

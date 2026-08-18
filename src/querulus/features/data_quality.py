@@ -23,7 +23,7 @@ from querulus.features.inflation import (
 
 IQR_K: float = 1.5
 # Совпадает с TrainingConfig.train_period / date_column (без импорта training).
-DEFAULT_DQ_DATE_COLUMN: str = "LOSS_DATE_TIME"
+DEFAULT_DQ_DATE_COLUMN: str = "PAYMENT_ORDER_DATE_TIME"
 DEFAULT_DQ_TRAIN_PERIOD: tuple[str, str] = ("2022-01-01", "2024-05-31")
 
 

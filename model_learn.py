@@ -228,11 +228,11 @@ mvp.types_dict
 df['TARGET_2'] = df['TARGET_2'].astype(int)
 df['TARGET_2'].dtypes
 
-X_train_freq = df[df['LOSS_DATE_TIME'].between('2022-01-01', '2024-05-31')]
-y_train_freq = df[df['LOSS_DATE_TIME'].between('2022-01-01', '2024-05-31')]['TARGET_2']
+X_train_freq = df[df['PAYMENT_ORDER_DATE_TIME'].between('2022-01-01', '2024-05-31')]
+y_train_freq = df[df['PAYMENT_ORDER_DATE_TIME'].between('2022-01-01', '2024-05-31')]['TARGET_2']
 
-X_test_freq = df[df['LOSS_DATE_TIME'].between('2024-06-01', '2025-06-01')]
-y_test_freq = df[df['LOSS_DATE_TIME'].between('2024-06-01', '2025-06-01')]['TARGET_2']
+X_test_freq = df[df['PAYMENT_ORDER_DATE_TIME'].between('2024-06-01', '2025-06-01')]
+y_test_freq = df[df['PAYMENT_ORDER_DATE_TIME'].between('2024-06-01', '2025-06-01')]['TARGET_2']
 
 
 display(X_train_freq.shape)
@@ -623,11 +623,11 @@ for i in mvp.types_dict['BINARY'] + mvp.types_dict['CATEGORIAL']:
 mvp.correct_types(input_types_dict, other_cols)
 mvp.types_dict
 
-X_train_sev = df[(df['LOSS_DATE_TIME'].between('2022-01-01', '2024-05-31')) & (df['TARGET_3_SEV'].between(1, 1.5e6))]
-y_train_sev = df[(df['LOSS_DATE_TIME'].between('2022-01-01', '2024-05-31')) & (df['TARGET_3_SEV'].between(1, 1.5e6))]['TARGET_3_SEV']
+X_train_sev = df[(df['PAYMENT_ORDER_DATE_TIME'].between('2022-01-01', '2024-05-31')) & (df['TARGET_3_SEV'].between(1, 1.5e6))]
+y_train_sev = df[(df['PAYMENT_ORDER_DATE_TIME'].between('2022-01-01', '2024-05-31')) & (df['TARGET_3_SEV'].between(1, 1.5e6))]['TARGET_3_SEV']
 
-X_test_sev = df[(df['LOSS_DATE_TIME'].between('2024-06-01', '2025-06-01')) & (df['TARGET_3_SEV'].between(1, 1.5e6))]
-y_test_sev = df[(df['LOSS_DATE_TIME'].between('2024-06-01', '2025-06-01')) & (df['TARGET_3_SEV'].between(1, 1.5e6))]['TARGET_3_SEV']
+X_test_sev = df[(df['PAYMENT_ORDER_DATE_TIME'].between('2024-06-01', '2025-06-01')) & (df['TARGET_3_SEV'].between(1, 1.5e6))]
+y_test_sev = df[(df['PAYMENT_ORDER_DATE_TIME'].between('2024-06-01', '2025-06-01')) & (df['TARGET_3_SEV'].between(1, 1.5e6))]['TARGET_3_SEV']
 
 X_train_sev.to_parquet('/home/jovyan/old_home/Litigant/data/processed/X_train_sev_for_DataDrift.parquet')
 
