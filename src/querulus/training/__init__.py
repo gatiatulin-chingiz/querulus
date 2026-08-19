@@ -52,6 +52,7 @@ from querulus.training.stack_eval import (
     StackEvalReport,
     evaluate_legacy_vs_new,
     score_stack_on_index,
+    train_legacy_matching_new,
 )
 from querulus.training.start_year_eval import (
     DEFAULT_START_YEARS,
@@ -95,6 +96,7 @@ __all__ = [
     "evaluate_train_start_years",
     "payment_year_cohorts",
     "score_stack_on_index",
+    "train_legacy_matching_new",
     "expected_calibration_error",
     "feature_drift_report",
     "filter_features_by_drift",

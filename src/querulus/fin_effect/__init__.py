@@ -17,6 +17,7 @@ from querulus.fin_effect.calculator import (
     prepare_analytics_export,
     prepare_effect_frame,
     print_best_threshold_report,
+    recompute_fin_effect_model,
     run_fin_effect_from_training,
     run_fin_effect_pipeline,
     search_best_threshold,
@@ -57,6 +58,7 @@ from querulus.fin_effect.segment_eval import (
 )
 from querulus.fin_effect.summary import (
     color_excel_table,
+    compare_formula_summaries,
     create_summary_table,
     export_summary_excel,
 )
@@ -90,6 +92,7 @@ __all__ = [
     "apply_model_predictions",
     "color_excel_table",
     "compare_fact_bases",
+    "compare_formula_summaries",
     "compare_premiums",
     "compare_severity_predictions",
     "compare_severity_targets",
@@ -114,6 +117,7 @@ __all__ = [
     "prepare_analytics_export",
     "prepare_effect_frame",
     "print_best_threshold_report",
+    "recompute_fin_effect_model",
     "infer_legacy_dataset",
     "CLAIMS_FREQUENCY_TARGETS",
     "CLAIMS_SEVERITY_TARGETS",

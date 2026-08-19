@@ -115,7 +115,7 @@ def _quiet_config(config: TrainingConfig) -> TrainingConfig:
 
 
 def _penalty_amount(coverage: pd.DataFrame) -> float:
-    hit = coverage.loc[coverage["outcome"].eq("штраф всего"), "amount"]
+    hit = coverage.loc[coverage["outcome"].eq("модель всего"), "amount"]
     if hit.empty:
         return float("nan")
     return float(hit.iloc[0])

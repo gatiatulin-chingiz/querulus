@@ -119,36 +119,103 @@ def prepare_effect_frame(df: pd.DataFrame, config: FinEffectConfig | None = None
     return result
 
 
-def compute_fin_effect_model(
+def compute_fin_effect_model_legacy(
     pred_freq: np.ndarray,
     y_true_freq: np.ndarray,
     y_pred_sev: np.ndarray,
     y_true_sev: np.ndarray,
     base_sum: np.ndarray,
 ) -> np.ndarray:
-    """Модельный фин. эффект по квадрантам confusion matrix."""
+    """Старые квадранты Litigant (режим legacy_psr и сравнение формул)."""
     pred_freq = np.asarray(pred_freq, dtype=int)
     y_true_freq = np.asarray(y_true_freq, dtype=int)
-    y_pred_sev = np.asarray(y_pred_sev, dtype=float)
-    y_true_sev = np.asarray(y_true_sev, dtype=float)
-    base_sum = np.asarray(base_sum, dtype=float)
+    y_pred_sev = np.nan_to_num(np.asarray(y_pred_sev, dtype=float), nan=0.0)
+    y_true_sev = np.nan_to_num(np.asarray(y_true_sev, dtype=float), nan=0.0)
+    base_sum = np.nan_to_num(np.asarray(base_sum, dtype=float), nan=0.0)
 
     fin_effect_model = np.zeros(len(base_sum), dtype=float)
-
     mask_00 = (pred_freq == 0) & (y_true_freq == 0)
     mask_01 = (pred_freq == 0) & (y_true_freq == 1)
     mask_10 = (pred_freq == 1) & (y_true_freq == 0)
     mask_11 = (pred_freq == 1) & (y_true_freq == 1)
-
     fin_effect_model[mask_00] = -base_sum[mask_00]
     fin_effect_model[mask_01] = -base_sum[mask_01]
     fin_effect_model[mask_10] = -y_pred_sev[mask_10] - base_sum[mask_10]
-
     mask_11_over = mask_11 & (y_pred_sev >= y_true_sev)
     mask_11_under = mask_11 & (y_pred_sev < y_true_sev)
     fin_effect_model[mask_11_over] = -y_pred_sev[mask_11_over]
     fin_effect_model[mask_11_under] = -base_sum[mask_11_under]
     return fin_effect_model
+
+
+def compute_fin_effect_model_coverage(
+    pred_freq: np.ndarray,
+    y_true_freq: np.ndarray,
+    y_pred_sev: np.ndarray,
+    y_true_sev: np.ndarray,
+    psr: np.ndarray,
+    premiums: np.ndarray,
+) -> np.ndarray:
+    """Новые квадранты (расход отрицательный).
+
+    0-0 → 0; 0-1 → −pred_sev; 1-0 → −(ПСР+взносы);
+    1-1 хватило → −pred_sev;
+    1-1 не хватило → −(ПСР×(1−pred_sev/T)+взносы); при T=0 — как 1-0.
+    """
+    pred_freq = np.asarray(pred_freq, dtype=int)
+    y_true_freq = np.asarray(y_true_freq, dtype=int)
+    y_pred_sev = np.nan_to_num(np.asarray(y_pred_sev, dtype=float), nan=0.0)
+    y_true_sev = np.nan_to_num(np.asarray(y_true_sev, dtype=float), nan=0.0)
+    psr = np.maximum(np.nan_to_num(np.asarray(psr, dtype=float), nan=0.0), 0.0)
+    premiums = np.maximum(np.nan_to_num(np.asarray(premiums, dtype=float), nan=0.0), 0.0)
+    fact = psr + premiums
+
+    out = np.zeros(len(fact), dtype=float)
+    m00 = (y_true_freq == 0) & (pred_freq == 0)
+    m01 = (y_true_freq == 0) & (pred_freq == 1)
+    m10 = (y_true_freq == 1) & (pred_freq == 0)
+    m11 = (y_true_freq == 1) & (pred_freq == 1)
+    covered = m11 & (y_pred_sev >= y_true_sev)
+    short = m11 & ~covered
+
+    out[m00] = 0.0
+    out[m01] = -y_pred_sev[m01]
+    out[m10] = -fact[m10]
+    out[covered] = -y_pred_sev[covered]
+    share = np.zeros(len(fact), dtype=float)
+    need = short & (y_true_sev > 0)
+    share[need] = np.clip(y_pred_sev[need] / y_true_sev[need], 0.0, 1.0)
+    out[short] = -(psr[short] * (1.0 - share[short]) + premiums[short])
+    return out
+
+
+def compute_fin_effect_model(
+    pred_freq: np.ndarray,
+    y_true_freq: np.ndarray,
+    y_pred_sev: np.ndarray,
+    y_true_sev: np.ndarray,
+    base_sum: np.ndarray,
+    *,
+    formula: str = "coverage",
+    psr: np.ndarray | None = None,
+    premiums: np.ndarray | None = None,
+) -> np.ndarray:
+    """Модельный фин. эффект. ``legacy`` — старые квадранты; иначе покрытие."""
+    if formula == "legacy":
+        return compute_fin_effect_model_legacy(
+            pred_freq, y_true_freq, y_pred_sev, y_true_sev, base_sum
+        )
+    psr_arr = base_sum if psr is None else psr
+    prem_arr = np.zeros(len(np.asarray(base_sum)), dtype=float) if premiums is None else premiums
+    return compute_fin_effect_model_coverage(
+        pred_freq, y_true_freq, y_pred_sev, y_true_sev, psr_arr, prem_arr
+    )
+
+
+def _formula_from_config(config: FinEffectConfig | None) -> str:
+    if config is not None and config.uses_legacy_psr_fact:
+        return "legacy"
+    return "coverage"
 
 
 def _threshold_grid(config: FinEffectConfig) -> np.ndarray:
@@ -163,12 +230,23 @@ def evaluate_threshold(
     y_pred_sev: np.ndarray,
     y_true_sev: np.ndarray,
     base_sum: np.ndarray,
+    *,
+    formula: str = "coverage",
+    psr: np.ndarray | None = None,
+    premiums: np.ndarray | None = None,
 ) -> ThresholdMetrics:
     """Метрики фин. эффекта для одного порога."""
     pred_freq = (np.asarray(y_proba_freq) >= threshold).astype(int)
     y_true_freq = np.asarray(y_true_freq, dtype=int)
     fin_effect_model = compute_fin_effect_model(
-        pred_freq, y_true_freq, y_pred_sev, y_true_sev, base_sum
+        pred_freq,
+        y_true_freq,
+        y_pred_sev,
+        y_true_sev,
+        base_sum,
+        formula=formula,
+        psr=psr,
+        premiums=premiums,
     )
     total_effect_model = float(fin_effect_model.sum())
     total_effect_fact = float(np.asarray(base_sum, dtype=float).sum())
@@ -199,13 +277,26 @@ def search_best_threshold(
     y_true_sev: np.ndarray,
     base_sum: np.ndarray,
     config: FinEffectConfig | None = None,
+    *,
+    formula: str | None = None,
+    psr: np.ndarray | None = None,
+    premiums: np.ndarray | None = None,
 ) -> tuple[float, dict[float, ThresholdMetrics]]:
     """Подбор порога по максимальному чистому фин. эффекту."""
     config = config or FinEffectConfig()
+    formula = formula or _formula_from_config(config)
     results: dict[float, ThresholdMetrics] = {}
     for threshold in _threshold_grid(config):
         metrics = evaluate_threshold(
-            threshold, y_proba_freq, y_true_freq, y_pred_sev, y_true_sev, base_sum
+            threshold,
+            y_proba_freq,
+            y_true_freq,
+            y_pred_sev,
+            y_true_sev,
+            base_sum,
+            formula=formula,
+            psr=psr,
+            premiums=premiums,
         )
         results[metrics.threshold] = metrics
     best_threshold = max(results, key=lambda key: results[key].net_effect)
@@ -237,15 +328,28 @@ def search_best_threshold_by_f1(
     y_true_sev: np.ndarray,
     base_sum: np.ndarray,
     config: FinEffectConfig | None = None,
+    *,
+    formula: str | None = None,
+    psr: np.ndarray | None = None,
+    premiums: np.ndarray | None = None,
 ) -> tuple[float, dict[float, ThresholdMetrics]]:
     """Подбор порога по максимальному F1 на сетке."""
     config = config or FinEffectConfig()
+    formula = formula or _formula_from_config(config)
     best_threshold = float(config.threshold_start)
     best_f1 = -1.0
     results: dict[float, ThresholdMetrics] = {}
     for threshold in _threshold_grid(config):
         metrics = evaluate_threshold(
-            threshold, y_proba_freq, y_true_freq, y_pred_sev, y_true_sev, base_sum
+            threshold,
+            y_proba_freq,
+            y_true_freq,
+            y_pred_sev,
+            y_true_sev,
+            base_sum,
+            formula=formula,
+            psr=psr,
+            premiums=premiums,
         )
         results[metrics.threshold] = metrics
         f1 = _f1_score(metrics.precision, metrics.recall)
@@ -262,19 +366,39 @@ def search_threshold_strategies(
     y_true_sev: np.ndarray,
     base_sum: np.ndarray,
     config: FinEffectConfig | None = None,
+    *,
+    formula: str | None = None,
+    psr: np.ndarray | None = None,
+    premiums: np.ndarray | None = None,
 ) -> dict[str, ThresholdStrategyResult]:
     """Сравнить пороги: ``best_net_effect`` и ``pr_auc`` (порог по F1 на PR)."""
     from sklearn.metrics import average_precision_score
 
     config = config or FinEffectConfig()
+    formula = formula or _formula_from_config(config)
     ap = float(average_precision_score(y_true_freq, y_proba_freq))
 
     best_net, net_metrics = search_best_threshold(
-        y_proba_freq, y_true_freq, y_pred_sev, y_true_sev, base_sum, config
+        y_proba_freq,
+        y_true_freq,
+        y_pred_sev,
+        y_true_sev,
+        base_sum,
+        config,
+        formula=formula,
+        psr=psr,
+        premiums=premiums,
     )
-    # Порог ориентирован на PR-кривую (max F1); AP — threshold-free метрика качества.
     best_pr, pr_metrics = search_best_threshold_by_f1(
-        y_proba_freq, y_true_freq, y_pred_sev, y_true_sev, base_sum, config
+        y_proba_freq,
+        y_true_freq,
+        y_pred_sev,
+        y_true_sev,
+        base_sum,
+        config,
+        formula=formula,
+        psr=psr,
+        premiums=premiums,
     )
 
     strategies: dict[str, ThresholdStrategyResult] = {}
@@ -310,6 +434,9 @@ def apply_model_predictions(
     y_true_freq_arr = np.asarray(y_true_freq, dtype=int)
     y_proba_arr = np.asarray(y_proba_freq, dtype=float)
     y_pred_sev_arr = np.asarray(y_pred_sev, dtype=float)
+    formula = _formula_from_config(config)
+    psr = _numeric_series(frame, config.fact_amount_column).to_numpy()
+    premiums = _numeric_series(frame, config.premiums_column).to_numpy()
     threshold_strategies = search_threshold_strategies(
         y_proba_arr,
         y_true_freq_arr,
@@ -317,6 +444,9 @@ def apply_model_predictions(
         y_true_sev,
         base_sum,
         config,
+        formula=formula,
+        psr=psr,
+        premiums=premiums,
     )
 
     if threshold is None:
@@ -327,6 +457,9 @@ def apply_model_predictions(
             y_true_sev,
             base_sum,
             config,
+            formula=formula,
+            psr=psr,
+            premiums=premiums,
         )
     else:
         best_threshold = float(threshold)
@@ -338,12 +471,22 @@ def apply_model_predictions(
                 y_pred_sev_arr,
                 y_true_sev,
                 base_sum,
+                formula=formula,
+                psr=psr,
+                premiums=premiums,
             )
         }
 
     pred_freq = (y_proba_arr >= best_threshold).astype(int)
     fin_effect_model = compute_fin_effect_model(
-        pred_freq, y_true_freq_arr, y_pred_sev_arr, y_true_sev, base_sum
+        pred_freq,
+        y_true_freq_arr,
+        y_pred_sev_arr,
+        y_true_sev,
+        base_sum,
+        formula=formula,
+        psr=psr,
+        premiums=premiums,
     )
 
     frame["pred_freq"] = pred_freq
@@ -363,6 +506,35 @@ def apply_model_predictions(
         model_effect_total=model_total,
         fact_effect_total=fact_signed,
         threshold_strategies=threshold_strategies,
+    )
+
+
+def recompute_fin_effect_model(
+    frame: pd.DataFrame,
+    config: FinEffectConfig | None = None,
+    *,
+    formula: str,
+) -> np.ndarray:
+    """Пересчитать ``fin_effect_model`` по уже посчитанным pred_* (сравнение формул)."""
+    config = config or FinEffectConfig()
+    pred_freq = pd.to_numeric(frame["pred_freq"], errors="coerce").fillna(0).to_numpy()
+    y_true = pd.to_numeric(
+        frame[config.frequency_target_column], errors="coerce"
+    ).fillna(0).to_numpy()
+    pred_sev = pd.to_numeric(frame["pred_sev"], errors="coerce").fillna(0).to_numpy()
+    y_sev = _numeric_series(frame, config.severity_target_column).to_numpy()
+    psr = _numeric_series(frame, config.fact_amount_column).to_numpy()
+    premiums = _numeric_series(frame, config.premiums_column).to_numpy()
+    base = psr + premiums
+    return compute_fin_effect_model(
+        pred_freq,
+        y_true,
+        pred_sev,
+        y_sev,
+        base,
+        formula=formula,
+        psr=psr,
+        premiums=premiums,
     )
 
 

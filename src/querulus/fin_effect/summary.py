@@ -18,9 +18,17 @@ def _neg_column_sum(group: pd.DataFrame, column: str) -> float:
 def create_summary_table(
     effect_df: pd.DataFrame,
     config: FinEffectConfig | None = None,
+    *,
+    itogo_mode: str | None = None,
 ) -> pd.DataFrame:
-    """Сводная таблица по комбинациям frequency_target и pred_freq."""
+    """Сводная таблица по комбинациям frequency_target и pred_freq.
+
+    ``itogo_mode``: ``legacy`` — старые правила ИТОГО; ``coverage`` — сумма
+    ``fin_effect_model``. По умолчанию legacy_psr → legacy, иначе coverage.
+    """
     config = config or FinEffectConfig()
+    if itogo_mode is None:
+        itogo_mode = "legacy" if config.uses_legacy_psr_fact else "coverage"
     masks = {
         "1_1": (effect_df[config.frequency_target_column] == 1)
         & (effect_df["pred_freq"] == 1),
@@ -53,14 +61,17 @@ def create_summary_table(
                 _neg_column_sum(group, config.fact_amount_column) + contributions
             )
 
-        if target_fact == 1 and pred_freq == 1:
-            total = fin_effect_model
-        elif target_fact == 1 and pred_freq == 0:
-            total = fin_effect_fact
-        elif target_fact == 0 and pred_freq == 1:
-            total = fin_effect_model - fin_effect_fact
+        if itogo_mode == "legacy":
+            if target_fact == 1 and pred_freq == 1:
+                total = fin_effect_model
+            elif target_fact == 1 and pred_freq == 0:
+                total = fin_effect_fact
+            elif target_fact == 0 and pred_freq == 1:
+                total = fin_effect_model - fin_effect_fact
+            else:
+                total = 0.0
         else:
-            total = 0.0
+            total = fin_effect_model
 
         rows.append(
             {
@@ -80,6 +91,28 @@ def create_summary_table(
         )
 
     return pd.DataFrame(rows)
+
+
+def compare_formula_summaries(
+    effect_df: pd.DataFrame,
+    config: FinEffectConfig | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Две сводки на тех же pred: старые правила ИТОГО и новые квадранты."""
+    from querulus.fin_effect.calculator import recompute_fin_effect_model
+
+    config = config or FinEffectConfig()
+    old_frame = effect_df.copy()
+    old_frame["fin_effect_model"] = recompute_fin_effect_model(
+        effect_df, config, formula="legacy"
+    )
+    new_frame = effect_df.copy()
+    new_frame["fin_effect_model"] = recompute_fin_effect_model(
+        effect_df, config, formula="coverage"
+    )
+    return (
+        create_summary_table(old_frame, config, itogo_mode="legacy"),
+        create_summary_table(new_frame, config, itogo_mode="coverage"),
+    )
 
 
 def color_excel_table(writer, sheet_name: str, summary_df: pd.DataFrame) -> None:
