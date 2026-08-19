@@ -227,60 +227,59 @@ def plot_severity_fact_vs_pred_binned(
         from plotly.subplots import make_subplots
         import plotly.graph_objects as go
 
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
-        fig.add_trace(
-            go.Scatter(
-                x=grouped["fact_sev_bin"],
-                y=grouped["fact_sev_median"] + grouped["fact_surcharge"],
-                mode="lines+markers",
-                name="Основной долг + УТС + Износ",
-                line=dict(color="#FF6B6B", width=3),
+        fig = make_subplots(
+            rows=1, cols=2,
+            specs=[[{"secondary_y": True}, {"secondary_y": True}]],
+            subplot_titles=(
+                "С выплатой по убытку",
+                "Без выплаты по убытку (чистые таргеты)",
             ),
-            secondary_y=False,
+            horizontal_spacing=0.08,
         )
-        fig.add_trace(
-            go.Scatter(
-                x=grouped["fact_sev_bin"],
-                y=grouped["pred_sev"] + grouped["fact_surcharge"],
-                mode="lines+markers",
-                name="Прогноз модели",
-                line=dict(color="#4ECDC4", width=3),
-            ),
-            secondary_y=False,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=grouped["fact_sev_bin"],
-                y=grouped["base_sum"] + grouped["fact_surcharge"],
-                mode="lines+markers",
-                name="Исковая сумма (TARGET_FREQ_AMOUNT)",
-                line=dict(color="#9B5DE5", width=3),
-            ),
-            secondary_y=False,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=grouped["fact_sev_bin"],
-                y=grouped["fact_surcharge"],
-                mode="lines+markers",
-                name="Фактические выплаты по убытку",
-                line=dict(color="silver", width=3),
-            ),
-            secondary_y=False,
-        )
-        fig.add_trace(
-            go.Bar(
-                x=grouped["fact_sev_bin"],
-                y=grouped["n_claims"],
-                name="Количество исков",
-                marker_color="rgba(100, 100, 100, 0.3)",
-                opacity=0.6,
-            ),
-            secondary_y=True,
-        )
+
+        surcharge = grouped["fact_surcharge"]
+        x = grouped["fact_sev_bin"]
+
+        _trace_cfg = [
+            ("fact_sev_median", "Основной долг + УТС + Износ", "#FF6B6B"),
+            ("pred_sev", "Прогноз модели", "#4ECDC4"),
+            ("base_sum", "Исковая сумма (TARGET_FREQ_AMOUNT)", "#9B5DE5"),
+        ]
+        for col_idx, offset in ((1, surcharge), (2, 0)):
+            for col, name, color in _trace_cfg:
+                fig.add_trace(
+                    go.Scatter(
+                        x=x, y=grouped[col] + offset,
+                        mode="lines+markers", name=name,
+                        line=dict(color=color, width=3),
+                        legendgroup=name, showlegend=(col_idx == 1),
+                    ),
+                    row=1, col=col_idx, secondary_y=False,
+                )
+            if col_idx == 1:
+                fig.add_trace(
+                    go.Scatter(
+                        x=x, y=surcharge,
+                        mode="lines+markers",
+                        name="Фактические выплаты по убытку",
+                        line=dict(color="silver", width=3),
+                    ),
+                    row=1, col=1, secondary_y=False,
+                )
+            fig.add_trace(
+                go.Bar(
+                    x=x, y=grouped["n_claims"],
+                    name="Количество исков",
+                    marker_color="rgba(100, 100, 100, 0.3)",
+                    opacity=0.6,
+                    legendgroup="n_claims", showlegend=(col_idx == 1),
+                ),
+                row=1, col=col_idx, secondary_y=True,
+            )
+
         fig.update_layout(
             title="Прогноз vs Факт: суммы и экспозиция (равномерные бины)",
-            width=1150,
+            width=1600,
             height=800,
             hovermode="x unified",
         )
@@ -288,55 +287,42 @@ def plot_severity_fact_vs_pred_binned(
         return fig
 
     plt, _, _, _, _, _ = _plot_deps()
-    fig, ax1 = plt.subplots(figsize=(15, 10))
-    ax1.plot(
-        grouped["fact_sev_bin"],
-        grouped["fact_sev_median"],
-        color="#FF6B6B",
-        marker="o",
-        linewidth=2,
-        markersize=6,
-        label="Основной долг + УТС + Износ",
-    )
-    ax1.plot(
-        grouped["fact_sev_bin"],
-        grouped["pred_sev"],
-        color="#4ECDC4",
-        marker="D",
-        linewidth=2,
-        markersize=6,
-        label="Прогноз модели",
-    )
-    ax1.plot(
-        grouped["fact_sev_bin"],
-        grouped["base_sum"],
-        color="#9B5DE5",
-        marker="s",
-        linewidth=2,
-        markersize=6,
-        label="Исковая сумма (TARGET_FREQ_AMOUNT)",
-    )
-    ax1.set_xlabel("Сумма (бин, руб)", fontsize=12)
-    ax1.set_ylabel("Сумма (руб)", fontsize=12)
-    ax1.ticklabel_format(style="plain", axis="y")
-    ax1.grid(True, alpha=0.3)
+    x = grouped["fact_sev_bin"]
+    surcharge = grouped["fact_surcharge"]
+    bin_width = np.diff(x).mean() if len(grouped) > 1 else 100_000.0
 
-    ax2 = ax1.twinx()
-    bin_width = np.diff(grouped["fact_sev_bin"]).mean() if len(grouped) > 1 else 100_000.0
-    ax2.bar(
-        grouped["fact_sev_bin"],
-        grouped["n_claims"],
-        color="gray",
-        alpha=0.3,
-        width=bin_width * 0.8,
-        label="Количество исков",
-    )
-    ax2.set_ylabel("Количество исков", color="gray")
-    ax2.tick_params(axis="y", labelcolor="gray")
+    _traces = [
+        ("fact_sev_median", "Основной долг + УТС + Износ", "#FF6B6B", "o"),
+        ("pred_sev", "Прогноз модели", "#4ECDC4", "D"),
+        ("base_sum", "Исковая сумма (TARGET_FREQ_AMOUNT)", "#9B5DE5", "s"),
+    ]
 
-    lines_1, labels_1 = ax1.get_legend_handles_labels()
-    lines_2, labels_2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc="upper left", bbox_to_anchor=(0, -0.15), ncol=2)
+    fig, (ax_l, ax_r) = plt.subplots(1, 2, figsize=(24, 10))
+    for ax, offset, title in (
+        (ax_l, surcharge, "С выплатой по убытку"),
+        (ax_r, 0, "Без выплаты по убытку (чистые таргеты)"),
+    ):
+        for col, label, color, marker in _traces:
+            ax.plot(x, grouped[col] + offset, color=color, marker=marker,
+                    linewidth=2, markersize=6, label=label)
+        if not isinstance(offset, int):
+            ax.plot(x, surcharge, color="silver", marker="^",
+                    linewidth=2, markersize=6, label="Фактические выплаты по убытку")
+        ax.set_xlabel("Сумма (бин, руб)", fontsize=12)
+        ax.set_ylabel("Сумма (руб)", fontsize=12)
+        ax.ticklabel_format(style="plain", axis="y")
+        ax.grid(True, alpha=0.3)
+        ax.set_title(title, fontsize=13)
+
+        ax2 = ax.twinx()
+        ax2.bar(x, grouped["n_claims"], color="gray", alpha=0.3,
+                width=bin_width * 0.8, label="Количество исков")
+        ax2.set_ylabel("Количество исков", color="gray")
+        ax2.tick_params(axis="y", labelcolor="gray")
+
+    h1, l1 = ax_l.get_legend_handles_labels()
+    h2, l2 = ax_l.twinx().get_legend_handles_labels() if False else ([], [])
+    ax_l.legend(h1, l1, loc="upper left", bbox_to_anchor=(0, -0.12), ncol=2)
     plt.tight_layout(rect=[0, 0.05, 1, 1])
     plt.show()
     return fig

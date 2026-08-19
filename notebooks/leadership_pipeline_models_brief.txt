@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Querulus — что изменилось: старая vs новая версия</title>
+  <style>
+    :root {
+      --bg: #f7f5f1;
+      --surface: #fff;
+      --ink: #1a1a1a;
+      --muted: #5c5c5c;
+      --line: #ddd8ce;
+      --accent: #0d5c63;
+      --accent-soft: #e6f2f3;
+      --old: #6b4c7a;
+      --old-soft: #f3edf5;
+      --new: #1a6b4a;
+      --new-soft: #e8f5ef;
+      --warn: #9a6b00;
+      --warn-soft: #fff8e6;
+      --code-bg: #eeece7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.5;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse at 8% 0%, #e8f0ef 0%, transparent 42%),
+        radial-gradient(ellipse at 92% 8%, #f0e9df 0%, transparent 38%),
+        var(--bg);
+    }
+    header, main, nav, footer {
+      max-width: 1040px;
+      margin-left: auto;
+      margin-right: auto;
+      padding-left: 1.25rem;
+      padding-right: 1.25rem;
+    }
+    header { padding-top: 2rem; padding-bottom: 1rem; }
+    header h1 {
+      margin: 0 0 0.35rem;
+      font-size: 1.75rem;
+      color: var(--accent);
+      letter-spacing: -0.02em;
+    }
+    header .subtitle { margin: 0 0 1rem; color: var(--muted); max-width: 54rem; }
+    .meta-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .pill {
+      display: inline-block;
+      font-size: 0.82rem;
+      padding: 0.2rem 0.65rem;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid #c5dfe1;
+    }
+    nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1rem;
+      margin-bottom: 1rem;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: rgba(247, 245, 241, 0.92);
+      backdrop-filter: blur(6px);
+      padding-top: 0.5rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--line);
+    }
+    nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+    nav a:hover { text-decoration: underline; }
+    main { padding-bottom: 2rem; }
+    section {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 1rem 1.2rem 1.15rem;
+      margin-bottom: 1rem;
+    }
+    h2 {
+      margin: 0 0 0.65rem;
+      font-size: 1.15rem;
+      color: var(--accent);
+      border-bottom: 2px solid var(--accent-soft);
+      padding-bottom: 0.3rem;
+    }
+    h3 { margin: 1rem 0 0.4rem; font-size: 1rem; }
+    p { margin: 0.4rem 0; }
+    ul { margin: 0.35rem 0 0.7rem; padding-left: 1.15rem; }
+    li { margin: 0.3rem 0; }
+
+    .lead-box {
+      background: linear-gradient(135deg, var(--accent-soft) 0%, #f8faf9 100%);
+      border: 1px solid #b8d8db;
+      border-radius: 8px;
+      padding: 1rem 1.15rem;
+      margin-bottom: 1rem;
+    }
+    .lead-box strong { color: var(--accent); }
+
+    .compare-hero {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    @media (max-width: 720px) { .compare-hero { grid-template-columns: 1fr; } }
+    .hero-card {
+      border-radius: 8px;
+      padding: 1rem 1.1rem;
+      border: 1px solid var(--line);
+    }
+    .hero-card.old { background: var(--old-soft); border-color: #d8c9df; }
+    .hero-card.new { background: var(--new-soft); border-color: #b8dcc8; }
+    .hero-card h3 { margin: 0 0 0.5rem; font-size: 1.05rem; }
+    .hero-card.old h3 { color: var(--old); }
+    .hero-card.new h3 { color: var(--new); }
+    .hero-card ul { margin-bottom: 0; font-size: 0.92rem; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+      margin: 0.5rem 0;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 0.45rem 0.6rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+    }
+    th.col-old { background: var(--old-soft); color: var(--old); }
+    th.col-new { background: var(--new-soft); color: var(--new); }
+    tr:nth-child(even) td { background: #fafaf8; }
+    td.topic { font-weight: 600; width: 18%; white-space: nowrap; }
+    td.formula { font-family: Consolas, "Courier New", monospace; font-size: 0.82rem; }
+
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: stretch;
+      gap: 0.45rem;
+      margin: 0.75rem 0;
+    }
+    .flow-step {
+      flex: 1 1 130px;
+      min-width: 120px;
+      background: #fafaf8;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+    }
+    .flow-step .tag {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.2rem;
+    }
+    .flow-step .title { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.25rem; }
+    .flow-step .desc { font-size: 0.82rem; color: var(--muted); line-height: 1.35; }
+    .flow-step.new-step { border-color: var(--new); background: var(--new-soft); }
+    .flow-arrow { align-self: center; color: var(--muted); font-size: 1.1rem; flex: 0 0 auto; }
+    @media (max-width: 720px) { .flow-arrow { display: none; } }
+
+    .note {
+      background: var(--warn-soft);
+      border: 1px solid #e8d9a8;
+      border-radius: 6px;
+      padding: 0.65rem 0.85rem;
+      font-size: 0.9rem;
+      margin-top: 0.65rem;
+    }
+    .note strong { color: var(--warn); }
+
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.55rem;
+      margin: 0.75rem 0;
+    }
+    @media (max-width: 900px) { .kpi-row { grid-template-columns: 1fr 1fr; } }
+    .kpi {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+      background: #fafaf8;
+    }
+    .kpi .k { font-size: 0.78rem; color: var(--muted); display: block; }
+    .kpi .v { font-size: 1.05rem; font-weight: 700; }
+    .kpi .h { font-size: 0.78rem; color: var(--muted); }
+
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.86em;
+      background: var(--code-bg);
+      padding: 0.05em 0.3em;
+      border-radius: 3px;
+    }
+
+    footer {
+      padding-bottom: 2rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Querulus — что изменилось между старой и новой версией</h1>
+    <p class="subtitle">
+      Краткий отчёт для совещания: датасет, таргеты, пайплайн обучения, модели и финансовый эффект.
+      <strong>Старая версия</strong> — прод Litigant (TARGET_2, ПСР, фиксированные фичи).
+      <strong>Новая версия</strong> — Querulus (TARGET_FREQ / TARGET_SEV, icnl, FS + HPO).
+    </p>
+    <div class="meta-row">
+      <span class="pill">19.08.2026</span>
+      <span class="pill">коммит 1cb44cb</span>
+      <span class="pill">ноутбук collect.ipynb</span>
+    </div>
+  </header>
+
+  <nav>
+    <a href="#summary">Выжимка</a>
+    <a href="#dataset">Датасет</a>
+    <a href="#targets">Таргеты</a>
+    <a href="#features">Фичи</a>
+    <a href="#pipeline">Пайплайн</a>
+    <a href="#models">Модели</a>
+    <a href="#fineffect">Финэффект</a>
+    <a href="#eval">Оценка</a>
+  </nav>
+
+  <main>
+    <div class="lead-box" id="summary">
+      <strong>Главное в одном абзаце.</strong>
+      Мы перешли от прод-модели Litigant на старых таргетах и ПСР-факте к новой постановке Querulus:
+      таргеты из судебных требований и доплат (icnl), датасет по дате поручения на выплату с вызреванием,
+      рублёвые фичи в ценах 2020, автоматический отбор фич и HPO, единая формула финэффекта.
+      Сравнение «старая vs новая» делается честно: каждая модель на своих фичах, регрессия severity — на одной классификации.
+    </div>
+
+    <div class="compare-hero">
+      <div class="hero-card old">
+        <h3>Старая версия (Litigant / прод)</h3>
+        <ul>
+          <li>Частота: <code>TARGET_2</code> (сутяжничество по ПСР)</li>
+          <li>Сумма: <code>TARGET_3_SEV</code> (ОД+УТС+износ)</li>
+          <li>Факт финэффекта: претензии + ФУ + иск + взносы</li>
+          <li>Фичи: фиксированный прод-пул (~10 freq, ~4 sev)</li>
+          <li>Обучение: CatBoost 375 iter, без FS/HPO в проде</li>
+          <li>Окно: LOSS_DATE_TIME с 2022</li>
+        </ul>
+      </div>
+      <div class="hero-card new">
+        <h3>Новая версия (Querulus)</h3>
+        <ul>
+          <li>Частота: <code>TARGET_FREQ</code> (будет ли доплата после УУ)</li>
+          <li>Сумма: <code>TARGET_SEV</code> (сумма доплаты, ₽)</li>
+          <li>Факт финэффекта: <code>TARGET_FREQ_AMOUNT</code> + взносы ФУ</li>
+          <li>Фичи: MVP-пул → PSI → SHAP → noise-cut → HPO</li>
+          <li>Обучение: блок B (train-loop) + калибровка</li>
+          <li>Окно: PAYMENT_ORDER с 2020, вызревание H мес.</li>
+        </ul>
+      </div>
+    </div>
+
+    <section id="dataset">
+      <h2>1. Датасет</h2>
+      <div class="kpi-row">
+        <div class="kpi">
+          <span class="k">Окно выборки</span>
+          <span class="v">2020 → 2025</span>
+          <span class="h">было: с 2022 по LOSS_DATE</span>
+        </div>
+        <div class="kpi">
+          <span class="k">Якорь времени</span>
+          <span class="v">PAYMENT_ORDER</span>
+          <span class="h">дата поручения на выплату</span>
+        </div>
+        <div class="kpi">
+          <span class="k">Вызревание</span>
+          <span class="v">+H ≤ S</span>
+          <span class="h">H ≈ 24 мес., без незакрытого суда</span>
+        </div>
+        <div class="kpi">
+          <span class="k">Объём</span>
+          <span class="v">~117k → ~214k</span>
+          <span class="h">после расширения окна victim</span>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Тема</th>
+            <th class="col-old">Было (Litigant)</th>
+            <th class="col-new">Стало (Querulus)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="topic">Зерно</td>
+            <td>Инцидент, агрегация <code>TARGET_2</code> на уровень события</td>
+            <td>Инцидент; первичный убыток = min <code>LOSS_NUMBER</code>; одна строка на инцидент</td>
+          </tr>
+          <tr>
+            <td class="topic">Фильтр дат</td>
+            <td><code>LOSS_DATE_TIME</code> с 2022</td>
+            <td><code>PAYMENT_ORDER_DATE_TIME</code> с 2020-01-01 по 2025-06-30</td>
+          </tr>
+          <tr>
+            <td class="topic">Вызревание</td>
+            <td>Неявное / по дате убытка</td>
+            <td>Только поручения, где <code>PAYMENT_ORDER + H ≤ S</code>; исключены иски с «Не принято»</td>
+          </tr>
+          <tr>
+            <td class="topic">As-of фич</td>
+            <td>По дате убытка</td>
+            <td>История претензий/судов и дефляция — по <code>PAYMENT_ORDER_DATE_TIME</code></td>
+          </tr>
+          <tr>
+            <td class="topic">Источники</td>
+            <td>Litigant enrich, ПСР, претензии</td>
+            <td>icnl (IncomingClaimNewLogic), претензии с ответом «Выплата», калькуляция из <code>_InfoRg14746</code></td>
+          </tr>
+          <tr>
+            <td class="topic">Качество</td>
+            <td>Минимальная очистка</td>
+            <td>DQ при сборке: clip ≥ 0, winsorize log1p-IQR; drop <code>FE_VALUE_BEFORE_DIFF &lt; 0</code></td>
+          </tr>
+          <tr>
+            <td class="topic">Деньги в фичах</td>
+            <td>Номинальные рубли</td>
+            <td>ИПЦ Росстата → <code>*_REAL_2020</code>; номинал в TO_DROP</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="targets">
+      <h2>2. Таргеты (что предсказываем)</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Задача</th>
+            <th class="col-old">Старая (Litigant)</th>
+            <th class="col-new">Новая (Querulus)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="topic">Frequency</td>
+            <td><code>TARGET_2</code> — сутяжник по ПСР (претензии + ФУ + иск)</td>
+            <td><code>TARGET_FREQ</code> — будет ли доплата после первичного УУ (иски + претензии &gt; 0)</td>
+          </tr>
+          <tr>
+            <td class="topic">Severity</td>
+            <td><code>TARGET_3_SEV</code> — ОД + УТС + износ (планка Litigant)</td>
+            <td><code>TARGET_SEV</code> — сумма доплаты в рублях (last instance по инстанции)</td>
+          </tr>
+          <tr>
+            <td class="topic">Деньги факта</td>
+            <td>ПСР: претензии + ФУ + иск</td>
+            <td><code>TARGET_FREQ_AMOUNT</code> — сумма требований icnl + претензий</td>
+          </tr>
+          <tr>
+            <td class="topic">Сверка</td>
+            <td>—</td>
+            <td>Модуль <code>target_compare</code>: Litigant vs Querulus, mismatch-таблицы</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="note">
+        <strong>Важно:</strong> <code>TARGET_2</code> и <code>TARGET_FREQ</code> — разные бизнес-определения.
+        Совпадают не на 100%; в отчёте C2+ есть отдельная таблица сверки меток.
+      </p>
+    </section>
+
+    <section id="features">
+      <h2>3. Признаки (фичи)</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Аспект</th>
+            <th class="col-old">Старая модель (PROD)</th>
+            <th class="col-new">Новая модель (после блока B)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="topic">Frequency</td>
+            <td>10 фич: FILIAL, EVENT_YEAR, VICTIM_VEHICLE_AGE, APPLICANT_AGE, …</td>
+            <td>Отобранный пул после SHAP (до ~30), свой набор после backward-elim / noise-cut</td>
+          </tr>
+          <tr>
+            <td class="topic">Severity</td>
+            <td><code>AMOUNT_REPAIR</code>, LOSS_UNIT_ZONE, APPLY_DELAY, …</td>
+            <td><code>FE_VALUE_BEFORE_WITHOUT_REAL_2020</code> вместо номинала repair; + новые FE_</td>
+          </tr>
+          <tr>
+            <td class="topic">Пул</td>
+            <td>Фиксированный config_cf_3 / config_rg_3</td>
+            <td>MVP (~68 FE_) + incident + person (person по умолчанию off)</td>
+          </tr>
+          <tr>
+            <td class="topic">Отбор</td>
+            <td>Нет</td>
+            <td>PSI/L1 → SHAP select → noise-cut → backward-elim → zero-importance drop</td>
+          </tr>
+          <tr>
+            <td class="topic">Отчёт</td>
+            <td>—</td>
+            <td>HTML после FS: веса, графики, красным — что выпало из прод</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="pipeline">
+      <h2>4. Пайплайн обучения</h2>
+      <div class="flow">
+        <div class="flow-step">
+          <div class="tag">Было</div>
+          <div class="title">Litigant</div>
+          <div class="desc">Фикс. фичи → CatBoost → порог fin-effect → отчёт ИТОГО</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step new-step">
+          <div class="tag">Блок A</div>
+          <div class="title">Три стека</div>
+          <div class="desc">legacy / new / new_claims на одном датасете; черновые метрики</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step new-step">
+          <div class="tag">Блок B</div>
+          <div class="title">FS + HPO</div>
+          <div class="desc">corr → PSI → SHAP → noise → backward → Optuna → cal</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step new-step">
+          <div class="tag">C2+</div>
+          <div class="title">Сравнение</div>
+          <div class="desc">Legacy (прод) vs New (кандидат) на splits.test</div>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Этап</th>
+            <th class="col-old">Было</th>
+            <th class="col-new">Стало</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="topic">Сплит</td>
+            <td>Train / test по дате убытка</td>
+            <td>Train / Val / Cal / Test по <code>PAYMENT_ORDER_DATE_TIME</code>; train с 2022, test с 2024-06</td>
+          </tr>
+          <tr>
+            <td class="topic">HPO</td>
+            <td>Нет (прод-параметры)</td>
+            <td>Optuna на train+val; тихий режим; MLflow</td>
+          </tr>
+          <tr>
+            <td class="topic">Калибровка</td>
+            <td>Нет</td>
+            <td>Isotonic/sigmoid на Cal-сплите (опционально)</td>
+          </tr>
+          <tr>
+            <td class="topic">Старт train</td>
+            <td>Фиксированный</td>
+            <td>A++: сдвиг train_from по годам (2020…2023) на одном test</td>
+          </tr>
+          <tr>
+            <td class="topic">Флаги</td>
+            <td>Один прогон</td>
+            <td><code>RUN_FIT</code>, <code>RUN_FEATURE_SELECT</code>, <code>RUN_HPO</code>, <code>RUN_START_YEAR_EVAL</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="models">
+      <h2>5. Модели</h2>
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th class="col-old">Legacy (прод)</th>
+            <th class="col-new">New (кандидат)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="topic">Алгоритм</td>
+            <td>CatBoost classifier + regressor</td>
+            <td>CatBoost classifier + regressor</td>
+          </tr>
+          <tr>
+            <td class="topic">Freq target</td>
+            <td><code>TARGET_2</code></td>
+            <td><code>TARGET_FREQ</code></td>
+          </tr>
+          <tr>
+            <td class="topic">Sev target</td>
+            <td><code>TARGET_3_SEV</code></td>
+            <td><code>TARGET_SEV</code></td>
+          </tr>
+          <tr>
+            <td class="topic">Итерации</td>
+            <td>375 (freq), 100 (sev)</td>
+            <td>После HPO (или defaults)</td>
+          </tr>
+          <tr>
+            <td class="topic">Фичи</td>
+            <td><code>PROD_*</code> из selected_features.py</td>
+            <td>Результат блока B (FS + HPO)</td>
+          </tr>
+          <tr>
+            <td class="topic">Где учится</td>
+            <td>Блок A, <code>triple.trainings["legacy"]</code></td>
+            <td>Блок B, <code>train_loop_result.training</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="fineffect">
+      <h2>6. Финансовый эффект</h2>
+      <p>
+        Сначала — формулы по клеткам, потом — отдельный числовой пример.
+        В обоих подходах деньги показаны как расход, то есть отрицательным знаком.
+      </p>
+
+      <h3>6.1. Формулы</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Аспект</th>
+            <th class="col-old">Старый (Litigant / legacy_psr)</th>
+            <th class="col-new">Новый (icnl / coverage)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="topic">База факта</td>
+            <td>претензии + ФУ + иск + взносы</td>
+            <td><code>TARGET_FREQ_AMOUNT</code> + взносы ФУ</td>
+          </tr>
+          <tr>
+            <td class="topic">0-0</td>
+            <td class="formula">−(ПСР + взносы)</td>
+            <td class="formula">0</td>
+          </tr>
+          <tr>
+            <td class="topic">0-1</td>
+            <td class="formula">−(ПСР + взносы)</td>
+            <td class="formula">−pred_sev</td>
+          </tr>
+          <tr>
+            <td class="topic">1-0</td>
+            <td class="formula">−pred_sev − (ПСР + взносы)</td>
+            <td class="formula">−(ПСР + взносы)</td>
+          </tr>
+          <tr>
+            <td class="topic">1-1, pred_sev ≥ TARGET_SEV</td>
+            <td class="formula">−pred_sev</td>
+            <td class="formula">−pred_sev</td>
+          </tr>
+          <tr>
+            <td class="topic">1-1, pred_sev &lt; TARGET_SEV</td>
+            <td class="formula">−(ПСР + взносы)</td>
+            <td class="formula">−(ПСР × (1 − pred_sev / TARGET_SEV) + взносы)</td>
+          </tr>
+          <tr>
+            <td class="topic">Где считается</td>
+            <td>Стек <code>legacy_psr</code>; блок «три стека» — старый ИТОГО</td>
+            <td>Везде icnl: C3, zoo, подбор порога, C2+, start-year</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>6.2. Пример с числами: клетка 1-1 «не хватило»</h3>
+      <p>
+        Пусть:
+        <code>TARGET_SEV = 80 000</code>,
+        <code>pred_sev = 40 000</code>,
+        <code>ПСР = 100 000</code>,
+        <code>взносы = 100 000</code>.
+        Тогда <code>pred_freq = 1</code>, факт frequency = <code>1</code>, и модель попала в клетку
+        <code>1-1</code>, но суммы не хватило.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Подход</th>
+            <th>Формула</th>
+            <th>Подстановка чисел</th>
+            <th>Результат</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Старый</td>
+            <td class="formula">−(ПСР + взносы)</td>
+            <td class="formula">−(100 000 + 100 000)</td>
+            <td><strong>−200 000 ₽</strong></td>
+          </tr>
+          <tr>
+            <td>Новый</td>
+            <td class="formula">−(ПСР × (1 − pred_sev / TARGET_SEV) + взносы)</td>
+            <td class="formula">−(100 000 × (1 − 40 000 / 80 000) + 100 000)</td>
+            <td><strong>−150 000 ₽</strong></td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Разница между подходами на этом примере:
+        <code>−150 000 − (−200 000) = 50 000</code>.
+        В новом подходе часть планки считается покрытой через выражение
+        <code>(1 − 40 000 / 80 000)</code>, без сокращения записи.
+      </p>
+    </section>
+
+    <section id="eval">
+      <h2>7. Как сравниваем старую и новую модель (C2+)</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Что</th>
+            <th>Как было (ошибка)</th>
+            <th>Как стало (честно)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="topic">Момент сравнения</td>
+            <td>Сразу после блока A (без FS/HPO)</td>
+            <td>После блока B, holdout <code>splits.test</code></td>
+          </tr>
+          <tr>
+            <td class="topic">Классификация</td>
+            <td>Один пул фич, разные метки</td>
+            <td>Каждая модель на <strong>своих</strong> фичах и метке</td>
+          </tr>
+          <tr>
+            <td class="topic">Регрессия severity</td>
+            <td>Разные pred_freq → разные наборы строк</td>
+            <td>Обе регрессии на <strong>pred_freq new</strong></td>
+          </tr>
+          <tr>
+            <td class="topic">Покрытие планки</td>
+            <td>Не выделялось</td>
+            <td>Доля покрытого <code>TARGET_SEV</code> на строках 1-1; строка new − legacy</td>
+          </tr>
+          <tr>
+            <td class="topic">Метрики</td>
+            <td>MAE разных сумм (некорректно)</td>
+            <td>PR-AUC / F1 на своих метках + ₽-квадранты покрытия</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p class="note">
+        <strong>Для совещания:</strong> решение о переходе на новую модель принимаем по C2+ (классификация + покрытие + доля планки),
+        а не по черновым метрикам блока A. В блоке «три стека» рядом показываем старый и новый финэффект на одних pred — чтобы видеть разницу подходов к деньгам.
+      </p>
+    </section>
+  </main>
+
+  <footer>
+    Querulus · отчёт для совещания · подробнее: dataset_sources.html, collect.ipynb, CHANGELOG.md
+  </footer>
+</body>
+</html>
