@@ -423,43 +423,63 @@ def _log_study_artifacts(
     best_params: dict[str, Any],
     best_value: float,
 ) -> None:
-    """features.json / best_params.json / trials.csv / search_space.json."""
+    """features.json / best_params.json / trials.csv / search_space.json.
+
+    На корпоративном MLflow ``artifact_uri`` часто указывает на локальный
+    ``/mlflow`` у клиента → PermissionError. Тогда только warning: params/metrics
+    уже записаны, HPO не валим.
+    """
     import tempfile
     from pathlib import Path
 
-    with tempfile.TemporaryDirectory(prefix="querulus_hpo_") as tmp:
-        root = Path(tmp)
-        (root / "features.json").write_text(
-            json.dumps(
-                {
-                    "features": feature_list,
-                    "categorical_features": cat_features,
-                    "n_features": len(feature_list),
-                    "n_categorical": len(cat_features),
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
+    try:
+        with tempfile.TemporaryDirectory(prefix="querulus_hpo_") as tmp:
+            root = Path(tmp)
+            (root / "features.json").write_text(
+                json.dumps(
+                    {
+                        "features": feature_list,
+                        "categorical_features": cat_features,
+                        "n_features": len(feature_list),
+                        "n_categorical": len(cat_features),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (root / "best_params.json").write_text(
+                json.dumps(
+                    {
+                        "optimize_metric": optimize_metric,
+                        "best_value": best_value,
+                        "best_params": best_params,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (root / "search_space.json").write_text(
+                json.dumps(_SEARCH_SPACE_DOC, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            study.trials_dataframe().to_csv(root / "trials.csv", index=False)
+            mlflow.log_artifacts(str(root))
+            mlflow.set_tag("artifacts_logged", "true")
+    except (PermissionError, OSError) as exc:
+        logger.warning(
+            "MLflow: не удалось записать artifacts (%s). "
+            "Часто artifact_uri указывает на локальный /mlflow без прав на Jupyter. "
+            "Params/metrics run уже в tracking; локально см. hpo_best_params_new.json. "
+            "Попросите админов MLflow настроить remote artifact store (S3/MinIO).",
+            exc,
         )
-        (root / "best_params.json").write_text(
-            json.dumps(
-                {
-                    "optimize_metric": optimize_metric,
-                    "best_value": best_value,
-                    "best_params": best_params,
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        (root / "search_space.json").write_text(
-            json.dumps(_SEARCH_SPACE_DOC, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        study.trials_dataframe().to_csv(root / "trials.csv", index=False)
-        mlflow.log_artifacts(str(root))
+        try:
+            mlflow.set_tag("artifacts_logged", "false")
+            mlflow.set_tag("artifacts_error", type(exc).__name__)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def run_hpo(
