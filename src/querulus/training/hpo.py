@@ -236,6 +236,32 @@ class HpoResult:
     n_trials: int
     experiment_name: str
     run_name: str
+    parent_run_id: str | None = None
+
+
+# Фиксированные (не ищем в Optuna).
+_EARLY_STOPPING_ROUNDS = 50
+_AUTO_CLASS_WEIGHTS = "Balanced"
+
+# Описание сетки для артефакта search_space.json (актуально после правок).
+_SEARCH_SPACE_DOC: dict[str, Any] = {
+    "iterations": "int 100..2000 step 100",
+    "learning_rate": "float 0.001..0.3 log",
+    "depth": "int 3..8",
+    "l2_leaf_reg": "float 1.0..10.0 step 0.5",
+    "bootstrap_type": ["Bayesian", "Bernoulli", "MVS", "No"],
+    "grow_policy": ["SymmetricTree", "Depthwise", "Lossguide"],
+    "random_strength": "float 0.1..10.0 log",
+    "rsm": "float 0.5..1.0",
+    "leaf_estimation_method": ["Newton", "Gradient"],
+    "one_hot_max_size": "int 2..32",
+    "bagging_temperature": "float 0..1 if Bayesian",
+    "subsample": "float 0.5..1 if Bernoulli|MVS",
+    "min_data_in_leaf": "int 1..20 if Lossguide",
+    "max_leaves": "int 2..64 if Lossguide",
+    "auto_class_weights": f"fixed {_AUTO_CLASS_WEIGHTS!r} (classification only)",
+    "early_stopping_rounds": f"fixed {_EARLY_STOPPING_ROUNDS}",
+}
 
 
 def _suggest_catboost_params(trial, *, task_type: TaskType, random_seed: int) -> dict[str, Any]:
@@ -249,24 +275,23 @@ def _suggest_catboost_params(trial, *, task_type: TaskType, random_seed: int) ->
     params: dict[str, Any] = {
         "iterations": trial.suggest_int("iterations", 100, 2000, step=100),
         "learning_rate": trial.suggest_float("learning_rate", 0.001, 0.3, log=True),
-        "depth": trial.suggest_int("depth", 3, 12),
+        "depth": trial.suggest_int("depth", 3, 8),
         "grow_policy": grow,
         "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1.0, 10.0, step=0.5),
         "bootstrap_type": bootstrap,
-        "random_strength": trial.suggest_float("random_strength", 1e-9, 10.0, log=True),
+        "random_strength": trial.suggest_float("random_strength", 0.1, 10.0, log=True),
         "rsm": trial.suggest_float("rsm", 0.5, 1.0),
         "leaf_estimation_method": trial.suggest_categorical(
             "leaf_estimation_method", ["Newton", "Gradient"]
         ),
-        "one_hot_max_size": trial.suggest_int("one_hot_max_size", 2, 255),
+        "one_hot_max_size": trial.suggest_int("one_hot_max_size", 2, 32),
         "random_seed": random_seed,
         "verbose": False,
         "allow_writing_files": False,
+        "early_stopping_rounds": _EARLY_STOPPING_ROUNDS,
     }
     if task_type == "classification":
-        params["auto_class_weights"] = trial.suggest_categorical(
-            "auto_class_weights", ["Balanced", "SqrtBalanced", None]
-        )
+        params["auto_class_weights"] = _AUTO_CLASS_WEIGHTS
     if bootstrap == "Bayesian":
         params["bagging_temperature"] = trial.suggest_float("bagging_temperature", 0.0, 1.0)
     if bootstrap in ("Bernoulli", "MVS"):
@@ -274,7 +299,6 @@ def _suggest_catboost_params(trial, *, task_type: TaskType, random_seed: int) ->
     if grow == "Lossguide":
         params["min_data_in_leaf"] = trial.suggest_int("min_data_in_leaf", 1, 20)
         params["max_leaves"] = trial.suggest_int("max_leaves", 2, 64)
-    params["early_stopping_rounds"] = trial.suggest_int("early_stopping_rounds", 10, 100)
     return {key: value for key, value in params.items() if value is not None}
 
 
@@ -297,9 +321,16 @@ def _fold_metric(
     optimize_metric: str,
 ) -> float:
     """Метрика без ModelDiagnostics (fallback)."""
-    from sklearn.metrics import mean_absolute_error, r2_score, roc_auc_score
+    from sklearn.metrics import (
+        average_precision_score,
+        mean_absolute_error,
+        r2_score,
+        roc_auc_score,
+    )
 
     if task_type == "classification":
+        if optimize_metric in {"pr_auc", "average_precision"}:
+            return float(average_precision_score(y_true, y_pred))
         if optimize_metric == "roc_auc":
             return float(roc_auc_score(y_true, y_pred))
         raise ValueError(f"Неизвестная classification-метрика: {optimize_metric}")
@@ -308,6 +339,68 @@ def _fold_metric(
     if optimize_metric == "r2":
         return float(r2_score(y_true, y_pred))
     raise ValueError(f"Неизвестная regression-метрика: {optimize_metric}")
+
+
+def _mlflow_safe_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Параметры, пригодные для mlflow.log_params (без None)."""
+    out: dict[str, Any] = {}
+    for key, value in params.items():
+        if value is None:
+            continue
+        if isinstance(value, (bool, int, float, str)):
+            out[key] = value
+        else:
+            out[key] = str(value)
+    return out
+
+
+def _log_study_artifacts(
+    mlflow: Any,
+    *,
+    feature_list: list[str],
+    cat_features: list[str],
+    study: Any,
+    optimize_metric: str,
+    best_params: dict[str, Any],
+    best_value: float,
+) -> None:
+    """features.json / best_params.json / trials.csv / search_space.json."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="querulus_hpo_") as tmp:
+        root = Path(tmp)
+        (root / "features.json").write_text(
+            json.dumps(
+                {
+                    "features": feature_list,
+                    "categorical_features": cat_features,
+                    "n_features": len(feature_list),
+                    "n_categorical": len(cat_features),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (root / "best_params.json").write_text(
+            json.dumps(
+                {
+                    "optimize_metric": optimize_metric,
+                    "best_value": best_value,
+                    "best_params": best_params,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (root / "search_space.json").write_text(
+            json.dumps(_SEARCH_SPACE_DOC, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        study.trials_dataframe().to_csv(root / "trials.csv", index=False)
+        mlflow.log_artifacts(str(root))
 
 
 def run_hpo(
@@ -330,6 +423,7 @@ def run_hpo(
     """Optuna HPO на TimeSeriesSplit по ``date_column`` (без holdout Test).
 
     ``mvp_types`` — types_dict для cat_features (CATEGORIAL/BINARY).
+    При ``use_mlflow=True``: parent study-run + nested trial runs (канон MLflow).
     """
     import optuna
     from catboost import CatBoostClassifier, CatBoostRegressor, Pool
@@ -369,54 +463,153 @@ def run_hpo(
 
     def objective(trial: optuna.Trial) -> float:
         params = _suggest_catboost_params(trial, task_type=task_type, random_seed=random_seed)
-        early = int(params.pop("early_stopping_rounds"))
+        early = int(params.pop("early_stopping_rounds", _EARLY_STOPPING_ROUNDS))
+        fit_params = dict(params)
         fold_scores: list[float] = []
-        # Без nested MLflow-run на каждый trial — меньше шума в логах.
-        for fold, (tr_idx, va_idx) in enumerate(splitter.split(x_all)):
-            x_tr, y_tr = x_all.iloc[tr_idx], y_all.iloc[tr_idx]
-            x_va, y_va = x_all.iloc[va_idx], y_all.iloc[va_idx]
-            pool = Pool(x_tr, y_tr, cat_features=cat_features, feature_names=feature_list)
-            eval_pool = Pool(
-                x_va, y_va, cat_features=cat_features, feature_names=feature_list
-            )
-            model = model_cls(**params)
-            model.fit(pool, eval_set=eval_pool, early_stopping_rounds=early, verbose=False)
-            if task_type == "classification":
-                pred = model.predict_proba(x_va)[:, 1]
-            else:
-                pred = np.asarray(model.predict(x_va), dtype=float)
-            fold_scores.append(
-                _fold_metric(
+
+        def _run_folds() -> list[float]:
+            scores: list[float] = []
+            for fold, (tr_idx, va_idx) in enumerate(splitter.split(x_all)):
+                x_tr, y_tr = x_all.iloc[tr_idx], y_all.iloc[tr_idx]
+                x_va, y_va = x_all.iloc[va_idx], y_all.iloc[va_idx]
+                pool = Pool(x_tr, y_tr, cat_features=cat_features, feature_names=feature_list)
+                eval_pool = Pool(
+                    x_va, y_va, cat_features=cat_features, feature_names=feature_list
+                )
+                model = model_cls(**fit_params)
+                model.fit(
+                    pool,
+                    eval_set=eval_pool,
+                    early_stopping_rounds=early,
+                    verbose=False,
+                )
+                if task_type == "classification":
+                    pred = model.predict_proba(x_va)[:, 1]
+                else:
+                    pred = np.asarray(model.predict(x_va), dtype=float)
+                score = _fold_metric(
                     y_va, pred, task_type=task_type, optimize_metric=optimize_metric
                 )
+                scores.append(score)
+            return scores
+
+        if mlflow is None:
+            fold_scores = _run_folds()
+            return float(np.mean(fold_scores))
+
+        with mlflow.start_run(nested=True, run_name=f"trial_{trial.number}") as child_run:
+            log_params = _mlflow_safe_params(
+                {**fit_params, "early_stopping_rounds": early}
             )
-        return float(np.mean(fold_scores))
+            mlflow.log_params(log_params)
+            mlflow.set_tags(
+                {
+                    "trial_number": str(trial.number),
+                    "stage": "hpo_trial",
+                }
+            )
+            try:
+                fold_scores = _run_folds()
+                mean_score = float(np.mean(fold_scores))
+                std_score = float(np.std(fold_scores)) if len(fold_scores) > 1 else 0.0
+                metrics = {
+                    optimize_metric: mean_score,
+                    f"{optimize_metric}_std": std_score,
+                }
+                for fold_i, score in enumerate(fold_scores):
+                    metrics[f"{optimize_metric}_fold_{fold_i}"] = float(score)
+                mlflow.log_metrics(metrics)
+                mlflow.set_tag("optuna_state", "COMPLETE")
+                trial.set_user_attr("mlflow_run_id", child_run.info.run_id)
+                return mean_score
+            except Exception:
+                mlflow.set_tag("optuna_state", "FAIL")
+                mlflow.set_tag("status", "failed")
+                raise
 
     study = optuna.create_study(direction=direction)
-    parent = mlflow.start_run(run_name=run_name) if mlflow else None
-    try:
-        if parent is not None:
-            parent.__enter__()
-            mlflow.log_param("n_features", len(feature_list))
-            mlflow.log_param("cv", cv)
-            mlflow.log_param("optimize_metric", optimize_metric)
+    parent_run_id: str | None = None
+
+    def _enrich_best_params(raw: dict[str, Any]) -> dict[str, Any]:
+        best = dict(raw)
+        best["early_stopping_rounds"] = _EARLY_STOPPING_ROUNDS
+        if task_type == "classification":
+            best["auto_class_weights"] = _AUTO_CLASS_WEIGHTS
+        return best
+
+    if mlflow is None:
         study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-        if mlflow is not None:
-            mlflow.log_params(study.best_params)
-            if study.best_value is not None and not (
-                isinstance(study.best_value, float) and math.isnan(study.best_value)
-            ):
-                mlflow.log_metric(f"best_{optimize_metric}", float(study.best_value))
-    finally:
-        if parent is not None:
-            parent.__exit__(None, None, None)
+        best_params = _enrich_best_params(dict(study.best_params))
+        best_value = (
+            float(study.best_value) if study.best_value is not None else float("nan")
+        )
+    else:
+        with mlflow.start_run(run_name=run_name) as parent_run:
+            parent_run_id = parent_run.info.run_id
+            mlflow.set_tags(
+                {
+                    "project": "querulus",
+                    "optimizer": "optuna",
+                    "model_family": "catboost",
+                    "task_type": task_type,
+                    "optimize_metric": optimize_metric,
+                    "direction": direction,
+                    "stage": "hpo",
+                }
+            )
+            mlflow.log_params(
+                {
+                    "n_trials": n_trials,
+                    "cv": cv,
+                    "random_seed": random_seed,
+                    "n_features": len(feature_list),
+                    "n_rows": len(x_all),
+                    "n_cat_features": len(cat_features),
+                    "target_column": target_column,
+                    "date_column": date_column,
+                    "optimize_metric": optimize_metric,
+                    "direction": direction,
+                    "early_stopping_rounds": _EARLY_STOPPING_ROUNDS,
+                }
+            )
+            if task_type == "classification":
+                mlflow.log_param("auto_class_weights", _AUTO_CLASS_WEIGHTS)
+
+            study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+            best_params = _enrich_best_params(dict(study.best_params))
+            best_value = (
+                float(study.best_value)
+                if study.best_value is not None
+                else float("nan")
+            )
+
+            mlflow.log_params(_mlflow_safe_params({f"best_{k}": v for k, v in best_params.items()}))
+            if not (isinstance(best_value, float) and math.isnan(best_value)):
+                mlflow.log_metric(f"best_{optimize_metric}", best_value)
+
+            best_trial = study.best_trial
+            mlflow.log_param("best_trial_number", best_trial.number)
+            best_child = best_trial.user_attrs.get("mlflow_run_id")
+            if best_child:
+                mlflow.log_param("best_child_run_id", best_child)
+
+            _log_study_artifacts(
+                mlflow,
+                feature_list=feature_list,
+                cat_features=cat_features,
+                study=study,
+                optimize_metric=optimize_metric,
+                best_params=best_params,
+                best_value=best_value,
+            )
 
     return HpoResult(
-        best_params=dict(study.best_params),
-        best_value=float(study.best_value) if study.best_value is not None else float("nan"),
+        best_params=best_params,
+        best_value=best_value,
         optimize_metric=optimize_metric,
         direction=direction,
         n_trials=n_trials,
         experiment_name=experiment_name,
         run_name=run_name,
+        parent_run_id=parent_run_id,
     )

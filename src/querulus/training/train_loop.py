@@ -725,7 +725,7 @@ def run_train_loop_new(
             target_column=base.frequency_target,
             date_column=base.date_column,
             task_type="classification",
-            optimize_metric="roc_auc",
+            optimize_metric="pr_auc",
             direction="maximize",
             experiment_name="querulus_hpo_frequency_new",
             n_trials=flags.hpo_n_trials,
@@ -734,7 +734,13 @@ def run_train_loop_new(
             use_mlflow=flags.use_mlflow,
         )
         freq_params, freq_iters = _merge_hpo_into_catboost(freq_hpo.best_params, freq_params)
-        stage_done("hpo_frequency", detail=f"best={freq_hpo.best_value:.4f}")
+        stage_done(
+            "hpo_frequency",
+            detail=(
+                f"best={freq_hpo.best_value:.4f}"
+                + (f" run_id={freq_hpo.parent_run_id}" if freq_hpo.parent_run_id else "")
+            ),
+        )
 
         stage_start("hpo_severity", detail=f"trials={flags.hpo_n_trials}")
         sev_hpo = run_hpo(
@@ -752,7 +758,13 @@ def run_train_loop_new(
             use_mlflow=flags.use_mlflow,
         )
         sev_params, sev_iters = _merge_hpo_into_catboost(sev_hpo.best_params, sev_params)
-        stage_done("hpo_severity", detail=f"best={sev_hpo.best_value:.4f}")
+        stage_done(
+            "hpo_severity",
+            detail=(
+                f"best={sev_hpo.best_value:.4f}"
+                + (f" run_id={sev_hpo.parent_run_id}" if sev_hpo.parent_run_id else "")
+            ),
+        )
         (out_dir / "hpo_best_params_new.json").write_text(
             json.dumps(
                 {"frequency": freq_hpo.best_params, "severity": sev_hpo.best_params},

@@ -36,6 +36,7 @@ MLFLOW_TRACKING_URI=https://mlflow.vsk.ru/
 # MLFLOW_TRACKING_SERVER_CERT_PATH=/path/to/ca-bundle.crt
 # Если CA нет — insecure TLS (self-signed корпоративный HTTPS):
 MLFLOW_TRACKING_INSECURE_TLS=true
+# HPO: parent study-run + nested trial_* runs (params/metrics/artifacts).
 # Auth: либо готовый Bearer, либо Keycloak login/password (password grant → token).
 # MLFLOW_TRACKING_TOKEN=
 KEYCLOAK_USERNAME=
