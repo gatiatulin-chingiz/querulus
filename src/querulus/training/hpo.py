@@ -28,17 +28,34 @@ def _configure_mlflow(mlflow: Any) -> None:
     - ``MLFLOW_TRACKING_INSECURE_TLS`` — ``true``/``false``; если CA нет и
       значение не ``false``, для корпоративного HTTPS включается insecure TLS
       (иначе self-signed валит запись в MLflow).
+
+    MLflow запрещает одновременно ``INSECURE_TLS=true`` и заданный
+    ``SERVER_CERT_PATH`` (даже пустая строка в env считается «заданным»).
+    Пустой/пробельный CERT_PATH снимаем из окружения.
     """
     tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "").strip() or "https://mlflow.vsk.ru/"
     mlflow.set_tracking_uri(tracking_uri)
 
-    cert_path = os.getenv("MLFLOW_TRACKING_SERVER_CERT_PATH", "").strip()
+    cert_raw = os.getenv("MLFLOW_TRACKING_SERVER_CERT_PATH")
+    cert_path = (cert_raw or "").strip()
+    if cert_raw is not None and not cert_path:
+        # Пустая строка в .env → MLflow всё равно видит «path is set».
+        os.environ.pop("MLFLOW_TRACKING_SERVER_CERT_PATH", None)
+
     insecure_raw = os.getenv("MLFLOW_TRACKING_INSECURE_TLS", "").strip().lower()
     if cert_path:
+        # CA задан — insecure не должен конфликтовать.
+        if insecure_raw in {"1", "true", "yes"}:
+            os.environ["MLFLOW_TRACKING_INSECURE_TLS"] = "false"
+            logger.warning(
+                "MLFLOW_TRACKING_SERVER_CERT_PATH задан — "
+                "сбрасываю MLFLOW_TRACKING_INSECURE_TLS=false (взаимоисключающие)."
+            )
         return
     if insecure_raw in {"0", "false", "no"}:
         return
     # Без CA на корпоративном HTTPS self-signed ломает запись — включаем insecure.
+    os.environ.pop("MLFLOW_TRACKING_SERVER_CERT_PATH", None)
     os.environ["MLFLOW_TRACKING_INSECURE_TLS"] = "true"
     logger.warning(
         "MLFLOW_TRACKING_INSECURE_TLS=true (нет MLFLOW_TRACKING_SERVER_CERT_PATH). "

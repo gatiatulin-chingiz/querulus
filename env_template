@@ -31,8 +31,8 @@ EMAIL_PASSWORD=
 
 # --- MLflow (HPO в train_loop / run_hpo) — запись обязательна ---
 MLFLOW_TRACKING_URI=https://mlflow.vsk.ru/
-# Предпочтительно: путь к корпоративному CA-bundle
-MLFLOW_TRACKING_SERVER_CERT_PATH=
-# Если CA нет: true (по умолчанию в коде включится само для записи в MLflow).
-# false — только если TLS уже валиден / CA задан.
+# Взаимоисключающие: либо CA-bundle, либо INSECURE_TLS (не оба сразу).
+# Пустой SERVER_CERT_PATH= в .env ломает MLflow — строку лучше не оставлять.
+# MLFLOW_TRACKING_SERVER_CERT_PATH=/path/to/ca-bundle.crt
+# Если CA нет — insecure TLS (self-signed корпоративный HTTPS):
 MLFLOW_TRACKING_INSECURE_TLS=true
