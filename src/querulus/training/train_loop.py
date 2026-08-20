@@ -16,6 +16,7 @@ from querulus.training.drift_thresholds import DEFAULT_L1_THRESHOLD, DEFAULT_PSI
 from querulus.training.drift import filter_features_by_drift, format_psi_filter_report
 from querulus.training.feature_selection_io import (
     drop_zero_importance_features,
+    load_feature_selection_latest,
     save_feature_selection,
 )
 from querulus.training.feature_selection_report import save_feature_selection_report
@@ -50,6 +51,9 @@ class TrainLoopFlags:
     (HPO/cal тогда тоже пропускаются). После SHAP — опциональный
     ``run_noise_cut`` (отсев слабее ``FE_NOISE_UNIFORM``), затем
     ``run_backward_elim`` (срез с конца по PR-AUC / MAE до 1 фичи).
+
+    Уже отобранные фичи + HPO/fit: ``run_shap_select=False`` —
+    пул из ``new_{frequency,severity}_latest.json`` в artifacts_dir.
     """
 
     use_fe_features: bool = True
@@ -235,6 +239,32 @@ def run_train_loop_new(
 
     freq_features = list(base.frequency_features or auto_pool)
     sev_features = list(base.severity_features or auto_pool)
+    # Без повторного FS: подтянуть уже отобранные фичи из *_latest.json
+    if not flags.run_shap_select:
+        freq_payload = load_feature_selection_latest("new", "frequency", directory=out_dir)
+        sev_payload = load_feature_selection_latest("new", "severity", directory=out_dir)
+        if freq_payload and freq_payload.get("selected_features"):
+            freq_features = list(freq_payload["selected_features"])
+            print(
+                f"[B] load selected frequency features from {out_dir} "
+                f"(n={len(freq_features)})"
+            )
+        else:
+            print(
+                f"[B] WARNING: RUN_FEATURE_SELECT=False, но нет "
+                f"{out_dir / 'new_frequency_latest.json'} — берём пул config/auto"
+            )
+        if sev_payload and sev_payload.get("selected_features"):
+            sev_features = list(sev_payload["selected_features"])
+            print(
+                f"[B] load selected severity features from {out_dir} "
+                f"(n={len(sev_features)})"
+            )
+        else:
+            print(
+                f"[B] WARNING: RUN_FEATURE_SELECT=False, но нет "
+                f"{out_dir / 'new_severity_latest.json'} — берём пул config/auto"
+            )
     if not flags.use_fe_features:
         freq_features = _drop_fe_columns(freq_features)
         sev_features = _drop_fe_columns(sev_features)
