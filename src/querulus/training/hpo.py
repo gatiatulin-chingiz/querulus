@@ -647,6 +647,38 @@ def _mlflow_set_tags(mlflow: Any, tags: dict[str, str]) -> None:
             logger.warning("MLflow set_tag(%s) failed: %s", key, type(exc).__name__)
 
 
+def _start_nested_trial_run(
+    mlflow: Any,
+    *,
+    run_name: str,
+    parent_run_id: str,
+    experiment_id: str | None,
+) -> Any:
+    """Child run с явной связью parent (не только nested=True / active stack).
+
+    Без ``parent_run_id`` при пустом active stack MLflow создаёт sibling на том же
+    уровне. Явный id + experiment_id + tag ``mlflow.parentRunId`` — канон для UI.
+    """
+    kwargs: dict[str, Any] = {"nested": True, "run_name": run_name}
+    if experiment_id is not None:
+        kwargs["experiment_id"] = experiment_id
+    try:
+        child = mlflow.start_run(parent_run_id=parent_run_id, **kwargs)
+    except TypeError:
+        # Старый клиент без parent_run_id=
+        child = mlflow.start_run(**kwargs)
+    # Сервер иногда не сохраняет system tag при create_run — дублируем явно.
+    try:
+        mlflow.set_tag("mlflow.parentRunId", parent_run_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "MLflow: не удалось set_tag mlflow.parentRunId (%s) — "
+            "trial может отобразиться рядом с parent, а не внутри",
+            type(exc).__name__,
+        )
+    return child
+
+
 def _log_study_artifacts(
     mlflow: Any,
     *,
@@ -847,7 +879,16 @@ def run_hpo(
 
         # Access token часто короче одного trial (CV) — обновляем перед nested run.
         _ensure_mlflow_bearer_token(force_refresh=True)
-        with mlflow.start_run(nested=True, run_name=f"trial_{trial.number}") as child_run:
+        if not parent_run_id:
+            raise RuntimeError(
+                "HPO: parent_run_id пуст — nested trial стал бы sibling в UI"
+            )
+        with _start_nested_trial_run(
+            mlflow,
+            run_name=f"trial_{trial.number}",
+            parent_run_id=parent_run_id,
+            experiment_id=parent_experiment_id,
+        ) as child_run:
             try:
                 mean_score, mean_metrics = _run_folds()
             except Exception:
@@ -887,6 +928,7 @@ def run_hpo(
 
     study = optuna.create_study(direction=direction)
     parent_run_id: str | None = None
+    parent_experiment_id: str | None = None
 
     def _enrich_best_params(raw: dict[str, Any]) -> dict[str, Any]:
         best = dict(raw)
@@ -904,6 +946,7 @@ def run_hpo(
     else:
         with mlflow.start_run(run_name=run_name) as parent_run:
             parent_run_id = parent_run.info.run_id
+            parent_experiment_id = parent_run.info.experiment_id
             try:
                 _mlflow_set_tags(
                     mlflow,
