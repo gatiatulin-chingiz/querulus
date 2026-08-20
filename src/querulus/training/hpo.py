@@ -4,7 +4,9 @@
 """
 from __future__ import annotations
 
+import logging
 import math
+import os
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -13,6 +15,36 @@ import pandas as pd
 
 TaskType = Literal["classification", "regression"]
 OptimizeDirection = Literal["maximize", "minimize"]
+
+logger = logging.getLogger("querulus.training.hpo")
+
+
+def _configure_mlflow(mlflow: Any) -> None:
+    """Настроить tracking URI / TLS так, чтобы HPO гарантированно писал в MLflow.
+
+    Переменные:
+    - ``MLFLOW_TRACKING_URI`` — куда писать (fallback: https://mlflow.vsk.ru/)
+    - ``MLFLOW_TRACKING_SERVER_CERT_PATH`` — CA-bundle (предпочтительно)
+    - ``MLFLOW_TRACKING_INSECURE_TLS`` — ``true``/``false``; если CA нет и
+      значение не ``false``, для корпоративного HTTPS включается insecure TLS
+      (иначе self-signed валит запись в MLflow).
+    """
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "").strip() or "https://mlflow.vsk.ru/"
+    mlflow.set_tracking_uri(tracking_uri)
+
+    cert_path = os.getenv("MLFLOW_TRACKING_SERVER_CERT_PATH", "").strip()
+    insecure_raw = os.getenv("MLFLOW_TRACKING_INSECURE_TLS", "").strip().lower()
+    if cert_path:
+        return
+    if insecure_raw in {"0", "false", "no"}:
+        return
+    # Без CA на корпоративном HTTPS self-signed ломает запись — включаем insecure.
+    os.environ["MLFLOW_TRACKING_INSECURE_TLS"] = "true"
+    logger.warning(
+        "MLFLOW_TRACKING_INSECURE_TLS=true (нет MLFLOW_TRACKING_SERVER_CERT_PATH). "
+        "HPO пишет в %s без проверки TLS. Задайте CA-bundle, когда будет доступен.",
+        tracking_uri,
+    )
 
 
 @dataclass(frozen=True)
@@ -121,8 +153,6 @@ def run_hpo(
 
     ``mvp_types`` — types_dict для cat_features (CATEGORIAL/BINARY).
     """
-    import logging
-
     import optuna
     from catboost import CatBoostClassifier, CatBoostRegressor, Pool
     from sklearn.model_selection import TimeSeriesSplit
@@ -150,11 +180,13 @@ def run_hpo(
     if use_mlflow:
         import mlflow as _mlflow
 
-        mlflow = _mlflow
-        experiment = mlflow.get_experiment_by_name(experiment_name)
+        _configure_mlflow(_mlflow)
+        experiment = _mlflow.get_experiment_by_name(experiment_name)
         if experiment is None:
-            mlflow.create_experiment(experiment_name)
-        mlflow.set_experiment(experiment_name)
+            _mlflow.create_experiment(experiment_name)
+        _mlflow.set_experiment(experiment_name)
+        mlflow = _mlflow
+        logger.info("MLflow tracking URI=%s experiment=%s", _mlflow.get_tracking_uri(), experiment_name)
 
     def objective(trial: optuna.Trial) -> float:
         params = _suggest_catboost_params(trial, task_type=task_type, random_seed=random_seed)
