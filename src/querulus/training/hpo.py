@@ -272,13 +272,17 @@ def _configure_mlflow(mlflow: Any) -> None:
         )
 
 
-def _connect_mlflow_experiment(mlflow: Any, experiment_name: str) -> None:
-    """get/create experiment с понятной ошибкой при SSO HTML."""
+def _connect_mlflow_experiment(mlflow: Any, experiment_name: str) -> str:
+    """get/create experiment; set по experiment_id (иначе nested children уезжают в другой exp)."""
     try:
         experiment = mlflow.get_experiment_by_name(experiment_name)
         if experiment is None:
-            mlflow.create_experiment(experiment_name)
-        mlflow.set_experiment(experiment_name)
+            experiment_id = mlflow.create_experiment(experiment_name)
+        else:
+            experiment_id = experiment.experiment_id
+        # Важно: set по id, не по имени — иначе UI/клиент может подменить experiment.
+        mlflow.set_experiment(experiment_id=experiment_id)
+        return str(experiment_id)
     except Exception as exc:  # noqa: BLE001 — перепаковка любой MLflow/HTTP ошибки
         _raise_mlflow_auth_hint(exc)
         raise
@@ -652,31 +656,78 @@ def _start_nested_trial_run(
     *,
     run_name: str,
     parent_run_id: str,
-    experiment_id: str | None,
+    experiment_id: str,
 ) -> Any:
-    """Child run с явной связью parent (не только nested=True / active stack).
+    """Child run через MlflowClient + tag ``mlflow.parentRunId``, затем activate.
 
-    Без ``parent_run_id`` при пустом active stack MLflow создаёт sibling на том же
-    уровне. Явный id + experiment_id + tag ``mlflow.parentRunId`` — канон для UI.
+    Fluent ``start_run(nested=True)`` на части серверов создаёт sibling (пустой
+    active stack / другой experiment_id / tag не пишется при create). Client API
+    задаёт parent явно; после create проверяем tag.
     """
-    kwargs: dict[str, Any] = {"nested": True, "run_name": run_name}
-    if experiment_id is not None:
-        kwargs["experiment_id"] = experiment_id
+    from mlflow.tracking import MlflowClient
+
     try:
-        child = mlflow.start_run(parent_run_id=parent_run_id, **kwargs)
-    except TypeError:
-        # Старый клиент без parent_run_id=
-        child = mlflow.start_run(**kwargs)
-    # Сервер иногда не сохраняет system tag при create_run — дублируем явно.
+        from mlflow.utils.mlflow_tags import MLFLOW_PARENT_RUN_ID, MLFLOW_RUN_NAME
+    except ImportError:  # pragma: no cover — старые клиенты
+        MLFLOW_PARENT_RUN_ID = "mlflow.parentRunId"
+        MLFLOW_RUN_NAME = "mlflow.runName"
+
+    client = MlflowClient()
+    tags = {
+        str(MLFLOW_PARENT_RUN_ID): parent_run_id,
+        str(MLFLOW_RUN_NAME): run_name,
+    }
+    created = None
     try:
-        mlflow.set_tag("mlflow.parentRunId", parent_run_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "MLflow: не удалось set_tag mlflow.parentRunId (%s) — "
-            "trial может отобразиться рядом с parent, а не внутри",
-            type(exc).__name__,
+        created = client.create_run(
+            experiment_id=str(experiment_id),
+            tags=tags,
+            run_name=run_name,
         )
-    return child
+    except TypeError:
+        created = client.create_run(
+            experiment_id=str(experiment_id),
+            tags=tags,
+        )
+    child_id = created.info.run_id
+
+    def _parent_tag(run: Any) -> str | None:
+        tag_map = getattr(getattr(run, "data", None), "tags", None) or {}
+        return tag_map.get(str(MLFLOW_PARENT_RUN_ID)) or tag_map.get("mlflow.parentRunId")
+
+    got = _parent_tag(created)
+    if got != parent_run_id:
+        try:
+            client.set_tag(child_id, "mlflow.parentRunId", parent_run_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "MLflow: set_tag parentRunId на %s не удался (%s)",
+                child_id,
+                type(exc).__name__,
+            )
+        try:
+            got = _parent_tag(client.get_run(child_id))
+        except Exception:  # noqa: BLE001
+            got = None
+
+    if got != parent_run_id:
+        logger.error(
+            "MLflow: child %s без mlflow.parentRunId=%s (сейчас %r) — "
+            "в UI будет sibling. Проверьте права на system tags / версию сервера.",
+            child_id,
+            parent_run_id,
+            got,
+        )
+    else:
+        logger.info(
+            "MLflow: nested trial %s → parent %s (exp=%s)",
+            child_id,
+            parent_run_id,
+            experiment_id,
+        )
+
+    # Активируем уже созданный run (parent остаётся в stack → nested=True).
+    return mlflow.start_run(run_id=child_id, nested=True)
 
 
 def _log_study_artifacts(
@@ -794,16 +845,23 @@ def run_hpo(
     splitter = TimeSeriesSplit(n_splits=cv)
 
     mlflow = None
+    resolved_experiment_id: str | None = None
     if use_mlflow:
         import mlflow as _mlflow
 
         _configure_mlflow(_mlflow)
-        _connect_mlflow_experiment(_mlflow, experiment_name)
+        # Autolog (если кто-то включил в ноутбуке) плодит sibling-runs на каждый fit.
+        try:
+            _mlflow.autolog(disable=True)
+        except Exception:  # noqa: BLE001
+            pass
+        resolved_experiment_id = _connect_mlflow_experiment(_mlflow, experiment_name)
         mlflow = _mlflow
         logger.info(
-            "MLflow tracking URI=%s experiment=%s",
+            "MLflow tracking URI=%s experiment=%s id=%s",
             _mlflow.get_tracking_uri(),
             experiment_name,
+            resolved_experiment_id,
         )
 
     def objective(trial: optuna.Trial) -> float:
@@ -879,9 +937,9 @@ def run_hpo(
 
         # Access token часто короче одного trial (CV) — обновляем перед nested run.
         _ensure_mlflow_bearer_token(force_refresh=True)
-        if not parent_run_id:
+        if not parent_run_id or not parent_experiment_id:
             raise RuntimeError(
-                "HPO: parent_run_id пуст — nested trial стал бы sibling в UI"
+                "HPO: parent_run_id/experiment_id пусты — nested trial стал бы sibling в UI"
             )
         with _start_nested_trial_run(
             mlflow,
@@ -915,6 +973,15 @@ def run_hpo(
                     mlflow, {**child_tags, "optuna_state": "COMPLETE"}
                 )
                 _mlflow_log_metrics(mlflow, mean_metrics)
+                # На всякий случай — parent tag после batch set_tags.
+                try:
+                    from mlflow.tracking import MlflowClient
+
+                    MlflowClient().set_tag(
+                        child_run.info.run_id, "mlflow.parentRunId", parent_run_id
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "MLflow: логирование trial_%s не удалось (%s) — score всё равно учтён",
@@ -944,9 +1011,22 @@ def run_hpo(
             float(study.best_value) if study.best_value is not None else float("nan")
         )
     else:
-        with mlflow.start_run(run_name=run_name) as parent_run:
+        with mlflow.start_run(
+            run_name=run_name,
+            experiment_id=resolved_experiment_id,
+        ) as parent_run:
             parent_run_id = parent_run.info.run_id
-            parent_experiment_id = parent_run.info.experiment_id
+            parent_experiment_id = str(parent_run.info.experiment_id)
+            if (
+                resolved_experiment_id
+                and parent_experiment_id != str(resolved_experiment_id)
+            ):
+                logger.warning(
+                    "MLflow: parent exp_id=%s ≠ set_experiment %s — "
+                    "children могут не сгруппироваться в UI",
+                    parent_experiment_id,
+                    resolved_experiment_id,
+                )
             try:
                 _mlflow_set_tags(
                     mlflow,
