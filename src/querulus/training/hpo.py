@@ -372,6 +372,43 @@ def _cat_feature_names(
     return [name for name in features if name in cats]
 
 
+_MD_CLS: Any | None = None
+_MD_STUBS: dict[str, Any] = {}
+
+
+def _load_model_diagnostics_class() -> Any:
+    """ModelDiagnostics из внешнего modeldiagnostics (как в pipeline)."""
+    global _MD_CLS
+    if _MD_CLS is None:
+        from querulus.training.config import TrainingConfig
+        from querulus.training.pipeline import _require_model_diagnostics
+
+        _MD_CLS = _require_model_diagnostics(TrainingConfig())
+    return _MD_CLS
+
+
+def _model_diagnostics_stub(task_type: TaskType) -> Any:
+    """Лёгкий инстанс только для compute_*_metrics (без реального fit)."""
+    cached = _MD_STUBS.get(task_type)
+    if cached is not None:
+        return cached
+    ModelDiagnostics = _load_model_diagnostics_class()
+    dummy_x = pd.DataFrame({"_stub": [0.0, 1.0]})
+    dummy_y = pd.Series([0, 1])
+    stub = ModelDiagnostics(
+        X_train=dummy_x,
+        y_train=dummy_y,
+        X_test=dummy_x,
+        y_test=dummy_y,
+        model=object(),
+        features=["_stub"],
+        cat_features=[],
+        task_type=task_type,
+    )
+    _MD_STUBS[task_type] = stub
+    return stub
+
+
 def _fold_metric(
     y_true: pd.Series,
     y_pred: np.ndarray,
@@ -379,25 +416,65 @@ def _fold_metric(
     task_type: TaskType,
     optimize_metric: str,
 ) -> float:
-    """Метрика без ModelDiagnostics (fallback)."""
-    from sklearn.metrics import (
-        average_precision_score,
-        mean_absolute_error,
-        r2_score,
-        roc_auc_score,
-    )
+    """Одна метрика (для Optuna objective) из набора ModelDiagnostics."""
+    bundle = _fold_metrics_bundle(y_true, y_pred, task_type=task_type)
+    key = "pr_auc" if optimize_metric == "average_precision" else optimize_metric
+    if key not in bundle:
+        raise ValueError(f"Неизвестная метрика для {task_type}: {optimize_metric}")
+    return float(bundle[key])
 
+
+def _fold_metrics_bundle(
+    y_true: pd.Series,
+    y_pred: np.ndarray,
+    *,
+    task_type: TaskType,
+) -> dict[str, float]:
+    """Метрики fold через ModelDiagnostics.compute_*_metrics.
+
+    Classification: порогозависимые метрики только на пороге 0.5
+    (без перебора 0..1) — быстрее и достаточны для HPO-сравнения trial’ов.
+    """
+    diagnostics = _model_diagnostics_stub(task_type)
+    y_np = np.asarray(y_true)
     if task_type == "classification":
-        if optimize_metric in {"pr_auc", "average_precision"}:
-            return float(average_precision_score(y_true, y_pred))
-        if optimize_metric == "roc_auc":
-            return float(roc_auc_score(y_true, y_pred))
-        raise ValueError(f"Неизвестная classification-метрика: {optimize_metric}")
-    if optimize_metric == "mae":
-        return float(mean_absolute_error(y_true, y_pred))
-    if optimize_metric == "r2":
-        return float(r2_score(y_true, y_pred))
-    raise ValueError(f"Неизвестная regression-метрика: {optimize_metric}")
+        proba = np.asarray(y_pred, dtype=float)
+        raw = diagnostics.compute_classification_metrics(
+            y_np, proba, thresholds=[0.5]
+        )
+    else:
+        pred = np.asarray(y_pred, dtype=float)
+        raw = diagnostics.compute_regression_metrics(y_np, pred)
+
+    out: dict[str, float] = {}
+    for key, value in raw.items():
+        if isinstance(value, (bool, str)):
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isnan(number) or math.isinf(number):
+            continue
+        out[str(key)] = number
+    return out
+
+
+def _mean_metrics(fold_bundles: list[dict[str, float]]) -> dict[str, float]:
+    """Среднее по фолдам; NaN-фолды пропускаем per-key."""
+    if not fold_bundles:
+        return {}
+    keys = sorted({key for bundle in fold_bundles for key in bundle})
+    out: dict[str, float] = {}
+    for key in keys:
+        values = [
+            float(bundle[key])
+            for bundle in fold_bundles
+            if key in bundle and not math.isnan(float(bundle[key]))
+        ]
+        if values:
+            out[key] = float(np.mean(values))
+    return out
 
 
 def _mlflow_safe_params(params: dict[str, Any]) -> dict[str, Any]:
@@ -584,11 +661,11 @@ def run_hpo(
         params = _suggest_catboost_params(trial, task_type=task_type, random_seed=random_seed)
         early = int(params.pop("early_stopping_rounds", _EARLY_STOPPING_ROUNDS))
         fit_params = dict(params)
-        fold_scores: list[float] = []
 
-        def _run_folds() -> list[float]:
-            scores: list[float] = []
-            for fold, (tr_idx, va_idx) in enumerate(splitter.split(x_all)):
+        def _run_folds() -> tuple[float, dict[str, float]]:
+            """CV → (optimize_metric mean, средние метрики по фолдам)."""
+            bundles: list[dict[str, float]] = []
+            for tr_idx, va_idx in splitter.split(x_all):
                 x_tr, y_tr = x_all.iloc[tr_idx], y_all.iloc[tr_idx]
                 x_va, y_va = x_all.iloc[va_idx], y_all.iloc[va_idx]
                 pool = Pool(x_tr, y_tr, cat_features=cat_features, feature_names=feature_list)
@@ -606,50 +683,66 @@ def run_hpo(
                     pred = model.predict_proba(x_va)[:, 1]
                 else:
                     pred = np.asarray(model.predict(x_va), dtype=float)
-                score = _fold_metric(
-                    y_va, pred, task_type=task_type, optimize_metric=optimize_metric
+                bundles.append(
+                    _fold_metrics_bundle(y_va, pred, task_type=task_type)
                 )
-                scores.append(score)
-            return scores
+            mean_metrics = _mean_metrics(bundles)
+            opt_key = (
+                "pr_auc" if optimize_metric == "average_precision" else optimize_metric
+            )
+            if opt_key not in mean_metrics:
+                raise ValueError(f"Нет {opt_key} в fold-метриках")
+            return float(mean_metrics[opt_key]), mean_metrics
+
+        # Мета study + гиперпараметры trial (одинаковый набор ключей у children).
+        log_params = _mlflow_safe_params(
+            {
+                **fit_params,
+                "early_stopping_rounds": early,
+                "n_trials": n_trials,
+                "cv": cv,
+                "random_seed": random_seed,
+                "n_features": len(feature_list),
+                "n_rows": len(x_all),
+                "n_cat_features": len(cat_features),
+                "target_column": target_column,
+                "date_column": date_column,
+                "optimize_metric": optimize_metric,
+                "direction": direction,
+                "task_type": task_type,
+                "trial_number": trial.number,
+            }
+        )
+        child_tags = {
+            "project": "querulus",
+            "optimizer": "optuna",
+            "model_family": "catboost",
+            "task_type": task_type,
+            "optimize_metric": optimize_metric,
+            "direction": direction,
+            "stage": "hpo_trial",
+            "trial_number": str(trial.number),
+        }
 
         if mlflow is None:
-            fold_scores = _run_folds()
-            return float(np.mean(fold_scores))
+            mean_score, _mean_metrics_dict = _run_folds()
+            return mean_score
 
         # Access token часто короче одного trial (CV) — обновляем перед nested run.
         _ensure_mlflow_bearer_token(force_refresh=True)
-        log_params = _mlflow_safe_params(
-            {**fit_params, "early_stopping_rounds": early}
-        )
         with mlflow.start_run(nested=True, run_name=f"trial_{trial.number}") as child_run:
             try:
-                fold_scores = _run_folds()
-                mean_score = float(np.mean(fold_scores))
-                std_score = float(np.std(fold_scores)) if len(fold_scores) > 1 else 0.0
-                metrics = {
-                    optimize_metric: mean_score,
-                    f"{optimize_metric}_std": std_score,
-                }
-                for fold_i, score in enumerate(fold_scores):
-                    metrics[f"{optimize_metric}_fold_{fold_i}"] = float(score)
+                mean_score, mean_metrics = _run_folds()
 
-                # Params/tags/metrics — после CV + refresh: async flush с протухшим
-                # token на старте часто терял params/tags, а metrics (после refresh) доходили.
+                # Params/tags/metrics — после CV + refresh (sync flush).
                 _ensure_mlflow_bearer_token(force_refresh=True)
                 _mlflow_log_params(mlflow, log_params)
                 _mlflow_set_tags(
-                    mlflow,
-                    {
-                        "trial_number": str(trial.number),
-                        "stage": "hpo_trial",
-                        "optuna_state": "COMPLETE",
-                        "task_type": task_type,
-                        "optimize_metric": optimize_metric,
-                    },
+                    mlflow, {**child_tags, "optuna_state": "COMPLETE"}
                 )
-                _mlflow_log_metrics(mlflow, metrics)
+                _mlflow_log_metrics(mlflow, mean_metrics)
                 trial.set_user_attr("mlflow_run_id", child_run.info.run_id)
-                trial.set_user_attr("mlflow_metrics", metrics)
+                trial.set_user_attr("mlflow_metrics", mean_metrics)
                 trial.set_user_attr("mlflow_params", log_params)
                 return mean_score
             except Exception:
@@ -658,14 +751,7 @@ def run_hpo(
                     _mlflow_log_params(mlflow, log_params)
                     _mlflow_set_tags(
                         mlflow,
-                        {
-                            "trial_number": str(trial.number),
-                            "stage": "hpo_trial",
-                            "optuna_state": "FAIL",
-                            "status": "failed",
-                            "task_type": task_type,
-                            "optimize_metric": optimize_metric,
-                        },
+                        {**child_tags, "optuna_state": "FAIL", "status": "failed"},
                     )
                 except Exception:  # noqa: BLE001 — не маскируем исходную ошибку trial
                     logger.warning(
@@ -739,7 +825,7 @@ def run_hpo(
                 _ensure_mlflow_bearer_token(force_refresh=True)
                 best_trial = study.best_trial
 
-                # Метрики parent = метрики лучшего trial (те же имена: pr_auc, …_std, …_fold_*).
+                # Метрики parent = метрики лучшего trial (те же имена, набор ModelDiagnostics).
                 # Без best_pr_auc — иначе в compare runs пустые колонки у children/parent.
                 trial_metrics = best_trial.user_attrs.get("mlflow_metrics")
                 if not isinstance(trial_metrics, dict) or not trial_metrics:
@@ -766,6 +852,10 @@ def run_hpo(
                     "auto_class_weights",
                     "champion_trial_number",
                     "champion_child_run_id",
+                    "task_type",
+                    "trial_number",
+                    "verbose",
+                    "allow_writing_files",
                 }
                 trial_params = best_trial.user_attrs.get("mlflow_params")
                 if not isinstance(trial_params, dict) or not trial_params:

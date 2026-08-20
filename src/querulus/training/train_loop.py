@@ -775,6 +775,29 @@ def run_train_loop_new(
         )
     else:
         stage_skipped("hpo", "RUN_HPO")
+        hpo_path = out_dir / "hpo_best_params_new.json"
+        if hpo_path.exists():
+            stage_start("hpo_load", detail=str(hpo_path))
+            payload = json.loads(hpo_path.read_text(encoding="utf-8"))
+            freq_loaded = payload.get("frequency") or {}
+            sev_loaded = payload.get("severity") or {}
+            if freq_loaded:
+                freq_params, freq_iters = _merge_hpo_into_catboost(
+                    freq_loaded, freq_params
+                )
+            if sev_loaded:
+                sev_params, sev_iters = _merge_hpo_into_catboost(sev_loaded, sev_params)
+            stage_done(
+                "hpo_load",
+                detail=(
+                    f"freq_keys={len(freq_loaded)} sev_keys={len(sev_loaded)}"
+                ),
+            )
+        else:
+            print(
+                f"[B] WARNING: RUN_HPO=False и нет {hpo_path} — "
+                "fit пойдёт с дефолтными гиперпараметрами config"
+            )
 
     stage_start("fit_new", detail="fixed features after SHAP; eval=val")
     fit_config = replace(
