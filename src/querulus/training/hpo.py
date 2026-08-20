@@ -4,9 +4,14 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
+import ssl
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -18,16 +23,154 @@ OptimizeDirection = Literal["maximize", "minimize"]
 
 logger = logging.getLogger("querulus.training.hpo")
 
+# Дефолты под корпоративный MLflow (oauth2-proxy → Keycloak), см. login HTML.
+_DEFAULT_KEYCLOAK_SERVER = "https://auth.vsk.ru/auth"
+_DEFAULT_KEYCLOAK_REALM = "users_auth"
+_DEFAULT_KEYCLOAK_CLIENT_ID = "prod-keycloak_users_auth_lanmlflow-1"
+
+
+def _env_flag(name: str) -> str:
+    return os.getenv(name, "").strip().lower()
+
+
+def _tls_verify_context() -> ssl.SSLContext | None:
+    """SSL context для urllib: CA-bundle / insecure / None (= default verify)."""
+    cert_path = (os.getenv("MLFLOW_TRACKING_SERVER_CERT_PATH") or "").strip()
+    if cert_path:
+        return ssl.create_default_context(cafile=cert_path)
+    if _env_flag("MLFLOW_TRACKING_INSECURE_TLS") in {"1", "true", "yes"}:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+    return None
+
+
+def _keycloak_token_url() -> str:
+    explicit = (os.getenv("KEYCLOAK_TOKEN_URL") or "").strip()
+    if explicit:
+        return explicit
+    server = (os.getenv("KEYCLOAK_SERVER_URL") or _DEFAULT_KEYCLOAK_SERVER).rstrip("/")
+    realm = (os.getenv("KEYCLOAK_REALM") or _DEFAULT_KEYCLOAK_REALM).strip()
+    return f"{server}/realms/{realm}/protocol/openid-connect/token"
+
+
+def _fetch_keycloak_access_token() -> str:
+    """Password grant → access_token для Bearer (oauth2-proxy / MLflow).
+
+    Env:
+    - ``KEYCLOAK_USERNAME`` / ``KEYCLOAK_PASSWORD`` (обязательны)
+    - ``KEYCLOAK_CLIENT_ID`` (default: prod-keycloak_users_auth_lanmlflow-1)
+    - ``KEYCLOAK_CLIENT_SECRET`` (если confidential client)
+    - ``KEYCLOAK_TOKEN_URL`` или ``KEYCLOAK_SERVER_URL`` + ``KEYCLOAK_REALM``
+    - ``KEYCLOAK_SCOPE`` (default: openid)
+    """
+    username = (os.getenv("KEYCLOAK_USERNAME") or "").strip()
+    password = os.getenv("KEYCLOAK_PASSWORD") or ""
+    if not username or not password:
+        raise RuntimeError(
+            "MLflow за Keycloak: задайте KEYCLOAK_USERNAME и KEYCLOAK_PASSWORD в .env "
+            "(Direct Access Grants / password grant)."
+        )
+
+    client_id = (
+        os.getenv("KEYCLOAK_CLIENT_ID") or _DEFAULT_KEYCLOAK_CLIENT_ID
+    ).strip()
+    client_secret = (os.getenv("KEYCLOAK_CLIENT_SECRET") or "").strip()
+    scope = (os.getenv("KEYCLOAK_SCOPE") or "openid").strip()
+    token_url = _keycloak_token_url()
+
+    form: dict[str, str] = {
+        "grant_type": "password",
+        "client_id": client_id,
+        "username": username,
+        "password": password,
+        "scope": scope,
+    }
+    if client_secret:
+        form["client_secret"] = client_secret
+
+    data = urllib.parse.urlencode(form).encode("utf-8")
+    request = urllib.request.Request(
+        token_url,
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    context = _tls_verify_context()
+    open_kwargs: dict[str, Any] = {"timeout": 60}
+    if context is not None:
+        open_kwargs["context"] = context
+    try:
+        with urllib.request.urlopen(request, **open_kwargs) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(
+            f"Keycloak token error HTTP {exc.code} at {token_url}: {body}. "
+            "Проверьте логин/пароль, KEYCLOAK_CLIENT_ID/SECRET и что у client "
+            "включён Direct Access Grants (Resource Owner Password Credentials)."
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Keycloak token request failed ({token_url}): {exc}") from exc
+
+    token = payload.get("access_token")
+    if not token:
+        raise RuntimeError(
+            f"Keycloak не вернул access_token (keys={list(payload.keys())}). "
+            "Возможен запрет password grant на client."
+        )
+    return str(token)
+
+
+def _ensure_mlflow_bearer_token() -> None:
+    """Если нет MLFLOW_TRACKING_TOKEN — получить его через Keycloak login/password."""
+    existing = (os.getenv("MLFLOW_TRACKING_TOKEN") or "").strip()
+    if existing:
+        return
+    username = (os.getenv("KEYCLOAK_USERNAME") or "").strip()
+    password = os.getenv("KEYCLOAK_PASSWORD") or ""
+    if not username or not password:
+        return
+    token = _fetch_keycloak_access_token()
+    os.environ["MLFLOW_TRACKING_TOKEN"] = token
+    logger.info(
+        "MLflow: получен Keycloak access_token (client=%s), "
+        "выставлен MLFLOW_TRACKING_TOKEN",
+        (os.getenv("KEYCLOAK_CLIENT_ID") or _DEFAULT_KEYCLOAK_CLIENT_ID).strip(),
+    )
+
+
+def _looks_like_login_html(text: str) -> bool:
+    low = text.lower()
+    return "<!doctype html" in low or "<html" in low
+
+
+def _raise_mlflow_auth_hint(exc: BaseException) -> None:
+    """Перепаковать типичный SSO HTML в понятную ошибку."""
+    message = str(exc)
+    if not _looks_like_login_html(message) and "not in a valid JSON format" not in message:
+        return
+    raise RuntimeError(
+        "MLflow вернул страницу логина Keycloak вместо JSON API. "
+        "Нужна неинтерактивная авторизация: задайте в .env "
+        "KEYCLOAK_USERNAME + KEYCLOAK_PASSWORD "
+        "(опционально KEYCLOAK_CLIENT_ID / KEYCLOAK_CLIENT_SECRET), "
+        "либо готовый MLFLOW_TRACKING_TOKEN. "
+        f"Исходная ошибка: {type(exc).__name__}"
+    ) from exc
+
 
 def _configure_mlflow(mlflow: Any) -> None:
-    """Настроить tracking URI / TLS так, чтобы HPO гарантированно писал в MLflow.
+    """Настроить tracking URI / TLS / Keycloak Bearer так, чтобы HPO писал в MLflow.
 
     Переменные:
     - ``MLFLOW_TRACKING_URI`` — куда писать (fallback: https://mlflow.vsk.ru/)
     - ``MLFLOW_TRACKING_SERVER_CERT_PATH`` — CA-bundle (предпочтительно)
     - ``MLFLOW_TRACKING_INSECURE_TLS`` — ``true``/``false``; если CA нет и
       значение не ``false``, для корпоративного HTTPS включается insecure TLS
-      (иначе self-signed валит запись в MLflow).
+    - ``MLFLOW_TRACKING_TOKEN`` — готовый Bearer; иначе Keycloak password grant
+    - ``KEYCLOAK_USERNAME`` / ``KEYCLOAK_PASSWORD`` — логин Keycloak
 
     MLflow запрещает одновременно ``INSECURE_TLS=true`` и заданный
     ``SERVER_CERT_PATH`` (даже пустая строка в env считается «заданным»).
@@ -42,7 +185,7 @@ def _configure_mlflow(mlflow: Any) -> None:
         # Пустая строка в .env → MLflow всё равно видит «path is set».
         os.environ.pop("MLFLOW_TRACKING_SERVER_CERT_PATH", None)
 
-    insecure_raw = os.getenv("MLFLOW_TRACKING_INSECURE_TLS", "").strip().lower()
+    insecure_raw = _env_flag("MLFLOW_TRACKING_INSECURE_TLS")
     if cert_path:
         # CA задан — insecure не должен конфликтовать.
         if insecure_raw in {"1", "true", "yes"}:
@@ -51,17 +194,35 @@ def _configure_mlflow(mlflow: Any) -> None:
                 "MLFLOW_TRACKING_SERVER_CERT_PATH задан — "
                 "сбрасываю MLFLOW_TRACKING_INSECURE_TLS=false (взаимоисключающие)."
             )
-        return
-    if insecure_raw in {"0", "false", "no"}:
-        return
-    # Без CA на корпоративном HTTPS self-signed ломает запись — включаем insecure.
-    os.environ.pop("MLFLOW_TRACKING_SERVER_CERT_PATH", None)
-    os.environ["MLFLOW_TRACKING_INSECURE_TLS"] = "true"
-    logger.warning(
-        "MLFLOW_TRACKING_INSECURE_TLS=true (нет MLFLOW_TRACKING_SERVER_CERT_PATH). "
-        "HPO пишет в %s без проверки TLS. Задайте CA-bundle, когда будет доступен.",
-        tracking_uri,
-    )
+    elif insecure_raw not in {"0", "false", "no"}:
+        # Без CA на корпоративном HTTPS self-signed ломает запись — включаем insecure.
+        os.environ.pop("MLFLOW_TRACKING_SERVER_CERT_PATH", None)
+        os.environ["MLFLOW_TRACKING_INSECURE_TLS"] = "true"
+        logger.warning(
+            "MLFLOW_TRACKING_INSECURE_TLS=true (нет MLFLOW_TRACKING_SERVER_CERT_PATH). "
+            "HPO пишет в %s без проверки TLS. Задайте CA-bundle, когда будет доступен.",
+            tracking_uri,
+        )
+
+    _ensure_mlflow_bearer_token()
+    if not (os.getenv("MLFLOW_TRACKING_TOKEN") or "").strip():
+        logger.warning(
+            "MLFLOW_TRACKING_TOKEN не задан и Keycloak login/password не заданы "
+            "(KEYCLOAK_USERNAME/PASSWORD). Запросы к %s могут получить HTML SSO.",
+            tracking_uri,
+        )
+
+
+def _connect_mlflow_experiment(mlflow: Any, experiment_name: str) -> None:
+    """get/create experiment с понятной ошибкой при SSO HTML."""
+    try:
+        experiment = mlflow.get_experiment_by_name(experiment_name)
+        if experiment is None:
+            mlflow.create_experiment(experiment_name)
+        mlflow.set_experiment(experiment_name)
+    except Exception as exc:  # noqa: BLE001 — перепаковка любой MLflow/HTTP ошибки
+        _raise_mlflow_auth_hint(exc)
+        raise
 
 
 @dataclass(frozen=True)
@@ -198,12 +359,13 @@ def run_hpo(
         import mlflow as _mlflow
 
         _configure_mlflow(_mlflow)
-        experiment = _mlflow.get_experiment_by_name(experiment_name)
-        if experiment is None:
-            _mlflow.create_experiment(experiment_name)
-        _mlflow.set_experiment(experiment_name)
+        _connect_mlflow_experiment(_mlflow, experiment_name)
         mlflow = _mlflow
-        logger.info("MLflow tracking URI=%s experiment=%s", _mlflow.get_tracking_uri(), experiment_name)
+        logger.info(
+            "MLflow tracking URI=%s experiment=%s",
+            _mlflow.get_tracking_uri(),
+            experiment_name,
+        )
 
     def objective(trial: optuna.Trial) -> float:
         params = _suggest_catboost_params(trial, task_type=task_type, random_seed=random_seed)
