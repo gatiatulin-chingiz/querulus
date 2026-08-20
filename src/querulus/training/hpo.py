@@ -401,16 +401,56 @@ def _fold_metric(
 
 
 def _mlflow_safe_params(params: dict[str, Any]) -> dict[str, Any]:
-    """Параметры, пригодные для mlflow.log_params (без None)."""
+    """Параметры для mlflow.log_params: Python-скаляры, без None/numpy."""
     out: dict[str, Any] = {}
     for key, value in params.items():
         if value is None:
             continue
-        if isinstance(value, (bool, int, float, str)):
+        # Optuna/numpy часто отдают np.float64 / np.int64
+        if isinstance(value, (np.integer,)):
+            out[key] = int(value)
+        elif isinstance(value, (np.floating,)):
+            out[key] = float(value)
+        elif isinstance(value, (np.bool_,)):
+            out[key] = bool(value)
+        elif isinstance(value, (bool, int, float, str)):
             out[key] = value
         else:
             out[key] = str(value)
     return out
+
+
+def _mlflow_log_params(mlflow: Any, params: dict[str, Any]) -> None:
+    """log_params с synchronous=True (если клиент поддерживает), иначе обычный вызов."""
+    safe = _mlflow_safe_params(params)
+    if not safe:
+        return
+    try:
+        mlflow.log_params(safe, synchronous=True)
+    except TypeError:
+        mlflow.log_params(safe)
+
+
+def _mlflow_log_metrics(mlflow: Any, metrics: dict[str, float]) -> None:
+    """log_metrics с synchronous=True при наличии."""
+    if not metrics:
+        return
+    clean = {key: float(value) for key, value in metrics.items()}
+    try:
+        mlflow.log_metrics(clean, synchronous=True)
+    except TypeError:
+        mlflow.log_metrics(clean)
+
+
+def _mlflow_set_tags(mlflow: Any, tags: dict[str, str]) -> None:
+    """set_tags + запасной set_tag по одному."""
+    if not tags:
+        return
+    try:
+        mlflow.set_tags(tags)
+    except Exception:  # noqa: BLE001
+        for key, value in tags.items():
+            mlflow.set_tag(key, value)
 
 
 def _log_study_artifacts(
@@ -578,17 +618,10 @@ def run_hpo(
 
         # Access token часто короче одного trial (CV) — обновляем перед nested run.
         _ensure_mlflow_bearer_token(force_refresh=True)
+        log_params = _mlflow_safe_params(
+            {**fit_params, "early_stopping_rounds": early}
+        )
         with mlflow.start_run(nested=True, run_name=f"trial_{trial.number}") as child_run:
-            log_params = _mlflow_safe_params(
-                {**fit_params, "early_stopping_rounds": early}
-            )
-            mlflow.log_params(log_params)
-            mlflow.set_tags(
-                {
-                    "trial_number": str(trial.number),
-                    "stage": "hpo_trial",
-                }
-            )
             try:
                 fold_scores = _run_folds()
                 mean_score = float(np.mean(fold_scores))
@@ -599,18 +632,45 @@ def run_hpo(
                 }
                 for fold_i, score in enumerate(fold_scores):
                     metrics[f"{optimize_metric}_fold_{fold_i}"] = float(score)
+
+                # Params/tags/metrics — после CV + refresh: async flush с протухшим
+                # token на старте часто терял params/tags, а metrics (после refresh) доходили.
                 _ensure_mlflow_bearer_token(force_refresh=True)
-                mlflow.log_metrics(metrics)
-                mlflow.set_tag("optuna_state", "COMPLETE")
+                _mlflow_log_params(mlflow, log_params)
+                _mlflow_set_tags(
+                    mlflow,
+                    {
+                        "trial_number": str(trial.number),
+                        "stage": "hpo_trial",
+                        "optuna_state": "COMPLETE",
+                        "task_type": task_type,
+                        "optimize_metric": optimize_metric,
+                    },
+                )
+                _mlflow_log_metrics(mlflow, metrics)
                 trial.set_user_attr("mlflow_run_id", child_run.info.run_id)
+                trial.set_user_attr("mlflow_metrics", metrics)
+                trial.set_user_attr("mlflow_params", log_params)
                 return mean_score
             except Exception:
                 try:
                     _ensure_mlflow_bearer_token(force_refresh=True)
-                    mlflow.set_tag("optuna_state", "FAIL")
-                    mlflow.set_tag("status", "failed")
+                    _mlflow_log_params(mlflow, log_params)
+                    _mlflow_set_tags(
+                        mlflow,
+                        {
+                            "trial_number": str(trial.number),
+                            "stage": "hpo_trial",
+                            "optuna_state": "FAIL",
+                            "status": "failed",
+                            "task_type": task_type,
+                            "optimize_metric": optimize_metric,
+                        },
+                    )
                 except Exception:  # noqa: BLE001 — не маскируем исходную ошибку trial
-                    logger.warning("MLflow: не удалось проставить FAIL-tags после ошибки trial")
+                    logger.warning(
+                        "MLflow: не удалось проставить params/tags после ошибки trial"
+                    )
                 raise
             finally:
                 # Свежий token на end_run nested child.
@@ -647,7 +707,8 @@ def run_hpo(
                         "stage": "hpo",
                     }
                 )
-                mlflow.log_params(
+                _mlflow_log_params(
+                    mlflow,
                     {
                         "n_trials": n_trials,
                         "cv": cv,
@@ -660,10 +721,12 @@ def run_hpo(
                         "optimize_metric": optimize_metric,
                         "direction": direction,
                         "early_stopping_rounds": _EARLY_STOPPING_ROUNDS,
-                    }
+                    },
                 )
                 if task_type == "classification":
-                    mlflow.log_param("auto_class_weights", _AUTO_CLASS_WEIGHTS)
+                    _mlflow_log_params(
+                        mlflow, {"auto_class_weights": _AUTO_CLASS_WEIGHTS}
+                    )
 
                 study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
                 best_params = _enrich_best_params(dict(study.best_params))
@@ -674,17 +737,62 @@ def run_hpo(
                 )
 
                 _ensure_mlflow_bearer_token(force_refresh=True)
-                mlflow.log_params(
-                    _mlflow_safe_params({f"best_{k}": v for k, v in best_params.items()})
-                )
-                if not (isinstance(best_value, float) and math.isnan(best_value)):
-                    mlflow.log_metric(f"best_{optimize_metric}", best_value)
-
                 best_trial = study.best_trial
-                mlflow.log_param("best_trial_number", best_trial.number)
+
+                # Метрики parent = метрики лучшего trial (те же имена: pr_auc, …_std, …_fold_*).
+                # Без best_pr_auc — иначе в compare runs пустые колонки у children/parent.
+                trial_metrics = best_trial.user_attrs.get("mlflow_metrics")
+                if not isinstance(trial_metrics, dict) or not trial_metrics:
+                    trial_metrics = {}
+                    if not (
+                        isinstance(best_value, float) and math.isnan(best_value)
+                    ):
+                        trial_metrics[optimize_metric] = best_value
+                _mlflow_log_metrics(mlflow, trial_metrics)
+
+                # Гиперпараметры лучшего trial теми же ключами, что у children.
+                parent_meta_keys = {
+                    "n_trials",
+                    "cv",
+                    "random_seed",
+                    "n_features",
+                    "n_rows",
+                    "n_cat_features",
+                    "target_column",
+                    "date_column",
+                    "optimize_metric",
+                    "direction",
+                    "early_stopping_rounds",
+                    "auto_class_weights",
+                    "champion_trial_number",
+                    "champion_child_run_id",
+                }
+                trial_params = best_trial.user_attrs.get("mlflow_params")
+                if not isinstance(trial_params, dict) or not trial_params:
+                    trial_params = best_params
+                hyper_params = {
+                    key: value
+                    for key, value in trial_params.items()
+                    if key not in parent_meta_keys
+                }
+                _mlflow_log_params(mlflow, hyper_params)
+
+                _mlflow_log_params(
+                    mlflow,
+                    {"champion_trial_number": int(best_trial.number)},
+                )
                 best_child = best_trial.user_attrs.get("mlflow_run_id")
                 if best_child:
-                    mlflow.log_param("best_child_run_id", best_child)
+                    _mlflow_log_params(
+                        mlflow, {"champion_child_run_id": str(best_child)}
+                    )
+                _mlflow_set_tags(
+                    mlflow,
+                    {
+                        "champion_trial_number": str(best_trial.number),
+                        "has_champion_metrics": "true",
+                    },
+                )
 
                 _log_study_artifacts(
                     mlflow,
