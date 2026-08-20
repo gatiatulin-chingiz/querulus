@@ -575,36 +575,76 @@ def _mlflow_safe_params(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _mlflow_log_params(mlflow: Any, params: dict[str, Any]) -> None:
-    """log_params с synchronous=True (если клиент поддерживает), иначе обычный вызов."""
+    """log_params; при 500/log-batch — по одному; ошибки не пробрасываем."""
     safe = _mlflow_safe_params(params)
     if not safe:
         return
     try:
-        mlflow.log_params(safe, synchronous=True)
-    except TypeError:
-        mlflow.log_params(safe)
+        try:
+            mlflow.log_params(safe, synchronous=True)
+        except TypeError:
+            mlflow.log_params(safe)
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "MLflow log_params(batch) failed (%s) — пробую по одному",
+            type(exc).__name__,
+        )
+    ok = 0
+    for key, value in safe.items():
+        try:
+            mlflow.log_param(key, value)
+            ok += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MLflow log_param(%s) failed: %s", key, type(exc).__name__)
+    if ok == 0:
+        logger.warning("MLflow: ни один param не записан")
 
 
 def _mlflow_log_metrics(mlflow: Any, metrics: dict[str, float]) -> None:
-    """log_metrics с synchronous=True при наличии."""
+    """log_metrics; при сбое batch — по одной; ошибки не пробрасываем."""
     if not metrics:
         return
     clean = {key: float(value) for key, value in metrics.items()}
     try:
-        mlflow.log_metrics(clean, synchronous=True)
-    except TypeError:
-        mlflow.log_metrics(clean)
+        try:
+            mlflow.log_metrics(clean, synchronous=True)
+        except TypeError:
+            mlflow.log_metrics(clean)
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "MLflow log_metrics(batch) failed (%s) — пробую по одной",
+            type(exc).__name__,
+        )
+    ok = 0
+    for key, value in clean.items():
+        try:
+            mlflow.log_metric(key, value)
+            ok += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MLflow log_metric(%s) failed: %s", key, type(exc).__name__)
+    if ok == 0:
+        logger.warning("MLflow: ни одна metric не записана")
 
 
 def _mlflow_set_tags(mlflow: Any, tags: dict[str, str]) -> None:
-    """set_tags + запасной set_tag по одному."""
+    """set_tags; при сбое — set_tag по одному; ошибки не пробрасываем."""
     if not tags:
         return
     try:
         mlflow.set_tags(tags)
-    except Exception:  # noqa: BLE001
-        for key, value in tags.items():
-            mlflow.set_tag(key, value)
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "MLflow set_tags(batch) failed (%s) — пробую по одному",
+            type(exc).__name__,
+        )
+    for key, value in tags.items():
+        try:
+            mlflow.set_tag(key, str(value))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MLflow set_tag(%s) failed: %s", key, type(exc).__name__)
 
 
 def _log_study_artifacts(
@@ -810,18 +850,6 @@ def run_hpo(
         with mlflow.start_run(nested=True, run_name=f"trial_{trial.number}") as child_run:
             try:
                 mean_score, mean_metrics = _run_folds()
-
-                # Params/tags/metrics — после CV + refresh (sync flush).
-                _ensure_mlflow_bearer_token(force_refresh=True)
-                _mlflow_log_params(mlflow, log_params)
-                _mlflow_set_tags(
-                    mlflow, {**child_tags, "optuna_state": "COMPLETE"}
-                )
-                _mlflow_log_metrics(mlflow, mean_metrics)
-                trial.set_user_attr("mlflow_run_id", child_run.info.run_id)
-                trial.set_user_attr("mlflow_metrics", mean_metrics)
-                trial.set_user_attr("mlflow_params", log_params)
-                return mean_score
             except Exception:
                 try:
                     _ensure_mlflow_bearer_token(force_refresh=True)
@@ -830,14 +858,32 @@ def run_hpo(
                         mlflow,
                         {**child_tags, "optuna_state": "FAIL", "status": "failed"},
                     )
-                except Exception:  # noqa: BLE001 — не маскируем исходную ошибку trial
+                except Exception:  # noqa: BLE001
                     logger.warning(
                         "MLflow: не удалось проставить params/tags после ошибки trial"
                     )
                 raise
             finally:
-                # Свежий token на end_run nested child.
                 _ensure_mlflow_bearer_token(force_refresh=True)
+
+            # Логирование не должно валить Optuna (корпоративный MLflow часто даёт 500).
+            try:
+                _ensure_mlflow_bearer_token(force_refresh=True)
+                _mlflow_log_params(mlflow, log_params)
+                _mlflow_set_tags(
+                    mlflow, {**child_tags, "optuna_state": "COMPLETE"}
+                )
+                _mlflow_log_metrics(mlflow, mean_metrics)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "MLflow: логирование trial_%s не удалось (%s) — score всё равно учтён",
+                    trial.number,
+                    type(exc).__name__,
+                )
+            trial.set_user_attr("mlflow_run_id", child_run.info.run_id)
+            trial.set_user_attr("mlflow_metrics", mean_metrics)
+            trial.set_user_attr("mlflow_params", log_params)
+            return mean_score
 
     study = optuna.create_study(direction=direction)
     parent_run_id: str | None = None
@@ -859,7 +905,8 @@ def run_hpo(
         with mlflow.start_run(run_name=run_name) as parent_run:
             parent_run_id = parent_run.info.run_id
             try:
-                mlflow.set_tags(
+                _mlflow_set_tags(
+                    mlflow,
                     {
                         "project": "querulus",
                         "optimizer": "optuna",
@@ -868,7 +915,7 @@ def run_hpo(
                         "optimize_metric": optimize_metric,
                         "direction": direction,
                         "stage": "hpo",
-                    }
+                    },
                 )
                 _mlflow_log_params(
                     mlflow,
@@ -898,12 +945,18 @@ def run_hpo(
                     if study.best_value is not None
                     else float("nan")
                 )
+            except Exception as exc:
+                _raise_mlflow_auth_hint(exc)
+                raise
+            finally:
+                # Критично: end_run parent после длинного HPO.
+                _ensure_mlflow_bearer_token(force_refresh=True)
 
+            # Champion metrics/params/artifacts — soft-fail (500 на log-batch не сжигает HPO).
+            try:
                 _ensure_mlflow_bearer_token(force_refresh=True)
                 best_trial = study.best_trial
 
-                # Метрики parent = метрики лучшего trial (те же имена, набор ModelDiagnostics).
-                # Без best_pr_auc — иначе в compare runs пустые колонки у children/parent.
                 trial_metrics = best_trial.user_attrs.get("mlflow_metrics")
                 if not isinstance(trial_metrics, dict) or not trial_metrics:
                     trial_metrics = {}
@@ -913,7 +966,6 @@ def run_hpo(
                         trial_metrics[optimize_metric] = best_value
                 _mlflow_log_metrics(mlflow, trial_metrics)
 
-                # Гиперпараметры лучшего trial теми же ключами, что у children.
                 parent_meta_keys = {
                     "n_trials",
                     "cv",
@@ -970,11 +1022,13 @@ def run_hpo(
                     best_params=best_params,
                     best_value=best_value,
                 )
-            except Exception as exc:
-                _raise_mlflow_auth_hint(exc)
-                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "MLflow: логирование champion/artifacts не удалось (%s) — "
+                    "best_params всё равно вернутся в pipeline",
+                    type(exc).__name__,
+                )
             finally:
-                # Критично: end_run parent после длинного HPO.
                 _ensure_mlflow_bearer_token(force_refresh=True)
 
     return HpoResult(
