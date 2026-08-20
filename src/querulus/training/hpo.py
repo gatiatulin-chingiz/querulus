@@ -424,24 +424,101 @@ def _fold_metric(
     return float(bundle[key])
 
 
+def _classification_metrics_at_threshold(
+    diagnostics: Any,
+    y_true: np.ndarray,
+    proba: np.ndarray,
+    *,
+    threshold: float = 0.5,
+) -> dict[str, Any]:
+    """Набор метрик как в ModelDiagnostics, пороговые — только на ``threshold``.
+
+    Совместимо со старым MD без аргумента ``thresholds`` (там иначе шёл
+    полный перебор 0..1).
+    """
+    from sklearn.metrics import (
+        average_precision_score,
+        f1_score,
+        matthews_corrcoef,
+        precision_score,
+        recall_score,
+        roc_auc_score,
+    )
+
+    y_true = np.asarray(y_true)
+    proba = np.asarray(proba, dtype=float)
+    pred_labels = (proba >= threshold).astype(int)
+
+    metrics: dict[str, Any] = {
+        "roc_auc": float(roc_auc_score(y_true, proba)),
+        "pr_auc": float(average_precision_score(y_true, proba)),
+        "best_threshold": float(threshold),
+    }
+    try:
+        metrics["ece"] = float(diagnostics._calculate_ece(y_true, proba))
+    except Exception:  # noqa: BLE001
+        metrics["ece"] = float("nan")
+    try:
+        from modeldiagnostics.src.gini import Gini
+
+        metrics["gini"] = float(Gini(y_true, proba))
+    except Exception:  # noqa: BLE001
+        metrics["gini"] = float("nan")
+
+    tp = int(((y_true == 1) & (pred_labels == 1)).sum())
+    tn = int(((y_true == 0) & (pred_labels == 0)).sum())
+    fp = int(((y_true == 0) & (pred_labels == 1)).sum())
+    fn = int(((y_true == 1) & (pred_labels == 0)).sum())
+    sensitivity = tp / (tp + fn) if (tp + fn) else float("nan")
+    specificity = tn / (tn + fp) if (tn + fp) else float("nan")
+    metrics.update(
+        {
+            "f1_score": float(f1_score(y_true, pred_labels, zero_division=0)),
+            "precision_score": float(
+                precision_score(y_true, pred_labels, zero_division=0)
+            ),
+            "recall_score": float(recall_score(y_true, pred_labels, zero_division=0)),
+            "sensitivity": float(sensitivity) if sensitivity == sensitivity else float("nan"),
+            "specificity": float(specificity) if specificity == specificity else float("nan"),
+            "youden_index": (
+                float(sensitivity + specificity - 1)
+                if sensitivity == sensitivity and specificity == specificity
+                else float("nan")
+            ),
+            "mcc": float(matthews_corrcoef(y_true, pred_labels)),
+            "shift": (
+                float(pred_labels.sum() / y_true.sum())
+                if float(y_true.sum()) > 0
+                else float("nan")
+            ),
+        }
+    )
+    return metrics
+
+
 def _fold_metrics_bundle(
     y_true: pd.Series,
     y_pred: np.ndarray,
     *,
     task_type: TaskType,
 ) -> dict[str, float]:
-    """Метрики fold через ModelDiagnostics.compute_*_metrics.
+    """Метрики fold в духе ModelDiagnostics.
 
-    Classification: порогозависимые метрики только на пороге 0.5
-    (без перебора 0..1) — быстрее и достаточны для HPO-сравнения trial’ов.
+    Classification: порогозависимые метрики только на 0.5 (без перебора 0..1).
     """
     diagnostics = _model_diagnostics_stub(task_type)
     y_np = np.asarray(y_true)
     if task_type == "classification":
         proba = np.asarray(y_pred, dtype=float)
-        raw = diagnostics.compute_classification_metrics(
-            y_np, proba, thresholds=[0.5]
-        )
+        # Новый MD: thresholds=[0.5]; старый — без kwargs, тогда считаем сами @0.5.
+        try:
+            raw = diagnostics.compute_classification_metrics(
+                y_np, proba, thresholds=[0.5]
+            )
+        except TypeError:
+            raw = _classification_metrics_at_threshold(
+                diagnostics, y_np, proba, threshold=0.5
+            )
     else:
         pred = np.asarray(y_pred, dtype=float)
         raw = diagnostics.compute_regression_metrics(y_np, pred)
