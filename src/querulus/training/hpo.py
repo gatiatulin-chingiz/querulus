@@ -55,6 +55,53 @@ def _keycloak_token_url() -> str:
     return f"{server}/realms/{realm}/protocol/openid-connect/token"
 
 
+def _keycloak_client_id() -> str:
+    return (os.getenv("KEYCLOAK_CLIENT_ID") or _DEFAULT_KEYCLOAK_CLIENT_ID).strip()
+
+
+def _keycloak_token_request(form: dict[str, str]) -> dict[str, Any]:
+    """POST к Keycloak token endpoint → JSON payload."""
+    token_url = _keycloak_token_url()
+    data = urllib.parse.urlencode(form).encode("utf-8")
+    request = urllib.request.Request(
+        token_url,
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    context = _tls_verify_context()
+    open_kwargs: dict[str, Any] = {"timeout": 60}
+    if context is not None:
+        open_kwargs["context"] = context
+    try:
+        with urllib.request.urlopen(request, **open_kwargs) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(
+            f"Keycloak token error HTTP {exc.code} at {token_url}: {body}. "
+            "Проверьте логин/пароль, KEYCLOAK_CLIENT_ID/SECRET и что у client "
+            "включён Direct Access Grants (Resource Owner Password Credentials)."
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Keycloak token request failed ({token_url}): {exc}") from exc
+
+
+def _apply_keycloak_token_payload(payload: dict[str, Any]) -> str:
+    """Выставить MLFLOW_TRACKING_TOKEN (+ refresh, если есть)."""
+    token = payload.get("access_token")
+    if not token:
+        raise RuntimeError(
+            f"Keycloak не вернул access_token (keys={list(payload.keys())}). "
+            "Возможен запрет password grant на client."
+        )
+    os.environ["MLFLOW_TRACKING_TOKEN"] = str(token)
+    refresh = payload.get("refresh_token")
+    if refresh:
+        os.environ["MLFLOW_KEYCLOAK_REFRESH_TOKEN"] = str(refresh)
+    return str(token)
+
+
 def _fetch_keycloak_access_token() -> str:
     """Password grant → access_token для Bearer (oauth2-proxy / MLflow).
 
@@ -73,12 +120,9 @@ def _fetch_keycloak_access_token() -> str:
             "(Direct Access Grants / password grant)."
         )
 
-    client_id = (
-        os.getenv("KEYCLOAK_CLIENT_ID") or _DEFAULT_KEYCLOAK_CLIENT_ID
-    ).strip()
+    client_id = _keycloak_client_id()
     client_secret = (os.getenv("KEYCLOAK_CLIENT_SECRET") or "").strip()
     scope = (os.getenv("KEYCLOAK_SCOPE") or "openid").strip()
-    token_url = _keycloak_token_url()
 
     form: dict[str, str] = {
         "grant_type": "password",
@@ -90,55 +134,71 @@ def _fetch_keycloak_access_token() -> str:
     if client_secret:
         form["client_secret"] = client_secret
 
-    data = urllib.parse.urlencode(form).encode("utf-8")
-    request = urllib.request.Request(
-        token_url,
-        data=data,
-        method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    payload = _keycloak_token_request(form)
+    token = _apply_keycloak_token_payload(payload)
+    logger.info(
+        "MLflow: получен Keycloak access_token (client=%s, grant=password)",
+        client_id,
     )
-    context = _tls_verify_context()
-    open_kwargs: dict[str, Any] = {"timeout": 60}
-    if context is not None:
-        open_kwargs["context"] = context
-    try:
-        with urllib.request.urlopen(request, **open_kwargs) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(
-            f"Keycloak token error HTTP {exc.code} at {token_url}: {body}. "
-            "Проверьте логин/пароль, KEYCLOAK_CLIENT_ID/SECRET и что у client "
-            "включён Direct Access Grants (Resource Owner Password Credentials)."
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Keycloak token request failed ({token_url}): {exc}") from exc
-
-    token = payload.get("access_token")
-    if not token:
-        raise RuntimeError(
-            f"Keycloak не вернул access_token (keys={list(payload.keys())}). "
-            "Возможен запрет password grant на client."
-        )
-    return str(token)
+    return token
 
 
-def _ensure_mlflow_bearer_token() -> None:
-    """Если нет MLFLOW_TRACKING_TOKEN — получить его через Keycloak login/password."""
-    existing = (os.getenv("MLFLOW_TRACKING_TOKEN") or "").strip()
-    if existing:
-        return
+def _refresh_mlflow_bearer_token() -> None:
+    """Обновить Bearer: refresh_token, иначе повторный password grant.
+
+    Access token Keycloak часто живёт ~5 мин; HPO с nested trials дольше —
+    без refresh ``end_run`` ловит HTML login.
+    """
     username = (os.getenv("KEYCLOAK_USERNAME") or "").strip()
     password = os.getenv("KEYCLOAK_PASSWORD") or ""
+    refresh = (os.getenv("MLFLOW_KEYCLOAK_REFRESH_TOKEN") or "").strip()
+    client_id = _keycloak_client_id()
+    client_secret = (os.getenv("KEYCLOAK_CLIENT_SECRET") or "").strip()
+
+    if refresh:
+        form: dict[str, str] = {
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": refresh,
+        }
+        if client_secret:
+            form["client_secret"] = client_secret
+        try:
+            payload = _keycloak_token_request(form)
+            _apply_keycloak_token_payload(payload)
+            logger.info("MLflow: обновлён Keycloak access_token (grant=refresh_token)")
+            return
+        except RuntimeError as exc:
+            logger.warning(
+                "MLflow: refresh_token не удался (%s) — пробую password grant",
+                exc,
+            )
+            os.environ.pop("MLFLOW_KEYCLOAK_REFRESH_TOKEN", None)
+
+    if username and password:
+        _fetch_keycloak_access_token()
+        return
+
+    logger.warning(
+        "MLflow: не удалось обновить token (нет KEYCLOAK_* и refresh) — "
+        "дальнейшие вызовы могут получить HTML SSO"
+    )
+
+
+def _ensure_mlflow_bearer_token(*, force_refresh: bool = False) -> None:
+    """Выставить / обновить MLFLOW_TRACKING_TOKEN через Keycloak."""
+    existing = (os.getenv("MLFLOW_TRACKING_TOKEN") or "").strip()
+    username = (os.getenv("KEYCLOAK_USERNAME") or "").strip()
+    password = os.getenv("KEYCLOAK_PASSWORD") or ""
+    if force_refresh:
+        if existing or (username and password):
+            _refresh_mlflow_bearer_token()
+        return
+    if existing:
+        return
     if not username or not password:
         return
-    token = _fetch_keycloak_access_token()
-    os.environ["MLFLOW_TRACKING_TOKEN"] = token
-    logger.info(
-        "MLflow: получен Keycloak access_token (client=%s), "
-        "выставлен MLFLOW_TRACKING_TOKEN",
-        (os.getenv("KEYCLOAK_CLIENT_ID") or _DEFAULT_KEYCLOAK_CLIENT_ID).strip(),
-    )
+    _fetch_keycloak_access_token()
 
 
 def _looks_like_login_html(text: str) -> bool:
@@ -153,10 +213,9 @@ def _raise_mlflow_auth_hint(exc: BaseException) -> None:
         return
     raise RuntimeError(
         "MLflow вернул страницу логина Keycloak вместо JSON API. "
-        "Нужна неинтерактивная авторизация: задайте в .env "
-        "KEYCLOAK_USERNAME + KEYCLOAK_PASSWORD "
-        "(опционально KEYCLOAK_CLIENT_ID / KEYCLOAK_CLIENT_SECRET), "
-        "либо готовый MLFLOW_TRACKING_TOKEN. "
+        "Нужна неинтерактивная авторизация: KEYCLOAK_USERNAME + KEYCLOAK_PASSWORD "
+        "(или MLFLOW_TRACKING_TOKEN). Если HPO уже шёл и упал на end_run — "
+        "скорее истёк access token (обновляем через refresh/password автоматически). "
         f"Исходная ошибка: {type(exc).__name__}"
     ) from exc
 
@@ -497,6 +556,8 @@ def run_hpo(
             fold_scores = _run_folds()
             return float(np.mean(fold_scores))
 
+        # Access token часто короче одного trial (CV) — обновляем перед nested run.
+        _ensure_mlflow_bearer_token(force_refresh=True)
         with mlflow.start_run(nested=True, run_name=f"trial_{trial.number}") as child_run:
             log_params = _mlflow_safe_params(
                 {**fit_params, "early_stopping_rounds": early}
@@ -518,14 +579,22 @@ def run_hpo(
                 }
                 for fold_i, score in enumerate(fold_scores):
                     metrics[f"{optimize_metric}_fold_{fold_i}"] = float(score)
+                _ensure_mlflow_bearer_token(force_refresh=True)
                 mlflow.log_metrics(metrics)
                 mlflow.set_tag("optuna_state", "COMPLETE")
                 trial.set_user_attr("mlflow_run_id", child_run.info.run_id)
                 return mean_score
             except Exception:
-                mlflow.set_tag("optuna_state", "FAIL")
-                mlflow.set_tag("status", "failed")
+                try:
+                    _ensure_mlflow_bearer_token(force_refresh=True)
+                    mlflow.set_tag("optuna_state", "FAIL")
+                    mlflow.set_tag("status", "failed")
+                except Exception:  # noqa: BLE001 — не маскируем исходную ошибку trial
+                    logger.warning("MLflow: не удалось проставить FAIL-tags после ошибки trial")
                 raise
+            finally:
+                # Свежий token на end_run nested child.
+                _ensure_mlflow_bearer_token(force_refresh=True)
 
     study = optuna.create_study(direction=direction)
     parent_run_id: str | None = None
@@ -546,62 +615,72 @@ def run_hpo(
     else:
         with mlflow.start_run(run_name=run_name) as parent_run:
             parent_run_id = parent_run.info.run_id
-            mlflow.set_tags(
-                {
-                    "project": "querulus",
-                    "optimizer": "optuna",
-                    "model_family": "catboost",
-                    "task_type": task_type,
-                    "optimize_metric": optimize_metric,
-                    "direction": direction,
-                    "stage": "hpo",
-                }
-            )
-            mlflow.log_params(
-                {
-                    "n_trials": n_trials,
-                    "cv": cv,
-                    "random_seed": random_seed,
-                    "n_features": len(feature_list),
-                    "n_rows": len(x_all),
-                    "n_cat_features": len(cat_features),
-                    "target_column": target_column,
-                    "date_column": date_column,
-                    "optimize_metric": optimize_metric,
-                    "direction": direction,
-                    "early_stopping_rounds": _EARLY_STOPPING_ROUNDS,
-                }
-            )
-            if task_type == "classification":
-                mlflow.log_param("auto_class_weights", _AUTO_CLASS_WEIGHTS)
+            try:
+                mlflow.set_tags(
+                    {
+                        "project": "querulus",
+                        "optimizer": "optuna",
+                        "model_family": "catboost",
+                        "task_type": task_type,
+                        "optimize_metric": optimize_metric,
+                        "direction": direction,
+                        "stage": "hpo",
+                    }
+                )
+                mlflow.log_params(
+                    {
+                        "n_trials": n_trials,
+                        "cv": cv,
+                        "random_seed": random_seed,
+                        "n_features": len(feature_list),
+                        "n_rows": len(x_all),
+                        "n_cat_features": len(cat_features),
+                        "target_column": target_column,
+                        "date_column": date_column,
+                        "optimize_metric": optimize_metric,
+                        "direction": direction,
+                        "early_stopping_rounds": _EARLY_STOPPING_ROUNDS,
+                    }
+                )
+                if task_type == "classification":
+                    mlflow.log_param("auto_class_weights", _AUTO_CLASS_WEIGHTS)
 
-            study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-            best_params = _enrich_best_params(dict(study.best_params))
-            best_value = (
-                float(study.best_value)
-                if study.best_value is not None
-                else float("nan")
-            )
+                study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+                best_params = _enrich_best_params(dict(study.best_params))
+                best_value = (
+                    float(study.best_value)
+                    if study.best_value is not None
+                    else float("nan")
+                )
 
-            mlflow.log_params(_mlflow_safe_params({f"best_{k}": v for k, v in best_params.items()}))
-            if not (isinstance(best_value, float) and math.isnan(best_value)):
-                mlflow.log_metric(f"best_{optimize_metric}", best_value)
+                _ensure_mlflow_bearer_token(force_refresh=True)
+                mlflow.log_params(
+                    _mlflow_safe_params({f"best_{k}": v for k, v in best_params.items()})
+                )
+                if not (isinstance(best_value, float) and math.isnan(best_value)):
+                    mlflow.log_metric(f"best_{optimize_metric}", best_value)
 
-            best_trial = study.best_trial
-            mlflow.log_param("best_trial_number", best_trial.number)
-            best_child = best_trial.user_attrs.get("mlflow_run_id")
-            if best_child:
-                mlflow.log_param("best_child_run_id", best_child)
+                best_trial = study.best_trial
+                mlflow.log_param("best_trial_number", best_trial.number)
+                best_child = best_trial.user_attrs.get("mlflow_run_id")
+                if best_child:
+                    mlflow.log_param("best_child_run_id", best_child)
 
-            _log_study_artifacts(
-                mlflow,
-                feature_list=feature_list,
-                cat_features=cat_features,
-                study=study,
-                optimize_metric=optimize_metric,
-                best_params=best_params,
-                best_value=best_value,
-            )
+                _log_study_artifacts(
+                    mlflow,
+                    feature_list=feature_list,
+                    cat_features=cat_features,
+                    study=study,
+                    optimize_metric=optimize_metric,
+                    best_params=best_params,
+                    best_value=best_value,
+                )
+            except Exception as exc:
+                _raise_mlflow_auth_hint(exc)
+                raise
+            finally:
+                # Критично: end_run parent после длинного HPO.
+                _ensure_mlflow_bearer_token(force_refresh=True)
 
     return HpoResult(
         best_params=best_params,
