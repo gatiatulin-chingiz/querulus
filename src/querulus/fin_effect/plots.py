@@ -193,6 +193,7 @@ def _build_severity_bins(
         base_sum=("base_sum", "median"),
         base_sum_sum=("base_sum", "sum"),
         fact_surcharge=("fact_surcharge", "median"),
+        fact_surcharge_sum=("fact_surcharge", "sum"),
         n_claims=("fact_sev", "count"),
     ).reset_index()
 
@@ -318,6 +319,21 @@ def plot_severity_fact_vs_pred_binned(
             )
 
         fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=grouped["fact_surcharge_sum"],
+                mode="lines+markers",
+                name="Фактические выплаты по убытку (sum)",
+                line=dict(color="silver", width=3),
+                legendgroup="surcharge_sum",
+                showlegend=True,
+            ),
+            row=1,
+            col=2,
+            secondary_y=False,
+        )
+
+        fig.add_trace(
             go.Bar(
                 x=x,
                 y=grouped["n_claims"],
@@ -406,6 +422,15 @@ def plot_severity_fact_vs_pred_binned(
             markersize=6,
             label=label,
         )
+    ax_r.plot(
+        x,
+        grouped["fact_surcharge_sum"],
+        color="silver",
+        marker="^",
+        linewidth=2,
+        markersize=6,
+        label="Фактические выплаты по убытку (sum)",
+    )
     ax_r.set_xlabel("Сумма (бин, руб)", fontsize=12)
     ax_r.set_ylabel("Сумма (руб)", fontsize=12)
     ax_r.ticklabel_format(style="plain", axis="y")
@@ -426,6 +451,8 @@ def plot_severity_fact_vs_pred_binned(
 
     h1, l1 = ax_l.get_legend_handles_labels()
     ax_l.legend(h1, l1, loc="upper left", bbox_to_anchor=(0, -0.12), ncol=2)
+    h2, l2 = ax_r.get_legend_handles_labels()
+    ax_r.legend(h2, l2, loc="upper left", bbox_to_anchor=(0, -0.12), ncol=2)
     plt.tight_layout(rect=[0, 0.05, 1, 1])
     plt.show()
     return fig

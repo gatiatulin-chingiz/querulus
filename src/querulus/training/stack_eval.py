@@ -188,35 +188,87 @@ def _coverage_share_table(
     t = np.nan_to_num(target_sev.loc[mask].to_numpy(dtype=float), nan=0.0)
     sum_t = float(t.sum())
     rows: list[dict[str, object]] = []
-    under_by_stack: dict[str, float] = {}
+    by_stack: dict[str, dict[str, object]] = {}
     for stack, pred_sev in pred_sev_by_stack.items():
         p = np.nan_to_num(pred_sev.loc[mask].to_numpy(dtype=float), nan=0.0)
         covered_amt = np.minimum(np.maximum(p, 0.0), np.maximum(t, 0.0))
         under = np.maximum(t - p, 0.0)
-        share_under = float(under.sum() / sum_t) if sum_t else float("nan")
-        under_by_stack[stack] = share_under
-        rows.append(
-            {
-                "stack": stack,
-                "n": int(mask.sum()),
-                "n_covered": int((p >= t).sum()),
-                "share_rows_covered": float((p >= t).mean()) if len(t) else float("nan"),
-                "share_amount_covered": float(covered_amt.sum() / sum_t) if sum_t else float("nan"),
-                "share_under": share_under,
-            }
-        )
-    if "legacy" in under_by_stack and "new" in under_by_stack:
+        row = {
+            "stack": stack,
+            "n": int(mask.sum()),
+            "n_covered": int((p >= t).sum()),
+            "share_rows_covered": float((p >= t).mean()) if len(t) else float("nan"),
+            "share_amount_covered": float(covered_amt.sum() / sum_t) if sum_t else float("nan"),
+            "share_under": float(under.sum() / sum_t) if sum_t else float("nan"),
+        }
+        by_stack[stack] = row
+        rows.append(row)
+    if "legacy" in by_stack and "new" in by_stack:
+        leg = by_stack["legacy"]
+        neu = by_stack["new"]
+
+        def _delta(key: str) -> float:
+            a, b = neu[key], leg[key]
+            if a is None or b is None:
+                return float("nan")
+            try:
+                return float(a) - float(b)
+            except (TypeError, ValueError):
+                return float("nan")
+
         rows.append(
             {
                 "stack": "new − legacy",
                 "n": int(mask.sum()),
-                "n_covered": pd.NA,
-                "share_rows_covered": pd.NA,
-                "share_amount_covered": pd.NA,
-                "share_under": under_by_stack["new"] - under_by_stack["legacy"],
+                "n_covered": int(neu["n_covered"]) - int(leg["n_covered"]),
+                "share_rows_covered": _delta("share_rows_covered"),
+                "share_amount_covered": _delta("share_amount_covered"),
+                "share_under": _delta("share_under"),
             }
         )
     return pd.DataFrame(rows)
+
+
+def _pred_freq_disagree_table(
+    pred_legacy: pd.Series,
+    pred_new: pd.Series,
+) -> pd.DataFrame:
+    """Сводка расхождений pred_freq: счётчики и доли по направлениям."""
+    n = int(len(pred_legacy))
+    leg1_new0 = (pred_legacy == 1) & (pred_new == 0)
+    leg0_new1 = (pred_legacy == 0) & (pred_new == 1)
+    disagree = pred_legacy.ne(pred_new)
+    n_disagree = int(disagree.sum())
+    n_l1n0 = int(leg1_new0.sum())
+    n_l0n1 = int(leg0_new1.sum())
+    return pd.DataFrame(
+        [
+            {"показатель": "строк holdout", "значение": n},
+            {"показатель": "pred_freq не совпали", "значение": n_disagree},
+            {
+                "показатель": "доля несовпадений",
+                "значение": float(disagree.mean()) if n else float("nan"),
+            },
+            {"показатель": "legacy=1, new=0 (n)", "значение": n_l1n0},
+            {"показатель": "legacy=0, new=1 (n)", "значение": n_l0n1},
+            {
+                "показатель": "legacy=1, new=0 (доля holdout)",
+                "значение": float(n_l1n0 / n) if n else float("nan"),
+            },
+            {
+                "показатель": "legacy=0, new=1 (доля holdout)",
+                "значение": float(n_l0n1 / n) if n else float("nan"),
+            },
+            {
+                "показатель": "legacy=1, new=0 (доля среди несовпадений)",
+                "значение": float(n_l1n0 / n_disagree) if n_disagree else float("nan"),
+            },
+            {
+                "показатель": "legacy=0, new=1 (доля среди несовпадений)",
+                "значение": float(n_l0n1 / n_disagree) if n_disagree else float("nan"),
+            },
+        ]
+    )
 
 
 def _premiums_on_index(df: pd.DataFrame, index: pd.Index) -> pd.Series:
@@ -226,6 +278,77 @@ def _premiums_on_index(df: pd.DataFrame, index: pd.Index) -> pd.Series:
         return pd.to_numeric(df.loc[index, cfg.premiums_column], errors="coerce").fillna(0.0)
     work = df.loc[index]
     return add_premiums_column(work, cfg)
+
+
+def _catboost_params_from_model(model: object) -> dict[str, object]:
+    """Гиперпараметры обученной CatBoost-модели для повторного fit."""
+    raw = dict(model.get_params())  # type: ignore[attr-defined]
+    raw.pop("train_dir", None)
+    raw["allow_writing_files"] = False
+    raw["verbose"] = False
+    return {key: value for key, value in raw.items() if value is not None}
+
+
+def _retrain_freq_on_target(
+    df: pd.DataFrame,
+    training: TrainingArtifacts,
+    *,
+    target_column: str,
+    eval_index: pd.Index,
+) -> tuple[pd.Series, pd.Series]:
+    """Переобучить freq clf (фичи + hparams training) на ``target_column``; score на eval.
+
+    Окно обучения — ``frequency_split.x_train`` той же модели (без подглядывания в eval,
+    если eval пересекается с train — строки eval из train исключаются из fit).
+    """
+    from querulus.training.pipeline import _make_pool, _require_catboost
+
+    if training.frequency_split is None:
+        raise ValueError("Для retrain нужен frequency_split у legacy")
+    if target_column not in df.columns:
+        raise KeyError(f"Нет колонки {target_column}")
+
+    CatBoostClassifier, *_ = _require_catboost()
+    feats = list(training.frequency_features)
+    cats = [c for c in training.frequency_categorical_features if c in feats]
+    train_idx = training.frequency_split.x_train.index.difference(eval_index)
+    if train_idx.empty:
+        raise ValueError("Пустой train после исключения eval_index для retrain")
+
+    if training.feature_frame is not None:
+        x_tr = training.feature_frame.loc[train_idx, feats]
+    else:
+        x_tr = training.frequency_split.x_train.loc[train_idx, feats]
+    y_tr = df.loc[train_idx, target_column].fillna(0).astype(int)
+
+    eval_set = None
+    test_idx = training.frequency_split.x_test.index.difference(eval_index)
+    if len(test_idx) > 0:
+        if training.feature_frame is not None:
+            x_va = training.feature_frame.loc[test_idx, feats]
+        else:
+            x_va = training.frequency_split.x_test.loc[test_idx, feats]
+        y_va = df.loc[test_idx, target_column].fillna(0).astype(int)
+        eval_set = _make_pool(
+            x_va, y_va, cat_features=cats, feature_names=feats
+        )
+
+    model = CatBoostClassifier(**_catboost_params_from_model(training.frequency_model))
+    train_pool = _make_pool(x_tr, y_tr, cat_features=cats, feature_names=feats)
+    fit_kwargs: dict[str, object] = {"plot": False}
+    if eval_set is not None:
+        fit_kwargs["eval_set"] = eval_set
+    model.fit(train_pool, **fit_kwargs)
+
+    x_ev = _predict_features(training, df, eval_index)[feats]
+    eval_pool = _make_pool(x_ev, None, cat_features=cats, feature_names=feats)
+    proba = pd.Series(
+        np.asarray(model.predict_proba(eval_pool)[:, 1], dtype=float),
+        index=eval_index,
+        dtype=float,
+    )
+    pred = (proba >= FREQ_THRESHOLD).astype(int)
+    return proba, pred
 
 
 def score_stack_on_index(
@@ -288,10 +411,15 @@ def evaluate_legacy_vs_new(
     *,
     index: pd.Index | None = None,
 ) -> StackEvalReport:
-    """Holdout: freq на своих метках; покрытие обеих регрессий на ``pred_freq`` new.
+    """Holdout: freq-метрики (свои метки + legacy retrain на TARGET_FREQ); покрытие.
 
-    ``index`` — явный holdout (после блока B это ``splits.test``). Иначе пересечение
-    ``frequency_split.x_test`` legacy и new.
+    Строки classification:
+    - ``legacy`` — старые фичи/hparams, метка TARGET_2;
+    - ``legacy feats/hparams @ TARGET_FREQ`` — те же фичи/hparams, переобучение на TARGET_FREQ;
+    - ``new`` — новые фичи/hparams, метка TARGET_FREQ.
+
+    Покрытие обеих регрессий — на ``pred_freq`` new. ``index`` — явный holdout
+    (после B: ``splits.test``), иначе пересечение ``frequency_split.x_test``.
     """
     for col in ("TARGET_2", "TARGET_FREQ", _SEV_COL, _PSR_COL):
         if col not in df.columns:
@@ -318,9 +446,24 @@ def evaluate_legacy_vs_new(
         y_true.name = y_col
         freq_rows.append(_freq_metrics_row(stack, y_true, proba, pred_freq))
 
+    # Старые фичи + hparams, переобучение на новом таргете (не «чужие» proba).
+    y_freq = holdout["TARGET_FREQ"].fillna(0).astype(int)
+    y_freq.name = "TARGET_FREQ"
+    proba_re, pred_re = _retrain_freq_on_target(
+        df, legacy, target_column="TARGET_FREQ", eval_index=index
+    )
+    freq_rows.insert(
+        1,
+        _freq_metrics_row(
+            "legacy feats/hparams @ TARGET_FREQ",
+            y_freq,
+            proba_re,
+            pred_re,
+        ),
+    )
+
     _, pred_freq_new, pred_sev_new = preds["new"]
     _, pred_l, pred_sev_legacy = preds["legacy"]
-    y_freq = holdout["TARGET_FREQ"].fillna(0).astype(int)
     premiums = _premiums_on_index(df, index)
     psr = holdout[_PSR_COL].fillna(0)
     target_sev = holdout[_SEV_COL].fillna(0)
@@ -342,23 +485,7 @@ def evaluate_legacy_vs_new(
         target_sev,
         one_one,
     )
-
-    disagree = pred_l.ne(pred_freq_new)
-    pred_freq_disagree = pd.DataFrame(
-        [
-            {"показатель": "строк holdout", "значение": int(len(index))},
-            {"показатель": "pred_freq не совпали", "значение": int(disagree.sum())},
-            {"показатель": "доля несовпадений", "значение": float(disagree.mean())},
-            {
-                "показатель": "legacy=1, new=0",
-                "значение": int(((pred_l == 1) & (pred_freq_new == 0)).sum()),
-            },
-            {
-                "показатель": "legacy=0, new=1",
-                "значение": int(((pred_l == 0) & (pred_freq_new == 1)).sum()),
-            },
-        ]
-    )
+    pred_freq_disagree = _pred_freq_disagree_table(pred_l, pred_freq_new)
     return StackEvalReport(
         label_agreement=agreement,
         frequency_metrics=pd.DataFrame(freq_rows),

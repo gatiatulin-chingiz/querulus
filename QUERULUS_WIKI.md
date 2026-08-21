@@ -517,6 +517,12 @@ TARGET_2 = 1 if TARGET_2 > 0 else 0
 
 ---
 
+## 6b) Глоссарий таблиц ноутбука `collect.ipynb`
+
+Сверка legacy vs new, покрытие, расхождение pred_freq, fin-effect C3, график severity:
+
+→ [`notebooks/tables_glossary.md`](notebooks/tables_glossary.md)
+
 ## 7) Обучение: как строятся пулы и как отбираются фичи
 
 ### 7.1 AutoMVP / `mvp_types.py`
