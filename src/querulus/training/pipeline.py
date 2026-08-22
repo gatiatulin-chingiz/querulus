@@ -21,17 +21,29 @@ from querulus.training.severity_training import (
     severity_train_target,
 )
 
+from querulus.training.catboost_fit import catboost_fit_stats
+
 logger = logging.getLogger("querulus.training")
 
 
 @dataclass
 class DatasetSplit:
-    """Train/test разбиение для одной цели."""
+    """Train / Val / Test разбиение для одной цели.
+
+    ``x_test`` / ``y_test`` — holdout Test (или legacy eval+test на одном окне).
+    ``x_val`` / ``y_val`` — Val (только при ``use_train_val_test_split``).
+    """
 
     x_train: pd.DataFrame
     y_train: pd.Series
     x_test: pd.DataFrame
     y_test: pd.Series
+    x_val: pd.DataFrame | None = None
+    y_val: pd.Series | None = None
+
+    @property
+    def has_val(self) -> bool:
+        return self.x_val is not None and len(self.x_val) > 0
 
 
 @dataclass
@@ -337,10 +349,10 @@ def _split_by_date(
     positive_target: bool = False,
     full_frame: bool = False,
 ) -> DatasetSplit:
-    """Разбить датасет на train/test по периоду.
+    """Разбить датасет на train [/ val] / test по периодам config.
 
-    ``target_range`` — ``between(low, high)``.
-    ``positive_target`` — оставить только ``target > 0`` (если ``target_range`` не задан).
+    ``use_train_val_test_split=True``: train_period + val_period + test_period (holdout).
+    Иначе legacy: train_period + test_period (test = eval и holdout).
     """
     data = df.copy()
     data[config.date_column] = pd.to_datetime(data[config.date_column])
@@ -351,17 +363,31 @@ def _split_by_date(
 
     train_mask = data[config.date_column].between(*config.train_period)
     test_mask = data[config.date_column].between(*config.test_period)
-    if full_frame:
-        x_train = data.loc[train_mask]
-        x_test = data.loc[test_mask]
-    else:
-        x_train = data.loc[train_mask, features]
-        x_test = data.loc[test_mask, features]
+    val_mask = None
+    if config.use_train_val_test_split:
+        if config.val_period is None:
+            raise ValueError("use_train_val_test_split=True требует val_period")
+        val_mask = data[config.date_column].between(*config.val_period)
+
+    def _xy(mask: pd.Series, *, frame: bool) -> tuple[pd.DataFrame, pd.Series]:
+        if frame:
+            x_part = data.loc[mask]
+        else:
+            x_part = data.loc[mask, features]
+        return x_part, data.loc[mask, target]
+
+    x_train, y_train = _xy(train_mask, frame=full_frame)
+    x_test, y_test = _xy(test_mask, frame=full_frame)
+    x_val, y_val = (None, None)
+    if val_mask is not None:
+        x_val, y_val = _xy(val_mask, frame=full_frame)
     return DatasetSplit(
         x_train=x_train,
-        y_train=data.loc[train_mask, target],
+        y_train=y_train,
         x_test=x_test,
-        y_test=data.loc[test_mask, target],
+        y_test=y_test,
+        x_val=x_val,
+        y_val=y_val,
     )
 
 
@@ -603,8 +629,10 @@ def _diagnostics_metrics(
     features: list[str],
     cat_features: list[str],
     task_type: str,
+    *,
+    severity_transform: str = "raw",
 ) -> tuple[object, dict[str, dict[str, float]]]:
-    """Получить метрики через ModelDiagnostics."""
+    """Метрики train [/ val] / test через ModelDiagnostics + val при необходимости."""
     diagnostics = ModelDiagnostics(
         X_train=diagnostics_split.x_train,
         y_train=diagnostics_split.y_train,
@@ -616,20 +644,119 @@ def _diagnostics_metrics(
         task_type=task_type,
     )
     train_metrics, test_metrics = diagnostics.compute_metrics(print_metrics=False)
-    return diagnostics, {"train": train_metrics, "test": test_metrics}
+    out: dict[str, dict[str, float]] = {
+        "train": train_metrics,
+        "test": test_metrics,
+    }
+    if split.has_val and split.x_val is not None and split.y_val is not None:
+        from querulus.training.hpo import _fold_metrics_bundle
+
+        x_val = split.x_val[features] if features[0] in split.x_val.columns else split.x_val
+        y_val = split.y_val
+        if task_type == "classification":
+            if cat_features:
+                pool = _make_pool(
+                    x_val,
+                    y_val.astype(int),
+                    cat_features=cat_features,
+                    feature_names=features,
+                )
+                pred = np.asarray(model.predict_proba(pool)[:, 1], dtype=float)
+            else:
+                pred = np.asarray(model.predict_proba(x_val)[:, 1], dtype=float)
+        else:
+            if cat_features:
+                pool = _make_pool(
+                    x_val,
+                    severity_train_target(y_val, severity_transform),
+                    cat_features=cat_features,
+                    feature_names=features,
+                )
+                pred = np.asarray(model.predict(pool), dtype=float)
+            else:
+                pred = np.asarray(model.predict(x_val), dtype=float)
+        out["val"] = _fold_metrics_bundle(
+            severity_train_target(y_val, severity_transform)
+            if task_type == "regression"
+            else y_val,
+            pred,
+            task_type=task_type,
+        )
+    else:
+        out["val"] = {}
+    return diagnostics, out
+
+
+def _eval_pool_for_split(
+    split: DatasetSplit,
+    *,
+    features: list[str],
+    cat_features: list[str],
+    config: TrainingConfig,
+    as_int: bool = False,
+    severity_transform: str | None = None,
+) -> object | None:
+    """Eval pool для early stopping: Val при train/val/test, иначе test (legacy)."""
+    if config.use_train_val_test_split and split.has_val:
+        x_eval = split.x_val
+        y_eval = split.y_val
+    else:
+        x_eval = split.x_test
+        y_eval = split.y_test
+    if x_eval is None or y_eval is None or len(x_eval) == 0:
+        return None
+    if severity_transform is not None:
+        y_pool = severity_train_target(y_eval, severity_transform)
+    elif as_int:
+        y_pool = y_eval.astype(int)
+    else:
+        y_pool = y_eval
+    return _make_pool(
+        x_eval[features] if features and features[0] in x_eval.columns else x_eval,
+        y_pool,
+        cat_features=cat_features,
+        feature_names=features,
+    )
+
+
+def _fit_catboost(
+    model: object,
+    train_pool: object,
+    *,
+    eval_pool: object | None,
+    config: TrainingConfig,
+) -> object:
+    """Fit CatBoost: fixed tree_count без ES или legacy ES на eval."""
+    if config.fit_fixed_tree_count:
+        model.fit(train_pool, plot=False)
+        return model
+    if eval_pool is not None:
+        model.fit(
+            train_pool,
+            eval_set=eval_pool,
+            early_stopping_rounds=50,
+            plot=False,
+        )
+        return model
+    model.fit(train_pool, plot=False)
+    return model
 
 
 def _model_metrics_table(model_metrics: dict[str, dict[str, float]]) -> pd.DataFrame:
-    """Собрать train/test метрики одной модели в отдельную таблицу."""
+    """Собрать train / val / test метрики одной модели в таблицу."""
     train_metrics = model_metrics.get("train", {})
+    val_metrics = model_metrics.get("val", {})
     test_metrics = model_metrics.get("test", {})
-    metric_names = sorted(set(train_metrics) | set(test_metrics))
+    metric_names = sorted(
+        set(train_metrics) | set(val_metrics) | set(test_metrics)
+    )
     if not metric_names:
-        return pd.DataFrame(columns=["metric", "train", "test"])
+        return pd.DataFrame(columns=["metric", "train", "val", "test"])
     return pd.DataFrame(
         {
             "metric": metric_names,
             "train": [train_metrics.get(metric) for metric in metric_names],
+            "val": [val_metrics.get(metric) for metric in metric_names],
             "test": [test_metrics.get(metric) for metric in metric_names],
         }
     )
@@ -819,11 +946,11 @@ def log_training_summary(summary: TrainingSummary) -> None:
 
 
 def format_metrics_table(table: pd.DataFrame) -> pd.DataFrame:
-    """Вернуть копию таблицы метрик с форматированными train/test колонками."""
+    """Вернуть копию таблицы метрик с форматированными train/val/test колонками."""
     if table.empty:
         return table.copy()
     formatted = table.copy()
-    for column in ("train", "test"):
+    for column in ("train", "val", "test"):
         if column in formatted.columns:
             formatted[column] = formatted[column].map(_format_metric_value)
     return formatted
@@ -864,12 +991,20 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         config,
         full_frame=True,
     )
-    frequency_test_pool = _make_pool(
-        frequency_split.x_test,
-        frequency_split.y_test.astype(int),
+    frequency_eval_pool = _eval_pool_for_split(
+        frequency_split,
+        features=frequency_features,
         cat_features=frequency_cat_features,
-        feature_names=frequency_features,
+        config=config,
+        as_int=True,
     )
+    if frequency_eval_pool is None:
+        frequency_eval_pool = _make_pool(
+            frequency_split.x_test,
+            frequency_split.y_test.astype(int),
+            cat_features=frequency_cat_features,
+            feature_names=frequency_features,
+        )
     frequency_train_pool = _make_pool(
         frequency_split.x_train,
         frequency_split.y_train.astype(int),
@@ -877,6 +1012,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         feature_names=frequency_features,
     )
     frequency_hyperparameters = {
+        "iterations_cap": config.frequency_iterations,
         "iterations": config.frequency_iterations,
         "random_state": config.frequency_random_state,
         **config.frequency_classifier_params,
@@ -887,7 +1023,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         frequency_features, frequency_feature_selection_summary = _select_frequency_features(
             config,
             frequency_train_pool,
-            frequency_test_pool,
+            frequency_eval_pool,
             len(frequency_features),
             CatBoostClassifier,
             EFeaturesSelectionAlgorithm,
@@ -904,14 +1040,23 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
             cat_features=frequency_cat_features,
             feature_names=frequency_features,
         )
-        frequency_test_pool = _make_pool(
-            frequency_split.x_test[frequency_features],
-            frequency_split.y_test.astype(int),
+        frequency_eval_pool = _eval_pool_for_split(
+            frequency_split,
+            features=frequency_features,
             cat_features=frequency_cat_features,
-            feature_names=frequency_features,
+            config=config,
+            as_int=True,
         )
+        if frequency_eval_pool is None:
+            frequency_eval_pool = _make_pool(
+                frequency_split.x_test[frequency_features],
+                frequency_split.y_test.astype(int),
+                cat_features=frequency_cat_features,
+                feature_names=frequency_features,
+            )
 
     severity_hyperparameters = {
+        "iterations_cap": config.severity_iterations,
         "iterations": config.severity_iterations,
         "random_state": config.severity_random_state,
         **config.severity_regressor_params,
@@ -929,11 +1074,18 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         random_state=config.frequency_random_state,
         **config.frequency_classifier_params,
     )
-    frequency_model.fit(
+    frequency_model = _fit_catboost(
+        frequency_model,
         frequency_train_pool,
-        eval_set=frequency_test_pool,
-        plot=False,
+        eval_pool=frequency_eval_pool,
+        config=config,
     )
+    frequency_hyperparameters.update(
+        catboost_fit_stats(
+            frequency_model, iterations_cap=config.frequency_iterations
+        )
+    )
+    frequency_hyperparameters["iterations"] = frequency_hyperparameters["tree_count"]
     _check_frequency_leakage(
         frequency_model,
         frequency_features,
@@ -977,12 +1129,22 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
             severity_split.y_train, config.severity_sample_weight
         ),
     )
-    severity_test_pool = _make_pool(
-        severity_split.x_test[severity_features],
-        severity_train_target(severity_split.y_test, config.severity_target_transform),
+    severity_eval_pool = _eval_pool_for_split(
+        severity_split,
+        features=severity_features,
         cat_features=severity_cat_features,
-        feature_names=severity_features,
+        config=config,
+        severity_transform=config.severity_target_transform,
     )
+    if severity_eval_pool is None:
+        severity_eval_pool = _make_pool(
+            severity_split.x_test[severity_features],
+            severity_train_target(
+                severity_split.y_test, config.severity_target_transform
+            ),
+            cat_features=severity_cat_features,
+            feature_names=severity_features,
+        )
     severity_feature_selection_summary: dict[str, object] | None = None
     if (
         config.severity_select_features
@@ -991,7 +1153,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         severity_features, severity_feature_selection_summary = _select_severity_features(
             config,
             severity_train_pool,
-            severity_test_pool,
+            severity_eval_pool,
             len(severity_features),
             CatBoostRegressor,
             EFeaturesSelectionAlgorithm,
@@ -1013,25 +1175,38 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
                 severity_split.y_train, config.severity_sample_weight
             ),
         )
-        severity_test_pool = _make_pool(
-            severity_split.x_test[severity_features],
-            severity_train_target(
-                severity_split.y_test, config.severity_target_transform
-            ),
+        severity_eval_pool = _eval_pool_for_split(
+            severity_split,
+            features=severity_features,
             cat_features=severity_cat_features,
-            feature_names=severity_features,
+            config=config,
+            severity_transform=config.severity_target_transform,
         )
+        if severity_eval_pool is None:
+            severity_eval_pool = _make_pool(
+                severity_split.x_test[severity_features],
+                severity_train_target(
+                    severity_split.y_test, config.severity_target_transform
+                ),
+                cat_features=severity_cat_features,
+                feature_names=severity_features,
+            )
 
     severity_model = CatBoostRegressor(
         iterations=config.severity_iterations,
         random_state=config.severity_random_state,
         **config.severity_regressor_params,
     )
-    severity_model.fit(
+    severity_model = _fit_catboost(
+        severity_model,
         severity_train_pool,
-        eval_set=severity_test_pool,
-        plot=False,
+        eval_pool=severity_eval_pool,
+        config=config,
     )
+    severity_hyperparameters.update(
+        catboost_fit_stats(severity_model, iterations_cap=config.severity_iterations)
+    )
+    severity_hyperparameters["iterations"] = severity_hyperparameters["tree_count"]
 
     frequency_diagnostics, frequency_metrics = _diagnostics_metrics(
         ModelDiagnostics,
@@ -1050,6 +1225,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         severity_features,
         severity_cat_features,
         "regression",
+        severity_transform=config.severity_target_transform,
     )
     metrics = {"frequency": frequency_metrics, "severity": severity_metrics}
 

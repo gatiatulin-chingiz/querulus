@@ -67,8 +67,9 @@ class TrainLoopFlags:
     run_fit: bool = True
     run_hpo: bool = False
     run_calibration: bool = True
-    hpo_n_trials: int = 10
+    hpo_n_trials: int = 80
     hpo_cv: int = 3
+    hpo_gap_lambda: float = 0.3
     use_mlflow: bool = True
     severity_variant: str = "raw"
     severity_value_column: str = "VALUE_BEFORE_WITH"
@@ -108,14 +109,24 @@ def _types_as_tuples(types: dict[str, list[str]]) -> dict[str, tuple[str, ...]]:
 
 
 def _merge_hpo_into_catboost(
-    best_params: dict[str, Any],
+    hpo: HpoResult | dict[str, Any],
     base_params: dict[str, Any],
 ) -> tuple[dict[str, Any], int]:
-    """Слить best_params Optuna в kwargs CatBoost; iterations отдельно."""
+    """Слить HPO в kwargs CatBoost; ``iterations`` = ``tree_count`` champion."""
+    if isinstance(hpo, HpoResult):
+        best_params = dict(hpo.best_params)
+        iterations = int(hpo.tree_count or hpo.iterations_cap or 375)
+    else:
+        best_params = dict(hpo)
+        iterations = int(
+            best_params.get("tree_count")
+            or best_params.get("iterations")
+            or 375
+        )
     merged = dict(base_params)
-    iterations = int(best_params.get("iterations", merged.get("iterations", 375)))
-    skip = {"iterations", "early_stopping_rounds"}
-    for key, value in best_params.items():
+    catboost_params = strip_hpo_meta(best_params)
+    skip = {"iterations", "iterations_cap", "early_stopping_rounds"}
+    for key, value in catboost_params.items():
         if key in skip or value is None:
             continue
         merged[key] = value
@@ -144,7 +155,7 @@ def print_flags_table(flags: TrainLoopFlags) -> None:
             "после noise-cut: срез с конца, best PR-AUC / MAE",
         ),
         ("RUN_FIT", flags.run_fit, "финальный fit (+ HPO/cal если включены)"),
-        ("RUN_HPO", flags.run_hpo and flags.run_fit, "Optuna+MLflow (только при RUN_FIT)"),
+        ("RUN_HPO", flags.run_hpo and flags.run_fit, f"Optuna λ·gap λ={flags.hpo_gap_lambda}"),
         ("RUN_CALIBRATION", flags.run_calibration and flags.run_fit, "калибровка freq на Cal"),
         ("SEVERITY_VARIANT", True, flags.severity_variant),
     ]
@@ -732,12 +743,14 @@ def run_train_loop_new(
             cv=flags.hpo_cv,
             mvp_types=freq_mvp,
             use_mlflow=flags.use_mlflow,
+            gap_lambda=flags.hpo_gap_lambda,
         )
-        freq_params, freq_iters = _merge_hpo_into_catboost(freq_hpo.best_params, freq_params)
+        freq_params, freq_iters = _merge_hpo_into_catboost(freq_hpo, freq_params)
         stage_done(
             "hpo_frequency",
             detail=(
-                f"best={freq_hpo.best_value:.4f}"
+                f"objective={freq_hpo.best_value:.4f} val_raw={freq_hpo.best_value_raw:.4f} "
+                f"tree_count={freq_hpo.tree_count} cap={freq_hpo.iterations_cap}"
                 + (f" run_id={freq_hpo.parent_run_id}" if freq_hpo.parent_run_id else "")
             ),
         )
@@ -756,18 +769,39 @@ def run_train_loop_new(
             cv=flags.hpo_cv,
             mvp_types=sev_mvp,
             use_mlflow=flags.use_mlflow,
+            positive_target=base.severity_range is None,
+            gap_lambda=flags.hpo_gap_lambda,
         )
-        sev_params, sev_iters = _merge_hpo_into_catboost(sev_hpo.best_params, sev_params)
+        sev_params, sev_iters = _merge_hpo_into_catboost(sev_hpo, sev_params)
         stage_done(
             "hpo_severity",
             detail=(
-                f"best={sev_hpo.best_value:.4f}"
+                f"objective={sev_hpo.best_value:.4f} val_raw={sev_hpo.best_value_raw:.4f} "
+                f"tree_count={sev_hpo.tree_count} cap={sev_hpo.iterations_cap}"
                 + (f" run_id={sev_hpo.parent_run_id}" if sev_hpo.parent_run_id else "")
             ),
         )
         (out_dir / "hpo_best_params_new.json").write_text(
             json.dumps(
-                {"frequency": freq_hpo.best_params, "severity": sev_hpo.best_params},
+                {
+                    "gap_lambda": flags.hpo_gap_lambda,
+                    "frequency": freq_hpo.best_params,
+                    "severity": sev_hpo.best_params,
+                    "frequency_hpo": {
+                        "best_value": freq_hpo.best_value,
+                        "best_value_raw": freq_hpo.best_value_raw,
+                        "tree_count": freq_hpo.tree_count,
+                        "iterations_cap": freq_hpo.iterations_cap,
+                        "mean_train_val_gap": freq_hpo.mean_train_val_gap,
+                    },
+                    "severity_hpo": {
+                        "best_value": sev_hpo.best_value,
+                        "best_value_raw": sev_hpo.best_value_raw,
+                        "tree_count": sev_hpo.tree_count,
+                        "iterations_cap": sev_hpo.iterations_cap,
+                        "mean_train_val_gap": sev_hpo.mean_train_val_gap,
+                    },
+                },
                 ensure_ascii=False,
                 indent=2,
             ),
@@ -799,11 +833,18 @@ def run_train_loop_new(
                 "fit пойдёт с дефолтными гиперпараметрами config"
             )
 
-    stage_start("fit_new", detail="fixed features after SHAP; eval=val")
+    has_hpo_tree_count = bool(
+        (flags.run_hpo and flags.run_fit and freq_hpo and sev_hpo)
+        or (out_dir / "hpo_best_params_new.json").exists()
+    )
+    stage_start("fit_new", detail="train/val/test; iterations=tree_count from HPO")
     fit_config = replace(
         base,
         train_period=train_core,
-        test_period=val_period,
+        val_period=val_period,
+        test_period=base.test_period,
+        use_train_val_test_split=True,
+        fit_fixed_tree_count=has_hpo_tree_count,
         frequency_features=tuple(freq_features) if freq_features else None,
         severity_features=tuple(sev_features) if sev_features else None,
         frequency_select_features=False,
@@ -833,9 +874,14 @@ def run_train_loop_new(
             flags.severity_value_threshold,
             sev_spec.segment,
         )
+        sev_eval_frame = (
+            training.severity_split.x_val
+            if training.severity_split.has_val
+            else training.severity_split.x_test
+        )
         eval_idx = _segment_indices(
             df,
-            training.severity_split.x_test.index,
+            sev_eval_frame.index,
             flags.severity_value_column,
             flags.severity_value_threshold,
             sev_spec.segment,

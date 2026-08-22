@@ -103,6 +103,8 @@ def _freq_metrics_row(
     y_true: pd.Series,
     proba: pd.Series,
     pred: pd.Series,
+    *,
+    split_label: str = "test",
 ) -> dict[str, object]:
     """PR-AUC и метрики при пороге 0.5."""
     y = y_true.astype(int)
@@ -113,6 +115,7 @@ def _freq_metrics_row(
         pr_auc = float("nan")
     return {
         "stack": stack,
+        "split": split_label,
         "y_true": y.name,
         "n": int(len(y)),
         "pr_auc": pr_auc,
@@ -436,17 +439,33 @@ def evaluate_legacy_vs_new(
         quiet=True,
     ).report
 
-    preds: dict[str, tuple[pd.Series, pd.Series, pd.Series]] = {}
     freq_rows: list[dict[str, object]] = []
     trainings = {"legacy": legacy, "new": new}
+
+    def _append_stack_rows(eval_index: pd.Index, split_label: str, stacks: tuple[str, ...]) -> None:
+        part = df.loc[eval_index]
+        for stack in stacks:
+            y_col = _STACKS[0][1] if stack == "legacy" else _STACKS[1][1]
+            proba, pred_freq, _ = _stack_predictions(trainings[stack], df, eval_index)
+            y_true = part[y_col].fillna(0).astype(int)
+            y_true.name = y_col
+            freq_rows.append(
+                _freq_metrics_row(stack, y_true, proba, pred_freq, split_label=split_label)
+            )
+
+    _append_stack_rows(index, "test", ("legacy", "new"))
+
+    if new.frequency_split is not None and new.frequency_split.has_val:
+        val_index = new.frequency_split.x_val.index
+        if len(val_index) > 0:
+            _append_stack_rows(val_index, "val", ("new",))
+
+    preds: dict[str, tuple[pd.Series, pd.Series, pd.Series]] = {}
     for stack, y_col in _STACKS:
         proba, pred_freq, pred_sev = _stack_predictions(trainings[stack], df, index)
         preds[stack] = (proba, pred_freq, pred_sev)
-        y_true = holdout[y_col].fillna(0).astype(int)
-        y_true.name = y_col
-        freq_rows.append(_freq_metrics_row(stack, y_true, proba, pred_freq))
 
-    # Старые фичи + hparams, переобучение на новом таргете (не «чужие» proba).
+    # legacy retrain on TARGET_FREQ — только test holdout (test-tuned baseline).
     y_freq = holdout["TARGET_FREQ"].fillna(0).astype(int)
     y_freq.name = "TARGET_FREQ"
     proba_re, pred_re = _retrain_freq_on_target(
@@ -459,6 +478,7 @@ def evaluate_legacy_vs_new(
             y_freq,
             proba_re,
             pred_re,
+            split_label="test",
         ),
     )
 

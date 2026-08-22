@@ -11,7 +11,10 @@ from querulus.fin_effect.resolve import resolve_fin_effect_config
 from querulus.training.config import TrainingConfig, resolve_features_config
 from querulus.training.pipeline import TrainingArtifacts, train_models
 
-# stack_name → (frequency_target, severity_target)
+from querulus.training.splits import default_inner_periods_from_train
+
+# Стеки new/new_claims: train_core + Val + holdout Test; legacy — train + Test (test-tuned).
+_NEW_STACKS_WITH_VAL = frozenset({"new", "new_claims"})
 TARGET_STACKS: tuple[tuple[str, str, str], ...] = (
     ("legacy", "TARGET_2", "TARGET_3_SEV"),
     ("new", "TARGET_FREQ", "TARGET_SEV"),
@@ -74,6 +77,22 @@ def train_triple_stacks(
             frequency_target=freq_target,
             severity_target=sev_target,
         )
+        if stack_name in _NEW_STACKS_WITH_VAL:
+            train_core, val_period, _cal = default_inner_periods_from_train(
+                base.train_period
+            )
+            stack_cfg = replace(
+                stack_cfg,
+                train_period=train_core,
+                val_period=val_period,
+                use_train_val_test_split=True,
+            )
+            print(
+                f"  split train/val/test: core={train_core} val={val_period} "
+                f"test={base.test_period}"
+            )
+        elif stack_name == "legacy":
+            print("  legacy: train/test (test-tuned baseline, без Val)")
         if select_on and stack_name in select_stacks:
             trainings[stack_name] = train_models(df, stack_cfg)
             # Фиксируем отобранные фичи для остальных стеков.
@@ -169,14 +188,17 @@ def build_metrics_summary(
                 continue
             for record in table.to_dict(orient="records"):
                 metric = record.get("metric")
-                for split_name in ("train", "test"):
+                for split_name in ("train", "val", "test"):
+                    value = record.get(split_name)
+                    if value is None and split_name == "val":
+                        continue
                     rows.append(
                         {
                             "task": task,
                             "metric": metric,
                             "split": split_name,
                             "stack": stack_name,
-                            "value": record.get(split_name),
+                            "value": value,
                         }
                     )
     if not rows:

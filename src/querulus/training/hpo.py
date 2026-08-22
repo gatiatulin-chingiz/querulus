@@ -21,7 +21,14 @@ import pandas as pd
 TaskType = Literal["classification", "regression"]
 OptimizeDirection = Literal["maximize", "minimize"]
 
+from querulus.training.catboost_fit import (
+    apply_gap_penalty,
+    catboost_fit_stats,
+    train_val_gap,
+)
+
 logger = logging.getLogger("querulus.training.hpo")
+_DEFAULT_GAP_LAMBDA = 0.3
 
 # Дефолты под корпоративный MLflow (oauth2-proxy → Keycloak), см. login HTML.
 _DEFAULT_KEYCLOAK_SERVER = "https://auth.vsk.ru/auth"
@@ -300,6 +307,12 @@ class HpoResult:
     experiment_name: str
     run_name: str
     parent_run_id: str | None = None
+    best_value_raw: float | None = None
+    iterations_cap: int | None = None
+    tree_count: int | None = None
+    best_iteration: int | None = None
+    gap_lambda: float = _DEFAULT_GAP_LAMBDA
+    mean_train_val_gap: float | None = None
 
 
 # Фиксированные (не ищем в Optuna).
@@ -308,22 +321,24 @@ _AUTO_CLASS_WEIGHTS = "Balanced"
 
 # Описание сетки для артефакта search_space.json (актуально после правок).
 _SEARCH_SPACE_DOC: dict[str, Any] = {
-    "iterations": "int 100..2000 step 100",
-    "learning_rate": "float 0.001..0.3 log",
-    "depth": "int 3..8",
-    "l2_leaf_reg": "float 1.0..10.0 step 0.5",
+    "iterations": "int 100..800 step 100 (cap; фактическое tree_count после ES)",
+    "learning_rate": "float 0.01..0.25 log",
+    "depth": "int 3..6",
+    "l2_leaf_reg": "float 3.0..15.0 step 0.5",
+    "min_data_in_leaf": "int 5..50",
     "bootstrap_type": ["Bayesian", "Bernoulli", "MVS", "No"],
     "grow_policy": ["SymmetricTree", "Depthwise", "Lossguide"],
     "random_strength": "float 0.1..10.0 log",
-    "rsm": "float 0.5..1.0",
+    "rsm": "float 0.5..0.9",
     "leaf_estimation_method": ["Newton", "Gradient"],
     "one_hot_max_size": "int 2..32",
     "bagging_temperature": "float 0..1 if Bayesian",
     "subsample": "float 0.5..1 if Bernoulli|MVS",
-    "min_data_in_leaf": "int 1..20 if Lossguide",
     "max_leaves": "int 2..64 if Lossguide",
     "auto_class_weights": f"fixed {_AUTO_CLASS_WEIGHTS!r} (classification only)",
     "early_stopping_rounds": f"fixed {_EARLY_STOPPING_ROUNDS}",
+    "gap_lambda": f"fixed objective penalty λ (default {_DEFAULT_GAP_LAMBDA})",
+    "objective": "val_metric ∓ λ·train_val_gap (см. catboost_fit.apply_gap_penalty)",
 }
 
 
@@ -336,14 +351,15 @@ def _suggest_catboost_params(trial, *, task_type: TaskType, random_seed: int) ->
         "grow_policy", ["SymmetricTree", "Depthwise", "Lossguide"]
     )
     params: dict[str, Any] = {
-        "iterations": trial.suggest_int("iterations", 100, 2000, step=100),
-        "learning_rate": trial.suggest_float("learning_rate", 0.001, 0.3, log=True),
-        "depth": trial.suggest_int("depth", 3, 8),
+        "iterations": trial.suggest_int("iterations", 100, 800, step=100),
+        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.25, log=True),
+        "depth": trial.suggest_int("depth", 3, 6),
+        "min_data_in_leaf": trial.suggest_int("min_data_in_leaf", 5, 50),
         "grow_policy": grow,
-        "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1.0, 10.0, step=0.5),
+        "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 3.0, 15.0, step=0.5),
         "bootstrap_type": bootstrap,
         "random_strength": trial.suggest_float("random_strength", 0.1, 10.0, log=True),
-        "rsm": trial.suggest_float("rsm", 0.5, 1.0),
+        "rsm": trial.suggest_float("rsm", 0.5, 0.9),
         "leaf_estimation_method": trial.suggest_categorical(
             "leaf_estimation_method", ["Newton", "Gradient"]
         ),
@@ -360,7 +376,6 @@ def _suggest_catboost_params(trial, *, task_type: TaskType, random_seed: int) ->
     if bootstrap in ("Bernoulli", "MVS"):
         params["subsample"] = trial.suggest_float("subsample", 0.5, 1.0)
     if grow == "Lossguide":
-        params["min_data_in_leaf"] = trial.suggest_int("min_data_in_leaf", 1, 20)
         params["max_leaves"] = trial.suggest_int("max_leaves", 2, 64)
     return {key: value for key, value in params.items() if value is not None}
 
@@ -815,11 +830,13 @@ def run_hpo(
     random_seed: int = 42,
     mvp_types: dict[str, tuple[str, ...]] | None = None,
     use_mlflow: bool = True,
+    positive_target: bool = False,
+    gap_lambda: float = _DEFAULT_GAP_LAMBDA,
 ) -> HpoResult:
     """Optuna HPO на TimeSeriesSplit по ``date_column`` (без holdout Test).
 
-    ``mvp_types`` — types_dict для cat_features (CATEGORIAL/BINARY).
-    При ``use_mlflow=True``: parent study-run + nested trial runs (канон MLflow).
+    Objective: val-метрика с штрафом ``λ·train_val_gap`` (см. ``apply_gap_penalty``).
+    ``positive_target`` — только ``target > 0`` (severity).
     """
     import optuna
     from catboost import CatBoostClassifier, CatBoostRegressor, Pool
@@ -835,6 +852,10 @@ def run_hpo(
         raise ValueError(f"Нет таргета {target_column}")
 
     sorted_df = df.sort_values(date_column).reset_index(drop=True)
+    if positive_target:
+        sorted_df = sorted_df[
+            pd.to_numeric(sorted_df[target_column], errors="coerce") > 0
+        ].reset_index(drop=True)
     x_all = sorted_df[feature_list].copy()
     y_all = sorted_df[target_column]
     cat_features = _cat_feature_names(feature_list, mvp_types)
@@ -869,9 +890,15 @@ def run_hpo(
         early = int(params.pop("early_stopping_rounds", _EARLY_STOPPING_ROUNDS))
         fit_params = dict(params)
 
-        def _run_folds() -> tuple[float, dict[str, float]]:
-            """CV → (optimize_metric mean, средние метрики по фолдам)."""
+        def _run_folds() -> tuple[float, float, dict[str, float], dict[str, float]]:
+            """CV → (penalized score, raw val mean, mean metrics, fit stats)."""
             bundles: list[dict[str, float]] = []
+            train_bundles: list[dict[str, float]] = []
+            tree_counts: list[int] = []
+            best_iters: list[int] = []
+            opt_key = (
+                "pr_auc" if optimize_metric == "average_precision" else optimize_metric
+            )
             for tr_idx, va_idx in splitter.split(x_all):
                 x_tr, y_tr = x_all.iloc[tr_idx], y_all.iloc[tr_idx]
                 x_va, y_va = x_all.iloc[va_idx], y_all.iloc[va_idx]
@@ -879,6 +906,7 @@ def run_hpo(
                 eval_pool = Pool(
                     x_va, y_va, cat_features=cat_features, feature_names=feature_list
                 )
+                iterations_cap = int(fit_params.get("iterations", 800))
                 model = model_cls(**fit_params)
                 model.fit(
                     pool,
@@ -886,20 +914,50 @@ def run_hpo(
                     early_stopping_rounds=early,
                     verbose=False,
                 )
+                stats = catboost_fit_stats(model, iterations_cap=iterations_cap)
+                tree_counts.append(stats["tree_count"])
+                best_iters.append(stats["best_iteration"])
                 if task_type == "classification":
-                    pred = model.predict_proba(x_va)[:, 1]
+                    pred_va = model.predict_proba(x_va)[:, 1]
+                    pred_tr = model.predict_proba(x_tr)[:, 1]
                 else:
-                    pred = np.asarray(model.predict(x_va), dtype=float)
+                    pred_va = np.asarray(model.predict(x_va), dtype=float)
+                    pred_tr = np.asarray(model.predict(x_tr), dtype=float)
                 bundles.append(
-                    _fold_metrics_bundle(y_va, pred, task_type=task_type)
+                    _fold_metrics_bundle(y_va, pred_va, task_type=task_type)
+                )
+                train_bundles.append(
+                    _fold_metrics_bundle(y_tr, pred_tr, task_type=task_type)
                 )
             mean_metrics = _mean_metrics(bundles)
-            opt_key = (
-                "pr_auc" if optimize_metric == "average_precision" else optimize_metric
-            )
+            mean_train = _mean_metrics(train_bundles)
             if opt_key not in mean_metrics:
                 raise ValueError(f"Нет {opt_key} в fold-метриках")
-            return float(mean_metrics[opt_key]), mean_metrics
+            raw_val = float(mean_metrics[opt_key])
+            raw_train = float(mean_train.get(opt_key, raw_val))
+            gap = train_val_gap(raw_train, raw_val, task_type=task_type)
+            penalized = apply_gap_penalty(
+                raw_val, gap, task_type=task_type, gap_lambda=gap_lambda
+            )
+            fit_stats = {
+                "tree_count_mean": float(np.mean(tree_counts)),
+                "tree_count_median": float(np.median(tree_counts)),
+                "best_iteration_mean": float(np.mean(best_iters)),
+                "train_val_gap": gap,
+                f"val_{opt_key}": raw_val,
+                f"train_{opt_key}": raw_train,
+                "objective_penalized": penalized,
+                "gap_lambda": gap_lambda,
+            }
+            mean_metrics.update(
+                {
+                    "train_val_gap": gap,
+                    "objective_penalized": penalized,
+                    "gap_lambda": gap_lambda,
+                    "tree_count_mean": fit_stats["tree_count_mean"],
+                }
+            )
+            return penalized, raw_val, mean_metrics, fit_stats
 
         # Мета study + гиперпараметры trial (одинаковый набор ключей у children).
         log_params = _mlflow_safe_params(
@@ -918,6 +976,8 @@ def run_hpo(
                 "direction": direction,
                 "task_type": task_type,
                 "trial_number": trial.number,
+                "gap_lambda": gap_lambda,
+                "positive_target": positive_target,
             }
         )
         child_tags = {
@@ -932,7 +992,19 @@ def run_hpo(
         }
 
         if mlflow is None:
-            mean_score, _mean_metrics_dict = _run_folds()
+            mean_score, raw_val, _mean_metrics_dict, fit_stats = _run_folds()
+            trial.set_user_attr("tree_count", int(round(fit_stats["tree_count_mean"])))
+            trial.set_user_attr("best_value_raw", raw_val)
+            trial.set_user_attr("mean_train_val_gap", fit_stats["train_val_gap"])
+            logger.debug(
+                "HPO trial %s: val=%.4f gap=%.4f λ=%.2f → objective=%.4f tree_count≈%s",
+                trial.number,
+                raw_val,
+                fit_stats["train_val_gap"],
+                gap_lambda,
+                mean_score,
+                int(round(fit_stats["tree_count_mean"])),
+            )
             return mean_score
 
         # Access token часто короче одного trial (CV) — обновляем перед nested run.
@@ -948,7 +1020,7 @@ def run_hpo(
             experiment_id=parent_experiment_id,
         ) as child_run:
             try:
-                mean_score, mean_metrics = _run_folds()
+                mean_score, raw_val, mean_metrics, fit_stats = _run_folds()
             except Exception:
                 try:
                     _ensure_mlflow_bearer_token(force_refresh=True)
@@ -973,6 +1045,15 @@ def run_hpo(
                     mlflow, {**child_tags, "optuna_state": "COMPLETE"}
                 )
                 _mlflow_log_metrics(mlflow, mean_metrics)
+                _mlflow_log_metrics(
+                    mlflow,
+                    {
+                        "tree_count_mean": fit_stats["tree_count_mean"],
+                        "best_iteration_mean": fit_stats["best_iteration_mean"],
+                        "objective_penalized": fit_stats["objective_penalized"],
+                        "train_val_gap": fit_stats["train_val_gap"],
+                    },
+                )
                 # На всякий случай — parent tag после batch set_tags.
                 try:
                     from mlflow.tracking import MlflowClient
@@ -991,22 +1072,49 @@ def run_hpo(
             trial.set_user_attr("mlflow_run_id", child_run.info.run_id)
             trial.set_user_attr("mlflow_metrics", mean_metrics)
             trial.set_user_attr("mlflow_params", log_params)
+            trial.set_user_attr("tree_count", int(round(fit_stats["tree_count_mean"])))
+            trial.set_user_attr("best_value_raw", raw_val)
+            trial.set_user_attr("mean_train_val_gap", fit_stats["train_val_gap"])
             return mean_score
 
     study = optuna.create_study(direction=direction)
     parent_run_id: str | None = None
     parent_experiment_id: str | None = None
 
-    def _enrich_best_params(raw: dict[str, Any]) -> dict[str, Any]:
+    def _enrich_best_params(raw: dict[str, Any], *, champion: optuna.Trial | None) -> dict[str, Any]:
         best = dict(raw)
         best["early_stopping_rounds"] = _EARLY_STOPPING_ROUNDS
+        best["gap_lambda"] = gap_lambda
+        cap = int(best.get("iterations", 800))
+        best["iterations_cap"] = cap
+        if champion is not None:
+            tc = champion.user_attrs.get("tree_count")
+            if tc is not None:
+                best["tree_count"] = int(tc)
+                best["iterations"] = int(tc)
+            raw_val = champion.user_attrs.get("best_value_raw")
+            if raw_val is not None:
+                best["best_value_raw"] = float(raw_val)
+            gap = champion.user_attrs.get("mean_train_val_gap")
+            if gap is not None:
+                best["mean_train_val_gap"] = float(gap)
         if task_type == "classification":
             best["auto_class_weights"] = _AUTO_CLASS_WEIGHTS
         return best
 
+    logger.info(
+        "HPO %s/%s: objective=val_%s ∓ λ·gap (λ=%.2f, positive_target=%s)",
+        experiment_name,
+        target_column,
+        optimize_metric,
+        gap_lambda,
+        positive_target,
+    )
+
     if mlflow is None:
         study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-        best_params = _enrich_best_params(dict(study.best_params))
+        best_trial = study.best_trial
+        best_params = _enrich_best_params(dict(study.best_params), champion=best_trial)
         best_value = (
             float(study.best_value) if study.best_value is not None else float("nan")
         )
@@ -1054,6 +1162,8 @@ def run_hpo(
                         "optimize_metric": optimize_metric,
                         "direction": direction,
                         "early_stopping_rounds": _EARLY_STOPPING_ROUNDS,
+                        "gap_lambda": gap_lambda,
+                        "positive_target": positive_target,
                     },
                 )
                 if task_type == "classification":
@@ -1062,7 +1172,10 @@ def run_hpo(
                     )
 
                 study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-                best_params = _enrich_best_params(dict(study.best_params))
+                best_trial = study.best_trial
+                best_params = _enrich_best_params(
+                    dict(study.best_params), champion=best_trial
+                )
                 best_value = (
                     float(study.best_value)
                     if study.best_value is not None
@@ -1136,6 +1249,22 @@ def run_hpo(
                     },
                 )
 
+                _mlflow_log_metrics(
+                    mlflow,
+                    {
+                        "champion_tree_count": float(
+                            best_trial.user_attrs.get("tree_count", 0)
+                        ),
+                        "champion_train_val_gap": float(
+                            best_trial.user_attrs.get("mean_train_val_gap", 0)
+                        ),
+                        "champion_best_value_raw": float(
+                            best_trial.user_attrs.get("best_value_raw", best_value)
+                        ),
+                        "objective_penalized": float(best_value),
+                    },
+                )
+
                 _log_study_artifacts(
                     mlflow,
                     feature_list=feature_list,
@@ -1154,6 +1283,23 @@ def run_hpo(
             finally:
                 _ensure_mlflow_bearer_token(force_refresh=True)
 
+    champion = study.best_trial
+    best_value_raw = float(champion.user_attrs.get("best_value_raw", best_value))
+    tree_count_attr = champion.user_attrs.get("tree_count")
+    tree_count = int(tree_count_attr) if tree_count_attr is not None else None
+    mean_gap = champion.user_attrs.get("mean_train_val_gap")
+    iterations_cap = int(
+        best_params.get("iterations_cap", best_params.get("iterations", 800))
+    )
+    logger.info(
+        "HPO champion: objective=%.4f val_raw=%.4f gap=%.4f tree_count=%s cap=%s",
+        best_value,
+        best_value_raw,
+        float(mean_gap) if mean_gap is not None else float("nan"),
+        tree_count,
+        iterations_cap,
+    )
+
     return HpoResult(
         best_params=best_params,
         best_value=best_value,
@@ -1163,4 +1309,10 @@ def run_hpo(
         experiment_name=experiment_name,
         run_name=run_name,
         parent_run_id=parent_run_id,
+        best_value_raw=best_value_raw,
+        iterations_cap=iterations_cap,
+        tree_count=tree_count,
+        best_iteration=(tree_count - 1) if tree_count else None,
+        gap_lambda=gap_lambda,
+        mean_train_val_gap=float(mean_gap) if mean_gap is not None else None,
     )

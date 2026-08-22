@@ -91,6 +91,12 @@ class TrainingConfig:
     severity_sample_weight: Literal["none", "sqrt", "linear"] = "none"
     # Train-loop (блок B): FE в пуле обучения
     use_fe_features: bool = True
+    # True: train / val / test (val_period обязателен); test — holdout, не eval.
+    use_train_val_test_split: bool = False
+    # Финальный fit: iterations = tree_count из HPO, без early stopping.
+    fit_fixed_tree_count: bool = False
+    # HPO objective: val_metric ∓ λ·(train−val gap); см. catboost_fit.apply_gap_penalty.
+    hpo_gap_lambda: float = 0.3
 
     @property
     def drop_columns(self) -> tuple[str, ...]:
