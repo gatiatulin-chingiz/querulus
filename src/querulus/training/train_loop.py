@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ import pandas as pd
 
 from querulus import PROJECT_ROOT
 from querulus.training.calibration import expected_calibration_error, fit_probability_calibrator
+from querulus.training.catboost_fit import strip_hpo_meta
 from querulus.training.config import TrainingConfig, resolve_features_config
 from querulus.training.mvp_types import slice_mvp_types
 from querulus.training.drift_thresholds import DEFAULT_L1_THRESHOLD, DEFAULT_PSI_THRESHOLD
@@ -67,9 +69,13 @@ class TrainLoopFlags:
     run_fit: bool = True
     run_hpo: bool = False
     run_calibration: bool = True
-    hpo_n_trials: int = 80
+    hpo_n_trials: int = 50
     hpo_cv: int = 3
     hpo_gap_lambda: float = 0.3
+    hpo_n_jobs: int = 4
+    catboost_thread_count: int = 3
+    hpo_parallel_freq_sev: bool = True
+    hpo_use_pruner: bool = True
     use_mlflow: bool = True
     severity_variant: str = "raw"
     severity_value_column: str = "VALUE_BEFORE_WITH"
@@ -155,7 +161,15 @@ def print_flags_table(flags: TrainLoopFlags) -> None:
             "после noise-cut: срез с конца, best PR-AUC / MAE",
         ),
         ("RUN_FIT", flags.run_fit, "финальный fit (+ HPO/cal если включены)"),
-        ("RUN_HPO", flags.run_hpo and flags.run_fit, f"Optuna λ·gap λ={flags.hpo_gap_lambda}"),
+        (
+            "RUN_HPO",
+            flags.run_hpo and flags.run_fit,
+            (
+                f"Optuna λ={flags.hpo_gap_lambda} trials={flags.hpo_n_trials} "
+                f"n_jobs={flags.hpo_n_jobs} thread={flags.catboost_thread_count} "
+                f"freq∥sev={flags.hpo_parallel_freq_sev} pruner={flags.hpo_use_pruner}"
+            ),
+        ),
         ("RUN_CALIBRATION", flags.run_calibration and flags.run_fit, "калибровка freq на Cal"),
         ("SEVERITY_VARIANT", True, flags.severity_variant),
     ]
@@ -729,62 +743,90 @@ def run_train_loop_new(
 
     hpo_frame = df.loc[splits.train.union(splits.val)]
     if flags.run_hpo and freq_features and sev_features:
-        stage_start("hpo_frequency", detail=f"trials={flags.hpo_n_trials}")
-        freq_hpo = run_hpo(
-            hpo_frame,
-            features=freq_features,
-            target_column=base.frequency_target,
-            date_column=base.date_column,
-            task_type="classification",
-            optimize_metric="pr_auc",
-            direction="maximize",
-            experiment_name="querulus_hpo_frequency_new",
-            n_trials=flags.hpo_n_trials,
-            cv=flags.hpo_cv,
-            mvp_types=freq_mvp,
-            use_mlflow=flags.use_mlflow,
-            gap_lambda=flags.hpo_gap_lambda,
-        )
-        freq_params, freq_iters = _merge_hpo_into_catboost(freq_hpo, freq_params)
-        stage_done(
-            "hpo_frequency",
+        # При freq∥sev делим n_jobs пополам, чтобы n_jobs×thread×2 ≈ cores.
+        n_jobs_each = int(flags.hpo_n_jobs)
+        if flags.hpo_parallel_freq_sev and n_jobs_each > 1:
+            n_jobs_each = max(1, n_jobs_each // 2)
+        thread_count = int(flags.catboost_thread_count)
+        stage_start(
+            "hpo",
             detail=(
-                f"objective={freq_hpo.best_value:.4f} val_raw={freq_hpo.best_value_raw:.4f} "
-                f"tree_count={freq_hpo.tree_count} cap={freq_hpo.iterations_cap}"
-                + (f" run_id={freq_hpo.parent_run_id}" if freq_hpo.parent_run_id else "")
+                f"trials={flags.hpo_n_trials} n_jobs_each={n_jobs_each} "
+                f"thread={thread_count} parallel_freq_sev={flags.hpo_parallel_freq_sev}"
             ),
         )
 
-        stage_start("hpo_severity", detail=f"trials={flags.hpo_n_trials}")
-        sev_hpo = run_hpo(
-            hpo_frame,
-            features=sev_features,
-            target_column=base.severity_target,
-            date_column=base.date_column,
-            task_type="regression",
-            optimize_metric="mae",
-            direction="minimize",
-            experiment_name="querulus_hpo_severity_new",
-            n_trials=flags.hpo_n_trials,
-            cv=flags.hpo_cv,
-            mvp_types=sev_mvp,
-            use_mlflow=flags.use_mlflow,
-            positive_target=base.severity_range is None,
-            gap_lambda=flags.hpo_gap_lambda,
-        )
+        def _run_freq_hpo() -> HpoResult:
+            return run_hpo(
+                hpo_frame,
+                features=freq_features,
+                target_column=base.frequency_target,
+                date_column=base.date_column,
+                task_type="classification",
+                optimize_metric="pr_auc",
+                direction="maximize",
+                experiment_name="querulus_hpo_frequency_new",
+                n_trials=flags.hpo_n_trials,
+                cv=flags.hpo_cv,
+                mvp_types=freq_mvp,
+                use_mlflow=flags.use_mlflow,
+                gap_lambda=flags.hpo_gap_lambda,
+                n_jobs=n_jobs_each,
+                thread_count=thread_count,
+                use_pruner=flags.hpo_use_pruner,
+            )
+
+        def _run_sev_hpo() -> HpoResult:
+            return run_hpo(
+                hpo_frame,
+                features=sev_features,
+                target_column=base.severity_target,
+                date_column=base.date_column,
+                task_type="regression",
+                optimize_metric="mae",
+                direction="minimize",
+                experiment_name="querulus_hpo_severity_new",
+                n_trials=flags.hpo_n_trials,
+                cv=flags.hpo_cv,
+                mvp_types=sev_mvp,
+                use_mlflow=flags.use_mlflow,
+                positive_target=base.severity_range is None,
+                gap_lambda=flags.hpo_gap_lambda,
+                n_jobs=n_jobs_each,
+                thread_count=thread_count,
+                use_pruner=flags.hpo_use_pruner,
+            )
+
+        if flags.hpo_parallel_freq_sev:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                fut_freq = pool.submit(_run_freq_hpo)
+                fut_sev = pool.submit(_run_sev_hpo)
+                freq_hpo = fut_freq.result()
+                sev_hpo = fut_sev.result()
+        else:
+            freq_hpo = _run_freq_hpo()
+            sev_hpo = _run_sev_hpo()
+
+        freq_params, freq_iters = _merge_hpo_into_catboost(freq_hpo, freq_params)
         sev_params, sev_iters = _merge_hpo_into_catboost(sev_hpo, sev_params)
+        freq_params["thread_count"] = thread_count
+        sev_params["thread_count"] = thread_count
         stage_done(
-            "hpo_severity",
+            "hpo",
             detail=(
-                f"objective={sev_hpo.best_value:.4f} val_raw={sev_hpo.best_value_raw:.4f} "
-                f"tree_count={sev_hpo.tree_count} cap={sev_hpo.iterations_cap}"
-                + (f" run_id={sev_hpo.parent_run_id}" if sev_hpo.parent_run_id else "")
+                f"freq obj={freq_hpo.best_value:.4f} tree={freq_hpo.tree_count}; "
+                f"sev obj={sev_hpo.best_value:.4f} tree={sev_hpo.tree_count}"
             ),
         )
         (out_dir / "hpo_best_params_new.json").write_text(
             json.dumps(
                 {
                     "gap_lambda": flags.hpo_gap_lambda,
+                    "n_jobs": flags.hpo_n_jobs,
+                    "n_jobs_each": n_jobs_each,
+                    "thread_count": thread_count,
+                    "parallel_freq_sev": flags.hpo_parallel_freq_sev,
+                    "use_pruner": flags.hpo_use_pruner,
                     "frequency": freq_hpo.best_params,
                     "severity": sev_hpo.best_params,
                     "frequency_hpo": {
@@ -821,6 +863,8 @@ def run_train_loop_new(
                 )
             if sev_loaded:
                 sev_params, sev_iters = _merge_hpo_into_catboost(sev_loaded, sev_params)
+            freq_params["thread_count"] = int(flags.catboost_thread_count)
+            sev_params["thread_count"] = int(flags.catboost_thread_count)
             stage_done(
                 "hpo_load",
                 detail=(

@@ -318,6 +318,9 @@ class HpoResult:
 # Фиксированные (не ищем в Optuna).
 _EARLY_STOPPING_ROUNDS = 50
 _AUTO_CLASS_WEIGHTS = "Balanced"
+_DEFAULT_THREAD_COUNT = 3
+_DEFAULT_N_JOBS = 4
+_PRUNER_STARTUP_TRIALS = 5
 
 # Описание сетки для артефакта search_space.json (актуально после правок).
 _SEARCH_SPACE_DOC: dict[str, Any] = {
@@ -337,12 +340,21 @@ _SEARCH_SPACE_DOC: dict[str, Any] = {
     "max_leaves": "int 2..64 if Lossguide",
     "auto_class_weights": f"fixed {_AUTO_CLASS_WEIGHTS!r} (classification only)",
     "early_stopping_rounds": f"fixed {_EARLY_STOPPING_ROUNDS}",
+    "thread_count": f"fixed (default {_DEFAULT_THREAD_COUNT}; n_jobs×thread_count ≈ cores)",
+    "n_jobs": f"Optuna parallel trials (default {_DEFAULT_N_JOBS})",
+    "pruner": f"MedianPruner n_startup_trials={_PRUNER_STARTUP_TRIALS}",
     "gap_lambda": f"fixed objective penalty λ (default {_DEFAULT_GAP_LAMBDA})",
     "objective": "val_metric ∓ λ·train_val_gap (см. catboost_fit.apply_gap_penalty)",
 }
 
 
-def _suggest_catboost_params(trial, *, task_type: TaskType, random_seed: int) -> dict[str, Any]:
+def _suggest_catboost_params(
+    trial,
+    *,
+    task_type: TaskType,
+    random_seed: int,
+    thread_count: int = _DEFAULT_THREAD_COUNT,
+) -> dict[str, Any]:
     """Пространство поиска CatBoost (общее для clf/reg)."""
     bootstrap = trial.suggest_categorical(
         "bootstrap_type", ["Bayesian", "Bernoulli", "MVS", "No"]
@@ -365,6 +377,7 @@ def _suggest_catboost_params(trial, *, task_type: TaskType, random_seed: int) ->
         ),
         "one_hot_max_size": trial.suggest_int("one_hot_max_size", 2, 32),
         "random_seed": random_seed,
+        "thread_count": int(thread_count),
         "verbose": False,
         "allow_writing_files": False,
         "early_stopping_rounds": _EARLY_STOPPING_ROUNDS,
@@ -832,11 +845,19 @@ def run_hpo(
     use_mlflow: bool = True,
     positive_target: bool = False,
     gap_lambda: float = _DEFAULT_GAP_LAMBDA,
+    n_jobs: int = _DEFAULT_N_JOBS,
+    thread_count: int = _DEFAULT_THREAD_COUNT,
+    use_pruner: bool = True,
 ) -> HpoResult:
     """Optuna HPO на TimeSeriesSplit по ``date_column`` (без holdout Test).
 
     Objective: val-метрика с штрафом ``λ·train_val_gap`` (см. ``apply_gap_penalty``).
     ``positive_target`` — только ``target > 0`` (severity).
+    ``n_jobs`` — параллельные Optuna trials; ``thread_count`` — потоки CatBoost
+    (держать ``n_jobs × thread_count ≈ CPU cores``).
+    ``use_pruner`` — MedianPruner между CV-фолдами.
+    При ``n_jobs != 1`` nested MLflow trial-runs отключаются (race); champion
+    логируется в parent.
     """
     import optuna
     from catboost import CatBoostClassifier, CatBoostRegressor, Pool
@@ -850,6 +871,11 @@ def run_hpo(
         raise ValueError("Пустой список признаков для HPO")
     if target_column not in df.columns:
         raise ValueError(f"Нет таргета {target_column}")
+
+    n_jobs = max(1, int(n_jobs))
+    thread_count = max(1, int(thread_count))
+    # Nested MLflow + parallel trials нестабильны (active run / pickle).
+    log_nested_trials = bool(use_mlflow and n_jobs == 1)
 
     sorted_df = df.sort_values(date_column).reset_index(drop=True)
     if positive_target:
@@ -884,9 +910,19 @@ def run_hpo(
             experiment_name,
             resolved_experiment_id,
         )
+        if n_jobs != 1:
+            logger.info(
+                "HPO n_jobs=%s: nested trial MLflow отключён (только parent champion)",
+                n_jobs,
+            )
 
     def objective(trial: optuna.Trial) -> float:
-        params = _suggest_catboost_params(trial, task_type=task_type, random_seed=random_seed)
+        params = _suggest_catboost_params(
+            trial,
+            task_type=task_type,
+            random_seed=random_seed,
+            thread_count=thread_count,
+        )
         early = int(params.pop("early_stopping_rounds", _EARLY_STOPPING_ROUNDS))
         fit_params = dict(params)
 
@@ -899,7 +935,7 @@ def run_hpo(
             opt_key = (
                 "pr_auc" if optimize_metric == "average_precision" else optimize_metric
             )
-            for tr_idx, va_idx in splitter.split(x_all):
+            for fold_i, (tr_idx, va_idx) in enumerate(splitter.split(x_all)):
                 x_tr, y_tr = x_all.iloc[tr_idx], y_all.iloc[tr_idx]
                 x_va, y_va = x_all.iloc[va_idx], y_all.iloc[va_idx]
                 pool = Pool(x_tr, y_tr, cat_features=cat_features, feature_names=feature_list)
@@ -929,6 +965,20 @@ def run_hpo(
                 train_bundles.append(
                     _fold_metrics_bundle(y_tr, pred_tr, task_type=task_type)
                 )
+                # Intermediate score for MedianPruner (после каждого CV-фолда).
+                if use_pruner:
+                    part_val = _mean_metrics(bundles)
+                    part_train = _mean_metrics(train_bundles)
+                    if opt_key in part_val:
+                        raw_v = float(part_val[opt_key])
+                        raw_t = float(part_train.get(opt_key, raw_v))
+                        gap_i = train_val_gap(raw_t, raw_v, task_type=task_type)
+                        score_i = apply_gap_penalty(
+                            raw_v, gap_i, task_type=task_type, gap_lambda=gap_lambda
+                        )
+                        trial.report(score_i, fold_i)
+                        if trial.should_prune():
+                            raise optuna.TrialPruned()
             mean_metrics = _mean_metrics(bundles)
             mean_train = _mean_metrics(train_bundles)
             if opt_key not in mean_metrics:
@@ -978,6 +1028,8 @@ def run_hpo(
                 "trial_number": trial.number,
                 "gap_lambda": gap_lambda,
                 "positive_target": positive_target,
+                "n_jobs": n_jobs,
+                "thread_count": thread_count,
             }
         )
         child_tags = {
@@ -991,11 +1043,13 @@ def run_hpo(
             "trial_number": str(trial.number),
         }
 
-        if mlflow is None:
+        if not log_nested_trials:
             mean_score, raw_val, _mean_metrics_dict, fit_stats = _run_folds()
             trial.set_user_attr("tree_count", int(round(fit_stats["tree_count_mean"])))
             trial.set_user_attr("best_value_raw", raw_val)
             trial.set_user_attr("mean_train_val_gap", fit_stats["train_val_gap"])
+            trial.set_user_attr("mlflow_metrics", _mean_metrics_dict)
+            trial.set_user_attr("mlflow_params", log_params)
             logger.debug(
                 "HPO trial %s: val=%.4f gap=%.4f λ=%.2f → objective=%.4f tree_count≈%s",
                 trial.number,
@@ -1021,6 +1075,17 @@ def run_hpo(
         ) as child_run:
             try:
                 mean_score, raw_val, mean_metrics, fit_stats = _run_folds()
+            except optuna.TrialPruned:
+                try:
+                    _ensure_mlflow_bearer_token(force_refresh=True)
+                    _mlflow_log_params(mlflow, log_params)
+                    _mlflow_set_tags(
+                        mlflow,
+                        {**child_tags, "optuna_state": "PRUNED", "status": "pruned"},
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                raise
             except Exception:
                 try:
                     _ensure_mlflow_bearer_token(force_refresh=True)
@@ -1077,7 +1142,12 @@ def run_hpo(
             trial.set_user_attr("mean_train_val_gap", fit_stats["train_val_gap"])
             return mean_score
 
-    study = optuna.create_study(direction=direction)
+    pruner = (
+        optuna.pruners.MedianPruner(n_startup_trials=_PRUNER_STARTUP_TRIALS)
+        if use_pruner
+        else optuna.pruners.NopPruner()
+    )
+    study = optuna.create_study(direction=direction, pruner=pruner)
     parent_run_id: str | None = None
     parent_experiment_id: str | None = None
 
@@ -1085,6 +1155,7 @@ def run_hpo(
         best = dict(raw)
         best["early_stopping_rounds"] = _EARLY_STOPPING_ROUNDS
         best["gap_lambda"] = gap_lambda
+        best["thread_count"] = thread_count
         cap = int(best.get("iterations", 800))
         best["iterations_cap"] = cap
         if champion is not None:
@@ -1103,16 +1174,32 @@ def run_hpo(
         return best
 
     logger.info(
-        "HPO %s/%s: objective=val_%s ∓ λ·gap (λ=%.2f, positive_target=%s)",
+        "HPO %s/%s: objective=val_%s ∓ λ·gap (λ=%.2f, positive_target=%s, "
+        "n_jobs=%s, thread_count=%s, pruner=%s)",
         experiment_name,
         target_column,
         optimize_metric,
         gap_lambda,
         positive_target,
+        n_jobs,
+        thread_count,
+        "MedianPruner" if use_pruner else "Nop",
     )
 
+    def _optimize_study() -> None:
+        """Optuna trials в threads: CatBoost отпускает GIL; без loky/pickle на Windows."""
+        from joblib import parallel_backend
+
+        with parallel_backend("threading", n_jobs=n_jobs):
+            study.optimize(
+                objective,
+                n_trials=n_trials,
+                n_jobs=n_jobs,
+                show_progress_bar=False,
+            )
+
     if mlflow is None:
-        study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+        _optimize_study()
         best_trial = study.best_trial
         best_params = _enrich_best_params(dict(study.best_params), champion=best_trial)
         best_value = (
@@ -1164,6 +1251,9 @@ def run_hpo(
                         "early_stopping_rounds": _EARLY_STOPPING_ROUNDS,
                         "gap_lambda": gap_lambda,
                         "positive_target": positive_target,
+                        "n_jobs": n_jobs,
+                        "thread_count": thread_count,
+                        "use_pruner": use_pruner,
                     },
                 )
                 if task_type == "classification":
@@ -1171,7 +1261,7 @@ def run_hpo(
                         mlflow, {"auto_class_weights": _AUTO_CLASS_WEIGHTS}
                     )
 
-                study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+                _optimize_study()
                 best_trial = study.best_trial
                 best_params = _enrich_best_params(
                     dict(study.best_params), champion=best_trial

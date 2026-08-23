@@ -79,11 +79,13 @@ class TrainingConfig:
     frequency_classifier_params: dict[str, object] = field(
         default_factory=lambda: {
             "auto_class_weights": "Balanced",
+            "thread_count": 3,
             "verbose": 250,
         }
     )
     severity_regressor_params: dict[str, object] = field(
         default_factory=lambda: {
+            "thread_count": 3,
             "verbose": 250,
         }
     )
