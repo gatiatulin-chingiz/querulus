@@ -9,9 +9,11 @@ import logging
 import math
 import os
 import ssl
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import warnings
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -28,6 +30,8 @@ from querulus.training.catboost_fit import (
 )
 
 logger = logging.getLogger("querulus.training.hpo")
+# Параллельные trial-логи через MlflowClient (без fluent active run).
+_MLFLOW_TRIAL_LOCK = threading.Lock()
 _DEFAULT_GAP_LAMBDA = 0.3
 
 # Дефолты под корпоративный MLflow (oauth2-proxy → Keycloak), см. login HTML.
@@ -679,83 +683,114 @@ def _mlflow_set_tags(mlflow: Any, tags: dict[str, str]) -> None:
             logger.warning("MLflow set_tag(%s) failed: %s", key, type(exc).__name__)
 
 
-def _start_nested_trial_run(
-    mlflow: Any,
+def _client_log_trial_run(
     *,
-    run_name: str,
     parent_run_id: str,
     experiment_id: str,
-) -> Any:
-    """Child run через MlflowClient + tag ``mlflow.parentRunId``, затем activate.
+    run_name: str,
+    params: dict[str, Any],
+    metrics: dict[str, float],
+    tags: dict[str, str],
+    status: str = "FINISHED",
+) -> str | None:
+    """Создать child run и залогировать params/metrics через MlflowClient.
 
-    Fluent ``start_run(nested=True)`` на части серверов создаёт sibling (пустой
-    active stack / другой experiment_id / tag не пишется при create). Client API
-    задаёт parent явно; после create проверяем tag.
+    Thread-safe: не трогает fluent ``active_run``. Подходит для Optuna ``n_jobs>1``.
+    ``status``: FINISHED | FAILED | KILLED (pruned).
     """
+    from mlflow.entities import RunStatus
     from mlflow.tracking import MlflowClient
 
     try:
         from mlflow.utils.mlflow_tags import MLFLOW_PARENT_RUN_ID, MLFLOW_RUN_NAME
-    except ImportError:  # pragma: no cover — старые клиенты
+    except ImportError:  # pragma: no cover
         MLFLOW_PARENT_RUN_ID = "mlflow.parentRunId"
         MLFLOW_RUN_NAME = "mlflow.runName"
 
-    client = MlflowClient()
-    tags = {
+    safe_params = _mlflow_safe_params(params)
+    clean_metrics = {
+        str(key): float(value)
+        for key, value in metrics.items()
+        if value is not None
+        and not (isinstance(value, float) and (math.isnan(value) or math.isinf(value)))
+    }
+    tag_payload = {
         str(MLFLOW_PARENT_RUN_ID): parent_run_id,
         str(MLFLOW_RUN_NAME): run_name,
+        **{str(key): str(value) for key, value in tags.items()},
     }
-    created = None
-    try:
-        created = client.create_run(
-            experiment_id=str(experiment_id),
-            tags=tags,
-            run_name=run_name,
-        )
-    except TypeError:
-        created = client.create_run(
-            experiment_id=str(experiment_id),
-            tags=tags,
-        )
-    child_id = created.info.run_id
 
-    def _parent_tag(run: Any) -> str | None:
-        tag_map = getattr(getattr(run, "data", None), "tags", None) or {}
-        return tag_map.get(str(MLFLOW_PARENT_RUN_ID)) or tag_map.get("mlflow.parentRunId")
+    status_map = {
+        "FINISHED": RunStatus.FINISHED,
+        "FAILED": RunStatus.FAILED,
+        "KILLED": RunStatus.KILLED,
+    }
+    run_status = status_map.get(status.upper(), RunStatus.FINISHED)
 
-    got = _parent_tag(created)
-    if got != parent_run_id:
+    with _MLFLOW_TRIAL_LOCK:
         try:
-            client.set_tag(child_id, "mlflow.parentRunId", parent_run_id)
+            _ensure_mlflow_bearer_token(force_refresh=False)
+            client = MlflowClient()
+            try:
+                created = client.create_run(
+                    experiment_id=str(experiment_id),
+                    tags=tag_payload,
+                    run_name=run_name,
+                )
+            except TypeError:
+                created = client.create_run(
+                    experiment_id=str(experiment_id),
+                    tags=tag_payload,
+                )
+            child_id = created.info.run_id
+            # Дубль parent tag (часть серверов игнорирует system tag при create).
+            try:
+                client.set_tag(child_id, "mlflow.parentRunId", parent_run_id)
+            except Exception:  # noqa: BLE001
+                pass
+            for key, value in safe_params.items():
+                try:
+                    client.log_param(child_id, key, value)
+                except Exception:  # noqa: BLE001
+                    pass
+            for key, value in clean_metrics.items():
+                try:
+                    client.log_metric(child_id, key, value)
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                client.set_terminated(child_id, status=RunStatus.to_string(run_status))
+            except TypeError:
+                client.set_terminated(child_id, status=status.upper())
+            except Exception:  # noqa: BLE001
+                try:
+                    client.set_terminated(child_id)
+                except Exception:  # noqa: BLE001
+                    pass
+            logger.info(
+                "MLflow: child trial %s → parent %s (%s)",
+                child_id,
+                parent_run_id,
+                status.upper(),
+            )
+            return child_id
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "MLflow: set_tag parentRunId на %s не удался (%s)",
-                child_id,
+                "MLflow: client log trial %s не удался (%s)",
+                run_name,
                 type(exc).__name__,
             )
-        try:
-            got = _parent_tag(client.get_run(child_id))
-        except Exception:  # noqa: BLE001
-            got = None
+            return None
 
-    if got != parent_run_id:
-        logger.error(
-            "MLflow: child %s без mlflow.parentRunId=%s (сейчас %r) — "
-            "в UI будет sibling. Проверьте права на system tags / версию сервера.",
-            child_id,
-            parent_run_id,
-            got,
-        )
-    else:
-        logger.info(
-            "MLflow: nested trial %s → parent %s (exp=%s)",
-            child_id,
-            parent_run_id,
-            experiment_id,
-        )
 
-    # Активируем уже созданный run (parent остаётся в stack → nested=True).
-    return mlflow.start_run(run_id=child_id, nested=True)
+def _suppress_insecure_request_warning() -> None:
+    """Не засорять ноутбук urllib3 InsecureRequestWarning при insecure MLflow TLS."""
+    try:
+        import urllib3
+
+        warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _log_study_artifacts(
@@ -856,8 +891,8 @@ def run_hpo(
     ``n_jobs`` — параллельные Optuna trials; ``thread_count`` — потоки CatBoost
     (держать ``n_jobs × thread_count ≈ CPU cores``).
     ``use_pruner`` — MedianPruner между CV-фолдами.
-    При ``n_jobs != 1`` nested MLflow trial-runs отключаются (race); champion
-    логируется в parent.
+    Child trial-runs всегда через ``MlflowClient`` (parent + children в UI),
+    в т.ч. при ``n_jobs>1`` / freq∥sev parallel.
     """
     import optuna
     from catboost import CatBoostClassifier, CatBoostRegressor, Pool
@@ -874,8 +909,6 @@ def run_hpo(
 
     n_jobs = max(1, int(n_jobs))
     thread_count = max(1, int(thread_count))
-    # Nested MLflow + parallel trials нестабильны (active run / pickle).
-    log_nested_trials = bool(use_mlflow and n_jobs == 1)
 
     sorted_df = df.sort_values(date_column).reset_index(drop=True)
     if positive_target:
@@ -897,6 +930,7 @@ def run_hpo(
         import mlflow as _mlflow
 
         _configure_mlflow(_mlflow)
+        _suppress_insecure_request_warning()
         # Autolog (если кто-то включил в ноутбуке) плодит sibling-runs на каждый fit.
         try:
             _mlflow.autolog(disable=True)
@@ -905,16 +939,11 @@ def run_hpo(
         resolved_experiment_id = _connect_mlflow_experiment(_mlflow, experiment_name)
         mlflow = _mlflow
         logger.info(
-            "MLflow tracking URI=%s experiment=%s id=%s",
+            "MLflow tracking URI=%s experiment=%s id=%s (child trials via MlflowClient)",
             _mlflow.get_tracking_uri(),
             experiment_name,
             resolved_experiment_id,
         )
-        if n_jobs != 1:
-            logger.info(
-                "HPO n_jobs=%s: nested trial MLflow отключён (только parent champion)",
-                n_jobs,
-            )
 
     def objective(trial: optuna.Trial) -> float:
         params = _suggest_catboost_params(
@@ -1043,104 +1072,105 @@ def run_hpo(
             "trial_number": str(trial.number),
         }
 
-        if not log_nested_trials:
-            mean_score, raw_val, _mean_metrics_dict, fit_stats = _run_folds()
+        def _finish_trial_attrs(
+            *,
+            mean_score: float,
+            raw_val: float,
+            mean_metrics: dict[str, float],
+            fit_stats: dict[str, float],
+            child_id: str | None,
+        ) -> float:
             trial.set_user_attr("tree_count", int(round(fit_stats["tree_count_mean"])))
             trial.set_user_attr("best_value_raw", raw_val)
             trial.set_user_attr("mean_train_val_gap", fit_stats["train_val_gap"])
-            trial.set_user_attr("mlflow_metrics", _mean_metrics_dict)
+            trial.set_user_attr("mlflow_metrics", mean_metrics)
             trial.set_user_attr("mlflow_params", log_params)
-            logger.debug(
-                "HPO trial %s: val=%.4f gap=%.4f λ=%.2f → objective=%.4f tree_count≈%s",
+            if child_id:
+                trial.set_user_attr("mlflow_run_id", child_id)
+            logger.info(
+                "HPO trial %s: val=%.4f gap=%.4f → objective=%.4f tree_count≈%s",
                 trial.number,
                 raw_val,
                 fit_stats["train_val_gap"],
-                gap_lambda,
                 mean_score,
                 int(round(fit_stats["tree_count_mean"])),
             )
             return mean_score
 
-        # Access token часто короче одного trial (CV) — обновляем перед nested run.
-        _ensure_mlflow_bearer_token(force_refresh=True)
-        if not parent_run_id or not parent_experiment_id:
-            raise RuntimeError(
-                "HPO: parent_run_id/experiment_id пусты — nested trial стал бы sibling в UI"
+        def _log_child(
+            *,
+            mean_metrics: dict[str, float],
+            fit_stats: dict[str, float],
+            status: str,
+            extra_tags: dict[str, str] | None = None,
+        ) -> str | None:
+            if mlflow is None or not parent_run_id or not parent_experiment_id:
+                return None
+            metrics_payload = dict(mean_metrics)
+            metrics_payload.update(
+                {
+                    "tree_count_mean": fit_stats.get("tree_count_mean", float("nan")),
+                    "best_iteration_mean": fit_stats.get(
+                        "best_iteration_mean", float("nan")
+                    ),
+                    "objective_penalized": fit_stats.get(
+                        "objective_penalized", float("nan")
+                    ),
+                    "train_val_gap": fit_stats.get("train_val_gap", float("nan")),
+                }
             )
-        with _start_nested_trial_run(
-            mlflow,
-            run_name=f"trial_{trial.number}",
-            parent_run_id=parent_run_id,
-            experiment_id=parent_experiment_id,
-        ) as child_run:
-            try:
-                mean_score, raw_val, mean_metrics, fit_stats = _run_folds()
-            except optuna.TrialPruned:
-                try:
-                    _ensure_mlflow_bearer_token(force_refresh=True)
-                    _mlflow_log_params(mlflow, log_params)
-                    _mlflow_set_tags(
-                        mlflow,
-                        {**child_tags, "optuna_state": "PRUNED", "status": "pruned"},
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
-                raise
-            except Exception:
-                try:
-                    _ensure_mlflow_bearer_token(force_refresh=True)
-                    _mlflow_log_params(mlflow, log_params)
-                    _mlflow_set_tags(
-                        mlflow,
-                        {**child_tags, "optuna_state": "FAIL", "status": "failed"},
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.warning(
-                        "MLflow: не удалось проставить params/tags после ошибки trial"
-                    )
-                raise
-            finally:
-                _ensure_mlflow_bearer_token(force_refresh=True)
+            return _client_log_trial_run(
+                parent_run_id=parent_run_id,
+                experiment_id=parent_experiment_id,
+                run_name=f"trial_{trial.number}",
+                params=log_params,
+                metrics=metrics_payload,
+                tags={**child_tags, **(extra_tags or {})},
+                status=status,
+            )
 
-            # Логирование не должно валить Optuna (корпоративный MLflow часто даёт 500).
-            try:
-                _ensure_mlflow_bearer_token(force_refresh=True)
-                _mlflow_log_params(mlflow, log_params)
-                _mlflow_set_tags(
-                    mlflow, {**child_tags, "optuna_state": "COMPLETE"}
-                )
-                _mlflow_log_metrics(mlflow, mean_metrics)
-                _mlflow_log_metrics(
-                    mlflow,
-                    {
-                        "tree_count_mean": fit_stats["tree_count_mean"],
-                        "best_iteration_mean": fit_stats["best_iteration_mean"],
-                        "objective_penalized": fit_stats["objective_penalized"],
-                        "train_val_gap": fit_stats["train_val_gap"],
-                    },
-                )
-                # На всякий случай — parent tag после batch set_tags.
-                try:
-                    from mlflow.tracking import MlflowClient
+        try:
+            mean_score, raw_val, mean_metrics, fit_stats = _run_folds()
+        except optuna.TrialPruned:
+            _log_child(
+                mean_metrics={},
+                fit_stats={
+                    "tree_count_mean": 0.0,
+                    "best_iteration_mean": 0.0,
+                    "objective_penalized": float("nan"),
+                    "train_val_gap": float("nan"),
+                },
+                status="KILLED",
+                extra_tags={"optuna_state": "PRUNED", "status": "pruned"},
+            )
+            raise
+        except Exception:
+            _log_child(
+                mean_metrics={},
+                fit_stats={
+                    "tree_count_mean": 0.0,
+                    "best_iteration_mean": 0.0,
+                    "objective_penalized": float("nan"),
+                    "train_val_gap": float("nan"),
+                },
+                status="FAILED",
+                extra_tags={"optuna_state": "FAIL", "status": "failed"},
+            )
+            raise
 
-                    MlflowClient().set_tag(
-                        child_run.info.run_id, "mlflow.parentRunId", parent_run_id
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "MLflow: логирование trial_%s не удалось (%s) — score всё равно учтён",
-                    trial.number,
-                    type(exc).__name__,
-                )
-            trial.set_user_attr("mlflow_run_id", child_run.info.run_id)
-            trial.set_user_attr("mlflow_metrics", mean_metrics)
-            trial.set_user_attr("mlflow_params", log_params)
-            trial.set_user_attr("tree_count", int(round(fit_stats["tree_count_mean"])))
-            trial.set_user_attr("best_value_raw", raw_val)
-            trial.set_user_attr("mean_train_val_gap", fit_stats["train_val_gap"])
-            return mean_score
+        child_id = _log_child(
+            mean_metrics=mean_metrics,
+            fit_stats=fit_stats,
+            status="FINISHED",
+            extra_tags={"optuna_state": "COMPLETE"},
+        )
+        return _finish_trial_attrs(
+            mean_score=mean_score,
+            raw_val=raw_val,
+            mean_metrics=mean_metrics,
+            fit_stats=fit_stats,
+            child_id=child_id,
+        )
 
     pruner = (
         optuna.pruners.MedianPruner(n_startup_trials=_PRUNER_STARTUP_TRIALS)
@@ -1195,7 +1225,7 @@ def run_hpo(
                 objective,
                 n_trials=n_trials,
                 n_jobs=n_jobs,
-                show_progress_bar=False,
+                show_progress_bar=True,
             )
 
     if mlflow is None:
