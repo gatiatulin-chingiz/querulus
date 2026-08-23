@@ -9,9 +9,17 @@ TaskType = Literal["classification", "regression"]
 def catboost_fit_stats(model: object, *, iterations_cap: int | None = None) -> dict[str, int]:
     """Фактическое число деревьев после fit (с ES или без)."""
     tree_count = int(getattr(model, "tree_count_", 0) or 0)
-    best_iteration = int(getattr(model, "get_best_iteration", lambda: tree_count - 1)())
-    if best_iteration < 0:
+    # Без eval_set / early stopping CatBoost возвращает None.
+    best_raw = None
+    getter = getattr(model, "get_best_iteration", None)
+    if callable(getter):
+        best_raw = getter()
+    if best_raw is None:
         best_iteration = max(tree_count - 1, 0)
+    else:
+        best_iteration = int(best_raw)
+        if best_iteration < 0:
+            best_iteration = max(tree_count - 1, 0)
     out: dict[str, int] = {
         "tree_count": tree_count,
         "best_iteration": best_iteration,
