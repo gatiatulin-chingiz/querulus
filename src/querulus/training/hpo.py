@@ -10,6 +10,7 @@ import math
 import os
 import ssl
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,6 +33,10 @@ from querulus.training.catboost_fit import (
 logger = logging.getLogger("querulus.training.hpo")
 # Параллельные trial-логи через MlflowClient (без fluent active run).
 _MLFLOW_TRIAL_LOCK = threading.Lock()
+_MLFLOW_TOKEN_LOCK = threading.Lock()
+# epoch seconds; access_token Keycloak обычно ~300s — без refresh children обрываются.
+_TOKEN_EXPIRES_AT: float | None = None
+_TOKEN_REFRESH_SKEW_SEC = 60.0
 _DEFAULT_GAP_LAMBDA = 0.3
 
 # Дефолты под корпоративный MLflow (oauth2-proxy → Keycloak), см. login HTML.
@@ -99,7 +104,8 @@ def _keycloak_token_request(form: dict[str, str]) -> dict[str, Any]:
 
 
 def _apply_keycloak_token_payload(payload: dict[str, Any]) -> str:
-    """Выставить MLFLOW_TRACKING_TOKEN (+ refresh, если есть)."""
+    """Выставить MLFLOW_TRACKING_TOKEN (+ refresh, если есть) и срок жизни."""
+    global _TOKEN_EXPIRES_AT
     token = payload.get("access_token")
     if not token:
         raise RuntimeError(
@@ -110,6 +116,12 @@ def _apply_keycloak_token_payload(payload: dict[str, Any]) -> str:
     refresh = payload.get("refresh_token")
     if refresh:
         os.environ["MLFLOW_KEYCLOAK_REFRESH_TOKEN"] = str(refresh)
+    expires_in = payload.get("expires_in")
+    try:
+        ttl = float(expires_in) if expires_in is not None else 300.0
+    except (TypeError, ValueError):
+        ttl = 300.0
+    _TOKEN_EXPIRES_AT = time.time() + max(30.0, ttl)
     return str(token)
 
 
@@ -196,20 +208,50 @@ def _refresh_mlflow_bearer_token() -> None:
     )
 
 
-def _ensure_mlflow_bearer_token(*, force_refresh: bool = False) -> None:
-    """Выставить / обновить MLFLOW_TRACKING_TOKEN через Keycloak."""
+def _token_needs_refresh() -> bool:
+    """True, если токена нет или до expiry меньше skew (дефолт 60с)."""
+    global _TOKEN_EXPIRES_AT
     existing = (os.getenv("MLFLOW_TRACKING_TOKEN") or "").strip()
-    username = (os.getenv("KEYCLOAK_USERNAME") or "").strip()
-    password = os.getenv("KEYCLOAK_PASSWORD") or ""
-    if force_refresh:
-        if existing or (username and password):
-            _refresh_mlflow_bearer_token()
-        return
-    if existing:
-        return
-    if not username or not password:
-        return
-    _fetch_keycloak_access_token()
+    if not existing:
+        return True
+    if _TOKEN_EXPIRES_AT is None:
+        # Ручной MLFLOW_TRACKING_TOKEN без TTL — не держим вечно: refresh через ~4 мин.
+        _TOKEN_EXPIRES_AT = time.time() + 240.0
+        return False
+    return time.time() >= (_TOKEN_EXPIRES_AT - _TOKEN_REFRESH_SKEW_SEC)
+
+
+def _ensure_mlflow_bearer_token(*, force_refresh: bool = False) -> None:
+    """Выставить / обновить MLFLOW_TRACKING_TOKEN через Keycloak.
+
+    При длинном HPO access_token (~5 мин) истекает; без refresh
+    ``MlflowClient.create_run`` для children молча падает → в UI только первые trials.
+    """
+    with _MLFLOW_TOKEN_LOCK:
+        existing = (os.getenv("MLFLOW_TRACKING_TOKEN") or "").strip()
+        username = (os.getenv("KEYCLOAK_USERNAME") or "").strip()
+        password = os.getenv("KEYCLOAK_PASSWORD") or ""
+        need = force_refresh or _token_needs_refresh()
+        if need:
+            if existing or (username and password):
+                _refresh_mlflow_bearer_token()
+            return
+        if existing:
+            return
+        if not username or not password:
+            return
+        _fetch_keycloak_access_token()
+
+
+def _is_mlflow_auth_error(exc: BaseException) -> bool:
+    message = str(exc)
+    return (
+        _looks_like_login_html(message)
+        or "not in a valid JSON format" in message
+        or "UNAUTHORIZED" in message.upper()
+        or "401" in message
+        or "403" in message
+    )
 
 
 def _looks_like_login_html(text: str) -> bool:
@@ -697,6 +739,7 @@ def _client_log_trial_run(
 
     Thread-safe: не трогает fluent ``active_run``. Подходит для Optuna ``n_jobs>1``.
     ``status``: FINISHED | FAILED | KILLED (pruned).
+    При auth/HTML SSO — один retry с ``force_refresh``.
     """
     from mlflow.entities import RunStatus
     from mlflow.tracking import MlflowClient
@@ -727,60 +770,80 @@ def _client_log_trial_run(
     }
     run_status = status_map.get(status.upper(), RunStatus.FINISHED)
 
-    with _MLFLOW_TRIAL_LOCK:
+    def _once(*, force_refresh: bool) -> str:
+        _ensure_mlflow_bearer_token(force_refresh=force_refresh)
+        client = MlflowClient()
         try:
-            _ensure_mlflow_bearer_token(force_refresh=False)
-            client = MlflowClient()
+            created = client.create_run(
+                experiment_id=str(experiment_id),
+                tags=tag_payload,
+                run_name=run_name,
+            )
+        except TypeError:
+            created = client.create_run(
+                experiment_id=str(experiment_id),
+                tags=tag_payload,
+            )
+        child_id = created.info.run_id
+        try:
+            client.set_tag(child_id, "mlflow.parentRunId", parent_run_id)
+        except Exception:  # noqa: BLE001
+            pass
+        for key, value in safe_params.items():
             try:
-                created = client.create_run(
-                    experiment_id=str(experiment_id),
-                    tags=tag_payload,
-                    run_name=run_name,
-                )
-            except TypeError:
-                created = client.create_run(
-                    experiment_id=str(experiment_id),
-                    tags=tag_payload,
-                )
-            child_id = created.info.run_id
-            # Дубль parent tag (часть серверов игнорирует system tag при create).
-            try:
-                client.set_tag(child_id, "mlflow.parentRunId", parent_run_id)
+                client.log_param(child_id, key, value)
             except Exception:  # noqa: BLE001
                 pass
-            for key, value in safe_params.items():
-                try:
-                    client.log_param(child_id, key, value)
-                except Exception:  # noqa: BLE001
-                    pass
-            for key, value in clean_metrics.items():
-                try:
-                    client.log_metric(child_id, key, value)
-                except Exception:  # noqa: BLE001
-                    pass
+        for key, value in clean_metrics.items():
             try:
-                client.set_terminated(child_id, status=RunStatus.to_string(run_status))
-            except TypeError:
-                client.set_terminated(child_id, status=status.upper())
+                client.log_metric(child_id, key, value)
             except Exception:  # noqa: BLE001
-                try:
-                    client.set_terminated(child_id)
-                except Exception:  # noqa: BLE001
-                    pass
-            logger.info(
-                "MLflow: child trial %s → parent %s (%s)",
-                child_id,
-                parent_run_id,
-                status.upper(),
-            )
-            return child_id
+                pass
+        try:
+            client.set_terminated(child_id, status=RunStatus.to_string(run_status))
+        except TypeError:
+            client.set_terminated(child_id, status=status.upper())
+        except Exception:  # noqa: BLE001
+            try:
+                client.set_terminated(child_id)
+            except Exception:  # noqa: BLE001
+                pass
+        return child_id
+
+    with _MLFLOW_TRIAL_LOCK:
+        try:
+            child_id = _once(force_refresh=False)
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "MLflow: client log trial %s не удался (%s)",
-                run_name,
-                type(exc).__name__,
-            )
-            return None
+            if _is_mlflow_auth_error(exc):
+                logger.warning(
+                    "MLflow: auth при log %s (%s) — refresh и retry",
+                    run_name,
+                    type(exc).__name__,
+                )
+                try:
+                    child_id = _once(force_refresh=True)
+                except Exception as retry_exc:  # noqa: BLE001
+                    logger.warning(
+                        "MLflow: client log trial %s не удался после refresh (%s)",
+                        run_name,
+                        type(retry_exc).__name__,
+                    )
+                    return None
+            else:
+                logger.warning(
+                    "MLflow: client log trial %s не удался (%s: %s)",
+                    run_name,
+                    type(exc).__name__,
+                    str(exc)[:200],
+                )
+                return None
+        logger.info(
+            "MLflow: child trial %s → parent %s (%s)",
+            child_id,
+            parent_run_id,
+            status.upper(),
+        )
+        return child_id
 
 
 def _suppress_insecure_request_warning() -> None:
@@ -1144,7 +1207,9 @@ def run_hpo(
                 extra_tags={"optuna_state": "PRUNED", "status": "pruned"},
             )
             raise
-        except Exception:
+        except Exception as exc:
+            err_msg = f"{type(exc).__name__}: {exc}"
+            logger.exception("HPO trial %s failed: %s", trial.number, err_msg)
             _log_child(
                 mean_metrics={},
                 fit_stats={
@@ -1154,7 +1219,12 @@ def run_hpo(
                     "train_val_gap": float("nan"),
                 },
                 status="FAILED",
-                extra_tags={"optuna_state": "FAIL", "status": "failed"},
+                extra_tags={
+                    "optuna_state": "FAIL",
+                    "status": "failed",
+                    "error": err_msg[:250],
+                    "error_type": type(exc).__name__,
+                },
             )
             raise
 
@@ -1300,6 +1370,36 @@ def run_hpo(
                     float(study.best_value)
                     if study.best_value is not None
                     else float("nan")
+                )
+                n_complete = sum(
+                    1
+                    for t in study.trials
+                    if t.state.name == "COMPLETE"
+                )
+                n_fail = sum(1 for t in study.trials if t.state.name == "FAIL")
+                n_prune = sum(1 for t in study.trials if t.state.name == "PRUNED")
+                n_logged = sum(
+                    1
+                    for t in study.trials
+                    if t.user_attrs.get("mlflow_run_id")
+                )
+                logger.info(
+                    "HPO study done: trials=%s complete=%s fail=%s pruned=%s "
+                    "mlflow_children=%s",
+                    len(study.trials),
+                    n_complete,
+                    n_fail,
+                    n_prune,
+                    n_logged,
+                )
+                _mlflow_log_metrics(
+                    mlflow,
+                    {
+                        "n_trials_complete": float(n_complete),
+                        "n_trials_fail": float(n_fail),
+                        "n_trials_pruned": float(n_prune),
+                        "n_mlflow_children": float(n_logged),
+                    },
                 )
             except Exception as exc:
                 _raise_mlflow_auth_hint(exc)
