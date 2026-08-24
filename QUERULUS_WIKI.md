@@ -575,6 +575,19 @@ TARGET_2 = 1 if TARGET_2 > 0 else 0
 7. optional: HPO (Optuna) + MLflow
 8. optional: calibration frequency
 
+### 7.4 Collect → outboxml (версия модели `2_*`)
+
+Связка артефактов train-loop new с OutBoxML **без** ручной правки `features[]`. Integration/FastAPI на этом этапе не меняются.
+
+- **Версия-строка:** `2_YYYY_MM_DD_v1` (без слова `new`). Пример имён: `config_cf_2_2026_08_24_v1.json`, `querulus_ansamble_2_2026_08_24_v1.pickle`, `querulus_cf_calibrator_2_….pickle`.
+- **Генератор:** `src/querulus/training/build_outboxml_configs.py` → `write_outboxml_configs()`  
+  вход: parquet/df, `new_frequency_latest.json` / `new_severity_latest.json`, `hpo_best_params_new.json`, MVP types, периоды из `TrainingConfig`.  
+  выход: parity JSON + `*_prod.json` (расширенный train / freshest cal).
+- **Калибровка:** **не** в ядре outboxml. После `DataSetsManager.fit_models` — isotonic снаружи (`fit_probability_calibrator`), как в collect. Severity не калибруем.
+- **Ноутбук:** `notebooks/example_2.ipynb` (старый `example.ipynb` / `config_*_3` / прод `*_2026_04_18_v1` не трогаем).
+- **Parity:** DSM train = train_core∪val; test = полный holdout; isotonic на cal-окне train (~60 дней). Модели parity **не** в прод-ансамбль; таблицы финэффекта — для ручной сверки с collect.
+- **Prod-refit (в ансамбль):** 85% более старых строк test → в fit вместе с исходным train; **15% самых свежих** — только isotonic + FE/ECE. Полный `fit_models()` заново.
+
 ---
 
 ## 8) Как обучаются конкретно frequency и severity

@@ -1,5 +1,11 @@
 """Обучение моделей querulus."""
 
+from querulus.training.build_outboxml_configs import (
+    compute_period_windows,
+    default_model_version,
+    with_periods,
+    write_outboxml_configs,
+)
 from querulus.training.backward_elim import (
     BackwardElimResult,
     backward_eliminate_by_metric,
@@ -87,6 +93,10 @@ __all__ = [
     "StackEvalReport",
     "DEFAULT_START_YEARS",
     "resolve_severity_variant",
+    "with_periods",
+    "write_outboxml_configs",
+    "compute_period_windows",
+    "default_model_version",
     "TrainLoopFlags",
     "TrainLoopResult",
     "TrainingArtifacts",
