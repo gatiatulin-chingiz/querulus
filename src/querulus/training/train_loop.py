@@ -965,19 +965,34 @@ def run_train_loop_new(
                 x_cal[col] = x_cal[col].astype(str)
         y_cal = cal_frame[base.frequency_target]
         proba_before = frequency_predict_proba(training, x_cal)
-        ece_before = expected_calibration_error(y_cal, proba_before)
+        ece_before = expected_calibration_error(
+            y_cal, proba_before, strategy="equal_mass"
+        )
+        ece_before_w = expected_calibration_error(
+            y_cal, proba_before, strategy="equal_width"
+        )
         calibrator = fit_probability_calibrator(
             training.frequency_model,
             x_cal,
             y_cal,
             method=base.frequency_calibration_method,
+            balance=base.frequency_calibration_balance,
         )
         training = replace(training, frequency_calibrator=calibrator)
         proba_after = frequency_predict_proba(training, x_cal)
-        ece_after = expected_calibration_error(y_cal, proba_after)
+        ece_after = expected_calibration_error(
+            y_cal, proba_after, strategy="equal_mass"
+        )
+        ece_after_w = expected_calibration_error(
+            y_cal, proba_after, strategy="equal_width"
+        )
         stage_done(
             "calibration",
-            detail=f"ECE before={ece_before:.4f} after={ece_after:.4f}",
+            detail=(
+                f"ECE_mass before={ece_before:.4f} after={ece_after:.4f}; "
+                f"ECE_width before={ece_before_w:.4f} after={ece_after_w:.4f}; "
+                f"balance={base.frequency_calibration_balance}"
+            ),
         )
     else:
         stage_skipped("calibration", "RUN_CALIBRATION")

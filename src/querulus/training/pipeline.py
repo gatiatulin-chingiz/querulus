@@ -593,11 +593,14 @@ def _fit_frequency_calibrator(
     y_cal: pd.Series,
     *,
     method: str,
+    balance: bool = True,
 ) -> object:
     """Пост-калибровка на отдельном Cal-set (не на train)."""
     from querulus.training.calibration import fit_probability_calibrator
 
-    return fit_probability_calibrator(model, x_cal, y_cal, method=method)
+    return fit_probability_calibrator(
+        model, x_cal, y_cal, method=method, balance=balance
+    )
 
 
 def frequency_predict_proba(
@@ -1099,6 +1102,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
             frequency_split.x_train[frequency_features],
             frequency_split.y_train,
             method=config.frequency_calibration_method,
+            balance=config.frequency_calibration_balance,
         )
 
     severity_split = _split_by_date(

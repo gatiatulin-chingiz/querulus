@@ -72,6 +72,8 @@ class TrainingConfig:
     severity_select_early_stopping_rounds: int = 50
     frequency_calibration_enabled: bool = False
     frequency_calibration_method: Literal["isotonic", "sigmoid"] = "isotonic"
+    # True: downsample majority на Cal при fit Platt/Isotonic (ECE — на полном Cal).
+    frequency_calibration_balance: bool = True
     frequency_leak_importance_level: float = 50.0
     mvp_input_types: dict[str, tuple[str, ...]] = field(default_factory=_default_mvp_input_types)
     base_drop_columns: tuple[str, ...] = DEFAULT_OTHER_COLS

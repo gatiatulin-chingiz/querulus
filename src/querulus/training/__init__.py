@@ -4,7 +4,11 @@ from querulus.training.backward_elim import (
     BackwardElimResult,
     backward_eliminate_by_metric,
 )
-from querulus.training.calibration import expected_calibration_error, fit_probability_calibrator
+from querulus.training.calibration import (
+    balance_binary_cal_frame,
+    expected_calibration_error,
+    fit_probability_calibrator,
+)
 from querulus.training.config import TrainingConfig
 from querulus.training.drift import (
     feature_drift_report,
@@ -97,6 +101,7 @@ __all__ = [
     "payment_year_cohorts",
     "score_stack_on_index",
     "train_legacy_matching_new",
+    "balance_binary_cal_frame",
     "expected_calibration_error",
     "feature_drift_report",
     "filter_features_by_drift",
