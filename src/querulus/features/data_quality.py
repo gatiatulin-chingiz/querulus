@@ -348,3 +348,97 @@ def apply_dataset_data_quality(
         )
 
     return result, report
+
+
+def build_service_dq_bounds(
+    report: dict[str, Any] | DataQualityReport,
+    *,
+    model_version: str,
+    source_report: str | Path | None = None,
+) -> dict[str, Any]:
+    """Замороженные границы DQ для сервиса (не пересчитывать IQR на заявке).
+
+    Берём low_raw/high_raw из отчёта сборки parquet — тем же забором резали
+    ``df_final_3``, на котором учится модель 2.
+    """
+    payload = report.to_dict() if isinstance(report, DataQualityReport) else dict(report)
+    winsor_bounds: dict[str, dict[str, float]] = {}
+    for row in payload.get("winsorize_log1p_iqr") or []:
+        column = row.get("column")
+        if not column:
+            continue
+        winsor_bounds[str(column)] = {
+            "low_raw": float(row["low_raw"]),
+            "high_raw": float(row["high_raw"]),
+        }
+    money_cols = [
+        str(row.get("column"))
+        for row in (payload.get("hard_clip_nonnegative") or [])
+        if row.get("column")
+    ]
+    if not money_cols:
+        money_cols = list(_default_monetary_columns())
+    return {
+        "version": model_version,
+        "source_report": str(source_report) if source_report else None,
+        "policy": payload.get("policy"),
+        "pipeline_context": payload.get("pipeline_context"),
+        "iqr_k": payload.get("iqr_k", IQR_K),
+        "hard_clip_nonnegative_columns": money_cols,
+        "winsorize_bounds": winsor_bounds,
+        "service_contract": (
+            "Before prepare_dataset / DSM: (1) clip listed monetary cols to >=0; "
+            "(2) clip each winsorize_bounds col to [low_raw, high_raw]. "
+            "Do not recompute IQR per request. Same fences as df_final_3 build."
+        ),
+    }
+
+
+def write_service_dq_bounds(
+    out_path: Path | str,
+    *,
+    model_version: str,
+    report_path: Path | str | None = None,
+    report: dict[str, Any] | DataQualityReport | None = None,
+) -> Path:
+    """Пишет ``querulus_dq_bounds_{version}.json`` рядом с прод-артефактами."""
+    path = Path(out_path)
+    if report is None:
+        if report_path is None:
+            raise ValueError("Нужен report или report_path")
+        report = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    payload = build_service_dq_bounds(
+        report,
+        model_version=model_version,
+        source_report=report_path,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def apply_frozen_dq_bounds(
+    df: pd.DataFrame,
+    bounds: dict[str, Any],
+) -> pd.DataFrame:
+    """Применить замороженный DQ к сырому кадру (контракт сервиса).
+
+    1) monetary: x < 0 → 0;
+    2) winsorize_bounds: clip в [low_raw, high_raw] на сырой шкале
+       (границы уже из log1p-IQR train при сборке датасета).
+    """
+    result = df.copy()
+    money = list(bounds.get("hard_clip_nonnegative_columns") or [])
+    if money:
+        result, _ = clip_nonnegative_columns(result, money)
+    for column, fence in (bounds.get("winsorize_bounds") or {}).items():
+        if column not in result.columns:
+            continue
+        low = float(fence["low_raw"])
+        high = float(fence["high_raw"])
+        values = pd.to_numeric(result[column], errors="coerce")
+        result[column] = values.clip(lower=low, upper=high)
+    return result

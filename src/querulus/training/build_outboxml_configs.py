@@ -22,6 +22,7 @@ DEFAULT_CONFIGS_DIR = PROJECT_ROOT / "configs"
 DEFAULT_HPO_PATH = DEFAULT_ARTIFACTS_DIR / "hpo_best_params_new.json"
 PROD_CAL_FRACTION = 0.15
 _NA_KEY = "N/A"
+_OTHER_KEY = "ПРОЧИЕ"
 
 
 def default_model_version(*, business: str = "2", increment: str = "v1") -> str:
@@ -88,6 +89,7 @@ def catboost_params_from_hpo(
 
 
 def _level_key(value: Any) -> str:
+    """Ключ для replace: outboxml делает .upper() на строках перед матчем."""
     if pd.isna(value):
         return _NA_KEY
     if isinstance(value, (bool, np.bool_)):
@@ -100,7 +102,14 @@ def _level_key(value: Any) -> str:
             return str(int(number))
         return str(number)
     text = str(value).strip()
-    return text if text else _NA_KEY
+    if not text:
+        return _NA_KEY
+    return text.upper()
+
+
+def _is_binary_level_keys(keys: list[str]) -> bool:
+    levels = {key for key in keys if key != _NA_KEY}
+    return bool(levels) and levels <= {"0", "1"}
 
 
 def _categorical_feature_spec(series: pd.Series, name: str) -> dict[str, Any]:
@@ -113,16 +122,32 @@ def _categorical_feature_spec(series: pd.Series, name: str) -> dict[str, Any]:
         if key not in seen:
             seen.add(key)
             keys.append(key)
-    keys.sort()
     if series.isna().any() and _NA_KEY not in seen:
         keys.append(_NA_KEY)
-    replace = {key: index for index, key in enumerate(keys)}
+        seen.add(_NA_KEY)
+
     if present.empty:
+        replace = {_OTHER_KEY: 0, _NA_KEY: 0}
         default = 0
-        replace = {_NA_KEY: 0}
-    else:
+    elif _is_binary_level_keys(keys):
+        ordered = sorted(key for key in keys if key != _NA_KEY)
+        if _NA_KEY in seen:
+            ordered.append(_NA_KEY)
+        replace = {key: index for index, key in enumerate(ordered)}
         mode_key = _level_key(present.mode().iloc[0])
         default = int(replace.get(mode_key, 0))
+    else:
+        # Неизвестный уровень → ПРОЧИЕ (как config_*_3), не мода.
+        others = sorted(key for key in keys if key not in {_OTHER_KEY, _NA_KEY})
+        replace = {_OTHER_KEY: 0}
+        code = 1
+        for key in others:
+            replace[key] = code
+            code += 1
+        if _NA_KEY in seen:
+            replace[_NA_KEY] = code
+        default = 0
+
     return {
         "name": name,
         "default": default,
@@ -133,16 +158,11 @@ def _categorical_feature_spec(series: pd.Series, name: str) -> dict[str, Any]:
 
 
 def _numeric_feature_spec(series: pd.Series, name: str) -> dict[str, Any]:
-    numeric = pd.to_numeric(series, errors="coerce")
-    finite = numeric[np.isfinite(numeric)]
-    if finite.empty:
-        default: int | float | str = "_MEDIAN_"
-    else:
-        median = float(finite.median())
-        default = int(median) if median.is_integer() else median
+    """default=_MEDIAN_: на fit DSM считает медиану по своему train (prod ≠ parity)."""
+    _ = series  # уровни NA не запекаем; clip/winsor — DQ-артефакт, не JSON
     return {
         "name": name,
-        "default": default,
+        "default": "_MEDIAN_",
         "replace": {"_TYPE_": "_NUM_"},
         "encoding": "to_float",
     }

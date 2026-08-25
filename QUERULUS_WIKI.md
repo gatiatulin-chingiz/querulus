@@ -577,16 +577,17 @@ TARGET_2 = 1 if TARGET_2 > 0 else 0
 
 ### 7.4 Collect → outboxml (версия модели `2_*`)
 
-Связка артефактов train-loop new с OutBoxML **без** ручной правки `features[]`. Integration/FastAPI на этом этапе не меняются.
+Связка артефактов train-loop new с OutBoxML **без** ручной правки `features[]`. Код FastAPI на этом этапе не меняется; контракт DQ для сервиса уже зафиксирован артефактом.
 
-- **Версия-строка:** `2_YYYY_MM_DD_v1` (без слова `new`). Пример имён: `config_cf_2_2026_08_24_v1.json`, `querulus_ansamble_2_2026_08_24_v1.pickle`, `querulus_cf_calibrator_2_….pickle`.
+- **Версия-строка:** `2_YYYY_MM_DD_v1` (без слова `new`). Пример: `config_cf_2_….json`, `querulus_ansamble_2_….pickle`, `querulus_cf_calibrator_2_….pickle`, `querulus_dq_bounds_2_….json`.
 - **Генератор:** `src/querulus/training/build_outboxml_configs.py` → `write_outboxml_configs()`  
-  вход: parquet/df, `new_frequency_latest.json` / `new_severity_latest.json`, `hpo_best_params_new.json`, MVP types, периоды из `TrainingConfig`.  
-  выход: parity JSON + `*_prod.json` (расширенный train / freshest cal).
-- **Калибровка:** **не** в ядре outboxml. После `DataSetsManager.fit_models` — isotonic снаружи (`fit_probability_calibrator`), как в collect. Severity не калибруем.
-- **Ноутбук:** `notebooks/example_2.ipynb` (старый `example.ipynb` / `config_*_3` / прод `*_2026_04_18_v1` не трогаем).
-- **Parity:** DSM train = train_core∪val; test = полный holdout; isotonic на cal-окне train (~60 дней). Модели parity **не** в прод-ансамбль; таблицы финэффекта — для ручной сверки с collect.
-- **Prod-refit (в ансамбль):** 85% более старых строк test → в fit вместе с исходным train; **15% самых свежих** — только isotonic + FE/ECE. Полный `fit_models()` заново.
+  - cat: ключи `replace` в **UPPER**; неизвестное → `"ПРОЧИЕ": 0` (`default`/`fillna` = 0); бинарные 0/1 — без ПРОЧИЕ;  
+  - num: `default: "_MEDIAN_"` (медиана считается на **fit** DSM → у prod-refit своя);  
+  - линейный `clip` в JSON **не** пишем: winsorize — из DQ сборки датасета.
+- **Калибровка:** снаружи DSM, isotonic после `fit_models`. Severity не калибруем.
+- **Ноутбук:** `notebooks/example_2.ipynb`. Старый `example.ipynb` / `config_*_3` не трогаем.
+- **Parity / Prod-refit:** как раньше (parity для FE-таблиц; в ансамбль только prod 85/15).
+- **Сервис (TODO integration):** сырой вектор → `apply_frozen_dq_bounds(df, querulus_dq_bounds_*)` → `prepare_dataset`. Границы = `data_quality_report.json` сборки `df_final_3` (не IQR с заявки). Хелперы: `features/data_quality.py`.
 
 ---
 
