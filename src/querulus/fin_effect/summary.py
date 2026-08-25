@@ -40,8 +40,9 @@ def create_summary_table(
     Берёт ``fin_effect_model`` / ``fin_effect_fact`` / ``fin_effect_economy``
     с кадра как есть (после calculator). Никакого пересчёта факта.
 
-    ``Экономия`` = sum(``fin_effect_economy``) = model − fact по квадранту
-    (как ``net_effect``: FP → отрицательная, удачное покрытие → положительная).
+    ``Экономия`` = sum(``fin_effect_economy``) =
+    ``(−факт) − (−модель)`` = расход_факт − расход_модель
+    (1–1: плюс при меньшем расходе модели; 0–1: минус при fact=0, model<0).
     ``Регрессия`` (pred_sev) — только при классификации = 1.
     ``itogo_mode`` — совместимость API, игнорируется.
     """
@@ -56,10 +57,12 @@ def create_summary_table(
 
     work = effect_df
     if "fin_effect_economy" not in work.columns:
+        from querulus.fin_effect.calculator import economy_from_signed_effects
+
         work = work.copy()
-        work["fin_effect_economy"] = (
-            pd.to_numeric(work["fin_effect_model"], errors="coerce").fillna(0)
-            - pd.to_numeric(work["fin_effect_fact"], errors="coerce").fillna(0)
+        work["fin_effect_economy"] = economy_from_signed_effects(
+            work["fin_effect_fact"],
+            work["fin_effect_model"],
         )
 
     freq_col = (
@@ -147,22 +150,27 @@ def compare_formula_summaries(
     config: FinEffectConfig | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Две сводки на тех же pred: старые квадранты модели и новые (coverage)."""
-    from querulus.fin_effect.calculator import recompute_fin_effect_model
+    from querulus.fin_effect.calculator import (
+        economy_from_signed_effects,
+        recompute_fin_effect_model,
+    )
 
     config = config or FinEffectConfig()
     old_frame = effect_df.copy()
     old_frame["fin_effect_model"] = recompute_fin_effect_model(
         effect_df, config, formula="legacy"
     )
-    old_frame["fin_effect_economy"] = (
-        old_frame["fin_effect_model"] - old_frame["fin_effect_fact"]
+    old_frame["fin_effect_economy"] = economy_from_signed_effects(
+        old_frame["fin_effect_fact"],
+        old_frame["fin_effect_model"],
     )
     new_frame = effect_df.copy()
     new_frame["fin_effect_model"] = recompute_fin_effect_model(
         effect_df, config, formula="coverage"
     )
-    new_frame["fin_effect_economy"] = (
-        new_frame["fin_effect_model"] - new_frame["fin_effect_fact"]
+    new_frame["fin_effect_economy"] = economy_from_signed_effects(
+        new_frame["fin_effect_fact"],
+        new_frame["fin_effect_model"],
     )
     return (
         create_summary_table(old_frame, config),

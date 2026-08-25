@@ -9,12 +9,13 @@
      (Series с чужим index → reindex; строки без pred отбрасываются);
    - пишет ``pred_freq``, ``pred_sev``, ``fin_effect_model``;
    - при ``negate_fact_for_report`` переводит ``fin_effect_fact`` в знак «расход < 0»;
-   - пишет ``fin_effect_economy = model − fact`` (вклад в net_effect / «экономию»).
+   - пишет ``fin_effect_economy`` универсально:
+     ``(−fact) − (−model)`` = расход_факт − расход_модель
+     (эквивалент ``model − fact`` при эффектах ≤ 0; ≡ ``net_effect``).
 3. ``create_summary_table`` / ``FinEffectResult.summary_table`` **только суммируют**
    колонки кадра по квадрантам fact×pred. Никакого второго расчёта факта.
 
-Итоги: ``sum(model)``, ``sum(fact)``, ``sum(economy)`` ≡ поля ``FinEffectResult``
-(``economy`` ≡ ``net_effect`` = model − fact).
+Итоги: ``sum(model)``, ``sum(fact)``, ``sum(economy)`` ≡ поля ``FinEffectResult``.
 """
 from __future__ import annotations
 
@@ -30,6 +31,31 @@ from querulus.training.severity_training import severity_predict
 
 SplitName = Literal["train", "test", "all"]
 logger = logging.getLogger("querulus.fin_effect")
+
+
+def economy_from_signed_effects(
+    fin_effect_fact: np.ndarray | pd.Series | float,
+    fin_effect_model: np.ndarray | pd.Series | float,
+) -> np.ndarray:
+    """Универсальная экономия при знаковой конвенции «фин. эффект ≤ 0 = расход».
+
+    Считаем в шкале положительных расходов::
+
+        расход_факт   = −fin_effect_fact
+        расход_модель = −fin_effect_model
+        экономия      = расход_факт − расход_модель
+
+    Примеры (одинаковая формула):
+    - 1–1: fact=−1000, model=−400 → economy = 1000 − 400 = +600 (сэкономили);
+    - 0–1: fact=0, model=−200 → economy = 0 − 200 = −200 (ложный штраф).
+
+    Алгебраически то же, что ``model − fact``, без «минус на минус» в интерпретации.
+    """
+    fact = np.asarray(fin_effect_fact, dtype=float)
+    model = np.asarray(fin_effect_model, dtype=float)
+    cost_fact = -fact
+    cost_model = -model
+    return cost_fact - cost_model
 
 
 @dataclass
@@ -593,9 +619,9 @@ def apply_model_predictions(
     )
     if config.negate_fact_for_report:
         frame["fin_effect_fact"] = -frame["fin_effect_fact"]
-    frame["fin_effect_economy"] = (
-        frame["fin_effect_model"].to_numpy(dtype=float)
-        - frame["fin_effect_fact"].to_numpy(dtype=float)
+    frame["fin_effect_economy"] = economy_from_signed_effects(
+        frame["fin_effect_fact"],
+        frame["fin_effect_model"],
     )
     return FinEffectResult(
         frame=frame,
