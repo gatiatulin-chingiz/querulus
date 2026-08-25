@@ -21,28 +21,61 @@ from querulus.training.pipeline import _model_metrics_table, format_metrics_tabl
 TaskKind = Literal["classification", "regression"]
 
 
+def _is_categorical_series(series: pd.Series) -> bool:
+    return isinstance(series.dtype, pd.CategoricalDtype) or pd.api.types.is_categorical_dtype(
+        series.dtype
+    )
+
+
+def _model_cat_feature_names(
+    X: pd.DataFrame,
+    estimator: Any,
+    cat_features: list[str] | tuple[str, ...] | None = None,
+) -> list[str]:
+    """Имена cat-колонок: индексы модели + имена из DSM subset."""
+    names: set[str] = set()
+    if cat_features:
+        names.update(name for name in cat_features if name in X.columns)
+    getter = getattr(estimator, "_get_cat_feature_indices", None)
+    if callable(getter):
+        try:
+            indices = list(getter())
+        except Exception:
+            indices = []
+        columns = list(X.columns)
+        for idx in indices:
+            if isinstance(idx, (int, np.integer)) and 0 <= int(idx) < len(columns):
+                names.add(columns[int(idx)])
+    return list(names)
+
+
 def _frame_for_catboost_predict(
     X: pd.DataFrame,
+    estimator: Any,
     cat_features: list[str] | tuple[str, ...] | None = None,
 ) -> pd.DataFrame:
-    """Снять pandas ``category`` со всех колонок перед CatBoost predict.
+    """Подготовка кадра под CatBoost predict.
 
-    После prepare outboxml кодирует cats в int и часто ставит dtype=category.
-    У обученной модели список cat_features — по **индексам** колонок на fit;
-    колонка с dtype=category, которой нет в этом списке (имя есть в
-    ``features_categorical``, индекс другой / CatBoost видел int) →
-    ``CatBoostError: ... dtype 'category' but is not in cat_features list``.
-
-    Значения уже int-коды — достаточно ``to_numeric``; ``cat_features`` не нужен.
+    - Колонки cat_features модели → string/int (не float): иначе
+      ``cat_features must be integer or string``.
+    - Остальные ``category`` → numeric: иначе
+      ``dtype 'category' but is not in cat_features list``.
     """
-    _ = cat_features
+    from querulus.training.pipeline import _stringify_categorical_columns
+
     out = X.copy()
+    cat_names = _model_cat_feature_names(out, estimator, cat_features)
+    cat_set = set(cat_names)
+
     for column in out.columns:
+        if column in cat_set:
+            continue
         series = out[column]
-        if isinstance(series.dtype, pd.CategoricalDtype) or pd.api.types.is_categorical_dtype(
-            series.dtype
-        ):
+        if _is_categorical_series(series):
             out[column] = pd.to_numeric(series, errors="coerce")
+
+    if cat_names:
+        out = _stringify_categorical_columns(out, cat_names)
     return out
 
 
@@ -53,7 +86,7 @@ def _predict_scores(
     task_type: TaskKind,
     cat_features: list[str] | tuple[str, ...] | None = None,
 ) -> np.ndarray:
-    frame = _frame_for_catboost_predict(X, cat_features)
+    frame = _frame_for_catboost_predict(X, estimator, cat_features)
     if task_type == "classification":
         if hasattr(estimator, "predict_proba"):
             return np.asarray(estimator.predict_proba(frame)[:, 1], dtype=float)
