@@ -47,6 +47,7 @@ from querulus.fin_effect.resolve import (
     resolve_fact_mode,
     resolve_fin_effect_config,
 )
+from querulus.fin_effect.business_report import export_business_html
 from querulus.fin_effect.export import export_analytics_excel
 from querulus.fin_effect.segment_eval import (
     SegmentFinEffectCompare,
@@ -103,6 +104,7 @@ __all__ = [
     "create_summary_table",
     "evaluate_threshold",
     "export_analytics_excel",
+    "export_business_html",
     "export_plot_html",
     "export_summary_excel",
     "fact_only_compare_report",
