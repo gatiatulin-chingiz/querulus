@@ -624,6 +624,50 @@ def frequency_predict_proba(
     return np.asarray(training.frequency_model.predict_proba(features)[:, 1], dtype=float)
 
 
+def frequency_metrics_table_at_threshold(
+    df: pd.DataFrame,
+    training: "TrainingArtifacts",
+    split_indices: dict[str, pd.Index],
+    *,
+    threshold: float = 0.5,
+    target_column: str,
+) -> pd.DataFrame:
+    """Classification-метрики frequency на train/val/test при заданном пороге.
+
+    Proba — как в fin-effect / проде: ``frequency_predict_proba`` (калибратор, если есть).
+    Строки признаков — из ``training.feature_frame`` (как при fit).
+    """
+    from querulus.training.hpo import _fold_metrics_bundle
+
+    feature_frame = training.feature_frame
+    if feature_frame is None:
+        raise ValueError("training.feature_frame должен быть заполнен")
+    if target_column not in df.columns:
+        raise ValueError(f"Нет колонки таргета: {target_column}")
+
+    freq_features = list(training.frequency_features)
+    bundles: dict[str, dict[str, float]] = {}
+    for split_name in ("train", "val", "test"):
+        index = split_indices.get(split_name)
+        if index is None or len(index) == 0:
+            bundles[split_name] = {}
+            continue
+        index = pd.Index(index).intersection(feature_frame.index).intersection(df.index)
+        if len(index) == 0:
+            bundles[split_name] = {}
+            continue
+        features = feature_frame.loc[index, freq_features]
+        y_true = df.loc[index, target_column].astype(int)
+        proba = frequency_predict_proba(training, features)
+        bundles[split_name] = _fold_metrics_bundle(
+            y_true,
+            proba,
+            task_type="classification",
+            threshold=float(threshold),
+        )
+    return _model_metrics_table(bundles)
+
+
 def _diagnostics_metrics(
     ModelDiagnostics,
     split: DatasetSplit,

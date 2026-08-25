@@ -579,23 +579,31 @@ def _fold_metrics_bundle(
     y_pred: np.ndarray,
     *,
     task_type: TaskType,
+    threshold: float = 0.5,
 ) -> dict[str, float]:
     """Метрики fold в духе ModelDiagnostics.
 
-    Classification: порогозависимые метрики только на 0.5 (без перебора 0..1).
+    Classification: порогозависимые метрики только на ``threshold`` (без перебора 0..1).
     """
     diagnostics = _model_diagnostics_stub(task_type)
     y_np = np.asarray(y_true)
     if task_type == "classification":
         proba = np.asarray(y_pred, dtype=float)
-        # Новый MD: thresholds=[0.5]; старый — без kwargs, тогда считаем сами @0.5.
-        try:
-            raw = diagnostics.compute_classification_metrics(
-                y_np, proba, thresholds=[0.5]
-            )
-        except TypeError:
+        thr = float(threshold)
+        # При thr==0.5 пробуем MD; иначе / при TypeError — свой расчёт.
+        raw: dict[str, Any]
+        if abs(thr - 0.5) < 1e-12:
+            try:
+                raw = diagnostics.compute_classification_metrics(
+                    y_np, proba, thresholds=[0.5]
+                )
+            except TypeError:
+                raw = _classification_metrics_at_threshold(
+                    diagnostics, y_np, proba, threshold=0.5
+                )
+        else:
             raw = _classification_metrics_at_threshold(
-                diagnostics, y_np, proba, threshold=0.5
+                diagnostics, y_np, proba, threshold=thr
             )
     else:
         pred = np.asarray(y_pred, dtype=float)

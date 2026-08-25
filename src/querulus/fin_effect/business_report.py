@@ -5,11 +5,13 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from querulus import PROJECT_ROOT
 from querulus.fin_effect.calculator import FinEffectResult
 from querulus.fin_effect.config import FinEffectConfig
+from querulus.fin_effect.summary import create_summary_table
 
 DEFAULT_HTML_PATH = PROJECT_ROOT / "notebooks" / "fin_effect_detailed.html"
 
@@ -30,7 +32,7 @@ body {
   background: var(--bg);
 }
 .page {
-  max-width: 920px;
+  max-width: 1100px;
   margin: 0 auto;
   padding: 1rem 1.1rem 1.5rem;
 }
@@ -76,6 +78,8 @@ th, td {
 th { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 th.old, td.old { background: var(--old-soft); }
 th.new, td.new { background: var(--new-soft); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.scroll { overflow-x: auto; margin: 0.4rem 0 0.7rem; }
 .formula {
   font-family: Consolas, "Courier New", monospace;
   font-size: 0.82rem;
@@ -126,6 +130,20 @@ def _int(value: int | None) -> str:
     return f"{int(value):,}".replace(",", " ")
 
 
+def _cell_num(value: object) -> str:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return escape(str(value))
+    if abs(number - round(number)) < 1e-9:
+        text = f"{int(round(number)):,}".replace(",", " ")
+    else:
+        text = f"{number:,.2f}".replace(",", " ")
+    return text
+
+
 def _period(frame: pd.DataFrame | None, config: FinEffectConfig) -> str:
     if frame is None or config.date_column not in getattr(frame, "columns", []):
         return ""
@@ -165,15 +183,53 @@ def _hero(
 """
 
 
+def _summary_table_html(summary: pd.DataFrame | None) -> str:
+    if summary is None or summary.empty:
+        return (
+            '<p class="sub">Сводная таблица появится после прогона блока '
+            "[C] Fin-effect на holdout Test.</p>"
+        )
+    headers = "".join(f"<th>{escape(str(col))}</th>" for col in summary.columns)
+    body_rows: list[str] = []
+    for row in summary.itertuples(index=False):
+        cells: list[str] = []
+        for idx, value in enumerate(row):
+            col = str(summary.columns[idx])
+            if col in ("Факт", "Классификация"):
+                cells.append(f"<td class='num'>{int(value)}</td>")
+            elif col == "Количество инцидентов с иными взысканиями":
+                cells.append(f"<td class='num'>{_int(int(value))}</td>")
+            else:
+                cells.append(f"<td class='num'>{_cell_num(value)}</td>")
+        body_rows.append("<tr>" + "".join(cells) + "</tr>")
+    return f"""
+<div class="scroll">
+<table>
+  <thead><tr>{headers}</tr></thead>
+  <tbody>
+    {''.join(body_rows)}
+  </tbody>
+</table>
+</div>
+<p class="legend">
+  Экономия = ФИН. ЭФФЕКТ ФАКТ + ФИН. ЭФФЕКТ МОДЕЛЬ.
+  Регрессия заполняется только при классификации = 1.
+</p>
+"""
+
+
 def render_business_html(
     result: FinEffectResult | None = None,
     config: FinEffectConfig | None = None,
     *,
     subtitle: str = "",
+    summary: pd.DataFrame | None = None,
 ) -> str:
-    """Одна страница: легенда, старый vs новый, пример, цифры прогона."""
+    """Одна страница: легенда, старый vs новый, сводка прогона, пример."""
     config = config or FinEffectConfig()
     frame = None if result is None else result.frame
+    if summary is None and frame is not None:
+        summary = create_summary_table(frame, config)
     n = None if frame is None else int(len(frame))
     threshold = None if result is None else float(result.best_threshold)
     fact_total = None if result is None else float(result.fact_effect_total)
@@ -215,6 +271,9 @@ def render_business_html(
       model_total=model_total,
       net_effect=net_effect,
   )}
+
+  <h2>Сводка на holdout Test (порог с Val)</h2>
+  {_summary_table_html(summary)}
 
   <p class="legend">
     <strong>Обозначения.</strong>
@@ -338,12 +397,15 @@ def export_business_html(
     *,
     path: str | Path | None = None,
     subtitle: str = "",
+    summary: pd.DataFrame | None = None,
 ) -> Path:
-    """Записать одностраничный HTML. Без ``result`` — формулы без цифр прогона."""
+    """Записать HTML. Без ``result`` — формулы без цифр прогона."""
     output = Path(path) if path is not None else DEFAULT_HTML_PATH
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
-        render_business_html(result, config, subtitle=subtitle),
+        render_business_html(
+            result, config, subtitle=subtitle, summary=summary
+        ),
         encoding="utf-8",
     )
     return output

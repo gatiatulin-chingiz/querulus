@@ -378,7 +378,7 @@ def summary_itogo_breakdown(
     result: FinEffectResult,
     config: FinEffectConfig,
 ) -> pd.DataFrame:
-    """Таблица pred × fact → ИТОГО (как в create_summary_table).
+    """Таблица pred × fact → Экономия (как в create_summary_table).
 
     Порядок строк/колонок совпадает с model_quadrant_breakdown:
     pred, fact; строки (0,0) → (0,1) → (1,0) → (1,1).
@@ -387,22 +387,23 @@ def summary_itogo_breakdown(
     # Ключ (pred, fact) — как в model_quadrant_breakdown.
     if config.uses_legacy_psr_fact:
         mapping = {
-            (0, 0): "0",
-            (0, 1): "fin_effect_fact",
-            (1, 0): "model − fact",
-            (1, 1): "fin_effect_model",
+            (0, 0): "fact + model",
+            (0, 1): "fact + model",
+            (1, 0): "fact + model",
+            (1, 1): "fact + model",
         }
     else:
         mapping = {
-            (0, 0): "fin_effect_model",
-            (0, 1): "fin_effect_model",
-            (1, 0): "fin_effect_model",
-            (1, 1): "fin_effect_model",
+            (0, 0): "fact + model",
+            (0, 1): "fact + model",
+            (1, 0): "fact + model",
+            (1, 1): "fact + model",
         }
     out = summary.rename(
         columns={
             "Факт": "fact",
             "Классификация": "pred",
+            "Экономия": "itogo",
             "ИТОГО": "itogo",
             "ФИН. ЭФФЕКТ МОДЕЛЬ": "fin_effect_model",
             "ФИН. ЭФФЕКТ ФАКТ": "fin_effect_fact",

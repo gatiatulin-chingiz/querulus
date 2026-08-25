@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from querulus.fin_effect.config import FinEffectConfig
@@ -23,12 +24,12 @@ def create_summary_table(
 ) -> pd.DataFrame:
     """Сводная таблица по комбинациям frequency_target и pred_freq.
 
-    ``itogo_mode``: ``legacy`` — старые правила ИТОГО; ``coverage`` — сумма
-    ``fin_effect_model``. По умолчанию legacy_psr → legacy, иначе coverage.
+    ``Экономия`` = ``ФИН. ЭФФЕКТ ФАКТ`` + ``ФИН. ЭФФЕКТ МОДЕЛЬ``.
+    ``Регрессия`` (pred_sev) заполняется только при классификации = 1.
+    ``itogo_mode`` оставлен для совместимости вызовов и не влияет на ``Экономия``.
     """
     config = config or FinEffectConfig()
-    if itogo_mode is None:
-        itogo_mode = "legacy" if config.uses_legacy_psr_fact else "coverage"
+    _ = itogo_mode  # совместимость API; экономика всегда fact + model
     masks = {
         "1_1": (effect_df[config.frequency_target_column] == 1)
         & (effect_df["pred_freq"] == 1),
@@ -48,7 +49,9 @@ def create_summary_table(
         count = int(group.shape[0])
         payout_main = _neg_column_sum(group, config.base_payment_column)
         sum_od_uts = _neg_column_sum(group, config.severity_target_column)
-        regression = _neg_column_sum(group, "pred_sev")
+        regression = (
+            _neg_column_sum(group, "pred_sev") if pred_freq == 1 else float("nan")
+        )
         sum_claims = _neg_column_sum(group, config.freq_claims_amount_column)
         sum_pret = _neg_column_sum(group, config.freq_pret_amount_column)
         contributions = _neg_column_sum(group, config.premiums_column)
@@ -60,18 +63,7 @@ def create_summary_table(
             fin_effect_fact = float(
                 _neg_column_sum(group, config.fact_amount_column) + contributions
             )
-
-        if itogo_mode == "legacy":
-            if target_fact == 1 and pred_freq == 1:
-                total = fin_effect_model
-            elif target_fact == 1 and pred_freq == 0:
-                total = fin_effect_fact
-            elif target_fact == 0 and pred_freq == 1:
-                total = fin_effect_model - fin_effect_fact
-            else:
-                total = 0.0
-        else:
-            total = fin_effect_model
+        economy = fin_effect_fact + fin_effect_model
 
         rows.append(
             {
@@ -86,7 +78,7 @@ def create_summary_table(
                 "Взносы": contributions,
                 "ФИН. ЭФФЕКТ МОДЕЛЬ": fin_effect_model,
                 "ФИН. ЭФФЕКТ ФАКТ": fin_effect_fact,
-                "ИТОГО": total,
+                "Экономия": economy,
             }
         )
 
@@ -97,7 +89,7 @@ def compare_formula_summaries(
     effect_df: pd.DataFrame,
     config: FinEffectConfig | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Две сводки на тех же pred: старые правила ИТОГО и новые квадранты."""
+    """Две сводки на тех же pred: старые квадранты модели и новые (coverage)."""
     from querulus.fin_effect.calculator import recompute_fin_effect_model
 
     config = config or FinEffectConfig()
@@ -110,8 +102,8 @@ def compare_formula_summaries(
         effect_df, config, formula="coverage"
     )
     return (
-        create_summary_table(old_frame, config, itogo_mode="legacy"),
-        create_summary_table(new_frame, config, itogo_mode="coverage"),
+        create_summary_table(old_frame, config),
+        create_summary_table(new_frame, config),
     )
 
 
@@ -143,6 +135,7 @@ def color_excel_table(writer, sheet_name: str, summary_df: pd.DataFrame) -> None
         "Взносы": colors["pink"],
         "ФИН. ЭФФЕКТ МОДЕЛЬ": colors["green"],
         "ФИН. ЭФФЕКТ ФАКТ": colors["red"],
+        "Экономия": colors["gray"],
         "ИТОГО": colors["gray"],
     }
     header_font = Font(bold=True, color=colors["white"])
@@ -172,7 +165,9 @@ def color_excel_table(writer, sheet_name: str, summary_df: pd.DataFrame) -> None
                 cell.fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
                 cell.alignment = cell_alignment
                 cell.border = thin_border
-                if isinstance(cell.value, (int, float)):
+                if isinstance(cell.value, (int, float)) and not (
+                    isinstance(cell.value, float) and np.isnan(cell.value)
+                ):
                     cell.number_format = "#,##0"
 
     column_widths = {
@@ -187,6 +182,7 @@ def color_excel_table(writer, sheet_name: str, summary_df: pd.DataFrame) -> None
         "Взносы": 12,
         "ФИН. ЭФФЕКТ МОДЕЛЬ": 18,
         "ФИН. ЭФФЕКТ ФАКТ": 18,
+        "Экономия": 15,
         "ИТОГО": 15,
     }
     for col_num, col_name in enumerate(summary_df.columns, 1):
