@@ -1,7 +1,25 @@
-"""Расчёт финансового эффекта по факту и модели (Litigant fin_effect.py)."""
+"""Расчёт финансового эффекта по факту и модели (Litigant fin_effect.py).
+
+Контракт (единственная точка правды)
+------------------------------------
+1. ``prepare_effect_frame`` → колонка ``fin_effect_fact`` (пока **положительная**
+   величина расхода / базы).
+2. ``apply_model_predictions`` / ``run_fin_effect_pipeline``:
+   - выравнивает ``proba`` / ``sev`` / ``y_true`` на ``frame.index``
+     (Series с чужим index → reindex; строки без pred отбрасываются);
+   - пишет ``pred_freq``, ``pred_sev``, ``fin_effect_model``;
+   - при ``negate_fact_for_report`` переводит ``fin_effect_fact`` в знак «расход < 0»;
+   - пишет ``fin_effect_economy = fact − model``.
+3. ``create_summary_table`` / ``FinEffectResult.summary_table`` **только суммируют**
+   колонки кадра по квадрантам fact×pred. Никакого второго расчёта факта.
+
+Итоги: ``sum(model)``, ``sum(fact)`` ≡ поля ``FinEffectResult``;
+``sum(economy)`` ≡ ``fact_effect_total − model_effect_total``.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Literal
 
 import numpy as np
@@ -11,6 +29,7 @@ from querulus.fin_effect.config import FinEffectConfig
 from querulus.training.severity_training import severity_predict
 
 SplitName = Literal["train", "test", "all"]
+logger = logging.getLogger("querulus.fin_effect")
 
 
 @dataclass
@@ -50,12 +69,76 @@ class FinEffectResult:
     fact_effect_total: float
     threshold_strategies: dict[str, ThresholdStrategyResult] | None = None
 
+    def summary_table(self, config: FinEffectConfig | None = None) -> pd.DataFrame:
+        """Сводка по квадрантам: только агрегация колонок ``frame``."""
+        from querulus.fin_effect.summary import create_summary_table
+
+        return create_summary_table(self.frame, config)
 
 def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
     """Числовая колонка или нули."""
     if column not in df.columns:
         return pd.Series(0.0, index=df.index, dtype=float)
     return pd.to_numeric(df[column], errors="coerce").fillna(0.0)
+
+
+def align_effect_inputs(
+    frame: pd.DataFrame,
+    frequency_proba: np.ndarray | pd.Series,
+    severity_prediction: np.ndarray | pd.Series,
+    y_true_freq: np.ndarray | pd.Series,
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]:
+    """Выровнять pred/y_true на ``frame.index``; отбросить строки без предсказаний.
+
+    Единый контракт для pipeline / training / OutBoxML parity: дальше все формулы
+    работают только с массивами той же длины и в том же порядке, что ``frame``.
+    """
+    index = frame.index
+
+    def _to_series(values: np.ndarray | pd.Series, name: str) -> pd.Series:
+        if isinstance(values, pd.Series):
+            return pd.to_numeric(values, errors="coerce")
+        arr = np.asarray(values, dtype=float)
+        if len(arr) != len(index):
+            raise ValueError(
+                f"{name}: len={len(arr)} != frame len={len(index)}. "
+                "Передайте Series с index строк df или ndarray той же длины."
+            )
+        return pd.Series(arr, index=index, dtype=float)
+
+    proba = _to_series(frequency_proba, "frequency_proba").reindex(index)
+    sev = _to_series(severity_prediction, "severity_prediction").reindex(index)
+    if isinstance(y_true_freq, pd.Series):
+        y_true = pd.to_numeric(y_true_freq, errors="coerce").reindex(index)
+    else:
+        y_arr = np.asarray(y_true_freq)
+        if len(y_arr) != len(index):
+            raise ValueError(
+                f"y_true_freq: len={len(y_arr)} != frame len={len(index)}"
+            )
+        y_true = pd.Series(y_arr, index=index)
+
+    valid = proba.notna() & sev.notna() & y_true.notna()
+    if not bool(valid.any()):
+        raise ValueError(
+            "После выравнивания на frame.index нет строк с proba/sev/y_true. "
+            "Индекс предсказаний должен совпадать с индексом df "
+            "(частая ошибка: X после preprocessor с другим index)."
+        )
+    n_drop = int((~valid).sum())
+    if n_drop:
+        logger.warning(
+            "fin_effect: отброшено %s/%s строк без выровненных proba/sev/y_true",
+            n_drop,
+            len(index),
+        )
+    out = frame.loc[valid].copy()
+    return (
+        out,
+        proba.loc[valid].to_numpy(dtype=float),
+        sev.loc[valid].to_numpy(dtype=float),
+        y_true.loc[valid].to_numpy(dtype=float).astype(int),
+    )
 
 
 def _fee_base_amount(row: pd.Series, config: FinEffectConfig) -> float:
@@ -431,14 +514,19 @@ def apply_model_predictions(
     threshold: float | None = None,
     config: FinEffectConfig | None = None,
 ) -> FinEffectResult:
-    """Добавить pred_freq, pred_sev, fin_effect_model; подобрать порог при необходимости."""
+    """Добавить pred_freq, pred_sev, fin_effect_*; подобрать порог при необходимости.
+
+    Pred/y_true выравниваются на индекс кадра через ``align_effect_inputs``.
+    """
     config = config or FinEffectConfig()
-    frame = effect_df.copy()
+    frame, y_proba_arr, y_pred_sev_arr, y_true_freq_arr = align_effect_inputs(
+        effect_df,
+        y_proba_freq,
+        y_pred_sev,
+        y_true_freq,
+    )
     y_true_sev = _numeric_series(frame, config.severity_target_column).to_numpy()
     base_sum = frame["fin_effect_fact"].to_numpy()
-    y_true_freq_arr = np.asarray(y_true_freq, dtype=int)
-    y_proba_arr = np.asarray(y_proba_freq, dtype=float)
-    y_pred_sev_arr = np.asarray(y_pred_sev, dtype=float)
     formula = _formula_from_config(config)
     psr = _numeric_series(frame, config.fact_amount_column).to_numpy()
     premiums = _numeric_series(frame, config.premiums_column).to_numpy()
@@ -497,12 +585,18 @@ def apply_model_predictions(
     frame["pred_freq"] = pred_freq
     frame["pred_sev"] = y_pred_sev_arr
     frame["fin_effect_model"] = fin_effect_model
+    # Явный y_true, на котором считались формулы (после align) — для сводки.
+    frame["fin_effect_y_true"] = y_true_freq_arr
     model_total, fact_signed, net_effect = _signed_effect_totals(
         fin_effect_model,
         frame["fin_effect_fact"].to_numpy(),
     )
     if config.negate_fact_for_report:
         frame["fin_effect_fact"] = -frame["fin_effect_fact"]
+    frame["fin_effect_economy"] = (
+        frame["fin_effect_fact"].to_numpy(dtype=float)
+        - frame["fin_effect_model"].to_numpy(dtype=float)
+    )
     return FinEffectResult(
         frame=frame,
         best_threshold=best_threshold,

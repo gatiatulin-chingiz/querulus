@@ -1,4 +1,8 @@
-"""Сводная таблица финансового эффекта по квадрантам TARGET_FREQ × pred_freq."""
+"""Сводная таблица финансового эффекта по квадрантам TARGET_FREQ × pred_freq.
+
+Только агрегация колонок кадра после ``run_fin_effect_pipeline`` /
+``apply_model_predictions``. Расчёт эффектов — в ``calculator`` (один контракт).
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,6 +12,8 @@ import pandas as pd
 
 from querulus.fin_effect.config import FinEffectConfig
 
+_EFFECT_COLS = ("pred_freq", "fin_effect_model", "fin_effect_fact")
+
 
 def _neg_column_sum(group: pd.DataFrame, column: str) -> float:
     """Сумма колонки с инверсией знака (расходы отрицательные)."""
@@ -16,73 +22,123 @@ def _neg_column_sum(group: pd.DataFrame, column: str) -> float:
     return float(-pd.to_numeric(group[column], errors="coerce").fillna(0).sum())
 
 
+def _sum_col(group: pd.DataFrame, column: str) -> float:
+    if column not in group.columns:
+        return 0.0
+    return float(pd.to_numeric(group[column], errors="coerce").fillna(0).sum())
+
+
 def create_summary_table(
     effect_df: pd.DataFrame,
     config: FinEffectConfig | None = None,
     *,
     itogo_mode: str | None = None,
+    verify: bool = True,
 ) -> pd.DataFrame:
     """Сводная таблица по комбинациям frequency_target и pred_freq.
 
-    ``Экономия`` = ``ФИН. ЭФФЕКТ ФАКТ`` + ``ФИН. ЭФФЕКТ МОДЕЛЬ``.
-    ``Регрессия`` (pred_sev) заполняется только при классификации = 1.
-    ``itogo_mode`` оставлен для совместимости вызовов и не влияет на ``Экономия``.
+    Берёт ``fin_effect_model`` / ``fin_effect_fact`` / ``fin_effect_economy``
+    с кадра как есть (после calculator). Никакого пересчёта факта.
+
+    ``Экономия`` = sum(``fin_effect_economy``) = fact − model по квадранту.
+    ``Регрессия`` (pred_sev) — только при классификации = 1.
+    ``itogo_mode`` — совместимость API, игнорируется.
     """
     config = config or FinEffectConfig()
-    _ = itogo_mode  # совместимость API; экономика всегда fact + model
+    _ = itogo_mode
+    missing = [col for col in _EFFECT_COLS if col not in effect_df.columns]
+    if missing:
+        raise ValueError(
+            "create_summary_table: нет колонок "
+            f"{missing}. Сначала run_fin_effect_pipeline / apply_model_predictions."
+        )
+
+    work = effect_df
+    if "fin_effect_economy" not in work.columns:
+        work = work.copy()
+        work["fin_effect_economy"] = (
+            pd.to_numeric(work["fin_effect_fact"], errors="coerce").fillna(0)
+            - pd.to_numeric(work["fin_effect_model"], errors="coerce").fillna(0)
+        )
+
+    freq_col = (
+        "fin_effect_y_true"
+        if "fin_effect_y_true" in work.columns
+        else config.frequency_target_column
+    )
+    if freq_col not in work.columns:
+        raise ValueError(
+            "create_summary_table: нет fin_effect_y_true / "
+            f"{config.frequency_target_column}"
+        )
+
+    y_fact = pd.to_numeric(work[freq_col], errors="coerce").fillna(0).astype(int)
+    y_pred = pd.to_numeric(work["pred_freq"], errors="coerce").fillna(0).astype(int)
     masks = {
-        "1_1": (effect_df[config.frequency_target_column] == 1)
-        & (effect_df["pred_freq"] == 1),
-        "1_0": (effect_df[config.frequency_target_column] == 1)
-        & (effect_df["pred_freq"] == 0),
-        "0_1": (effect_df[config.frequency_target_column] == 0)
-        & (effect_df["pred_freq"] == 1),
-        "0_0": (effect_df[config.frequency_target_column] == 0)
-        & (effect_df["pred_freq"] == 0),
+        "1_1": (y_fact == 1) & (y_pred == 1),
+        "1_0": (y_fact == 1) & (y_pred == 0),
+        "0_1": (y_fact == 0) & (y_pred == 1),
+        "0_0": (y_fact == 0) & (y_pred == 0),
     }
 
     rows: list[dict[str, float | int]] = []
     for mask_name, mask in masks.items():
-        group = effect_df.loc[mask]
+        group = work.loc[mask]
         target_fact, pred_freq = map(int, mask_name.split("_"))
 
-        count = int(group.shape[0])
-        payout_main = _neg_column_sum(group, config.base_payment_column)
-        sum_od_uts = _neg_column_sum(group, config.severity_target_column)
         regression = (
             _neg_column_sum(group, "pred_sev") if pred_freq == 1 else float("nan")
         )
-        sum_claims = _neg_column_sum(group, config.freq_claims_amount_column)
-        sum_pret = _neg_column_sum(group, config.freq_pret_amount_column)
-        contributions = _neg_column_sum(group, config.premiums_column)
-
-        fin_effect_model = float(group["fin_effect_model"].sum())
-        if config.uses_legacy_psr_fact:
-            fin_effect_fact = float(group["fin_effect_fact"].sum())
-        else:
-            fin_effect_fact = float(
-                _neg_column_sum(group, config.fact_amount_column) + contributions
-            )
-        economy = fin_effect_fact + fin_effect_model
+        fin_effect_model = _sum_col(group, "fin_effect_model")
+        fin_effect_fact = _sum_col(group, "fin_effect_fact")
+        economy = _sum_col(group, "fin_effect_economy")
 
         rows.append(
             {
-                "Количество инцидентов с иными взысканиями": count,
+                "Количество инцидентов с иными взысканиями": int(group.shape[0]),
                 "Факт": target_fact,
                 "Классификация": pred_freq,
-                "Выплата по основному убытку": payout_main,
-                "Сумма ОД+УТС+Износ": sum_od_uts,
+                "Выплата по основному убытку": _neg_column_sum(
+                    group, config.base_payment_column
+                ),
+                "Сумма ОД+УТС+Износ": _neg_column_sum(
+                    group, config.severity_target_column
+                ),
                 "Регрессия": regression,
-                "Иски (TARGET_FREQ_CLAIMS)": sum_claims,
-                "Претензии (TARGET_FREQ_PRET)": sum_pret,
-                "Взносы": contributions,
+                "Иски (TARGET_FREQ_CLAIMS)": _neg_column_sum(
+                    group, config.freq_claims_amount_column
+                ),
+                "Претензии (TARGET_FREQ_PRET)": _neg_column_sum(
+                    group, config.freq_pret_amount_column
+                ),
+                "Взносы": _neg_column_sum(group, config.premiums_column),
                 "ФИН. ЭФФЕКТ МОДЕЛЬ": fin_effect_model,
                 "ФИН. ЭФФЕКТ ФАКТ": fin_effect_fact,
                 "Экономия": economy,
             }
         )
 
-    return pd.DataFrame(rows)
+    summary = pd.DataFrame(rows)
+    if verify:
+        _verify_summary_matches_frame(summary, work)
+    return summary
+
+
+def _verify_summary_matches_frame(summary: pd.DataFrame, frame: pd.DataFrame) -> None:
+    """Суммы квадрантов должны сходиться с итогами кадра."""
+    checks = (
+        ("ФИН. ЭФФЕКТ МОДЕЛЬ", "fin_effect_model"),
+        ("ФИН. ЭФФЕКТ ФАКТ", "fin_effect_fact"),
+        ("Экономия", "fin_effect_economy"),
+    )
+    for summary_col, frame_col in checks:
+        left = float(summary[summary_col].sum())
+        right = _sum_col(frame, frame_col)
+        if abs(left - right) > 1.0:
+            raise AssertionError(
+                f"Сводка {summary_col}={left:,.2f} ≠ sum(frame.{frame_col})={right:,.2f}. "
+                "Нарушен контракт calculator → summary."
+            )
 
 
 def compare_formula_summaries(
@@ -97,9 +153,15 @@ def compare_formula_summaries(
     old_frame["fin_effect_model"] = recompute_fin_effect_model(
         effect_df, config, formula="legacy"
     )
+    old_frame["fin_effect_economy"] = (
+        old_frame["fin_effect_fact"] - old_frame["fin_effect_model"]
+    )
     new_frame = effect_df.copy()
     new_frame["fin_effect_model"] = recompute_fin_effect_model(
         effect_df, config, formula="coverage"
+    )
+    new_frame["fin_effect_economy"] = (
+        new_frame["fin_effect_fact"] - new_frame["fin_effect_model"]
     )
     return (
         create_summary_table(old_frame, config),

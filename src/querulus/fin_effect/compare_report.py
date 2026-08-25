@@ -385,20 +385,13 @@ def summary_itogo_breakdown(
     """
     summary = create_summary_table(result.frame, config)
     # Ключ (pred, fact) — как в model_quadrant_breakdown.
-    if config.uses_legacy_psr_fact:
-        mapping = {
-            (0, 0): "fact + model",
-            (0, 1): "fact + model",
-            (1, 0): "fact + model",
-            (1, 1): "fact + model",
-        }
-    else:
-        mapping = {
-            (0, 0): "fact + model",
-            (0, 1): "fact + model",
-            (1, 0): "fact + model",
-            (1, 1): "fact + model",
-        }
+    # Экономия в сводке: fact − model.
+    mapping = {
+        (0, 0): "fact - model",
+        (0, 1): "fact - model",
+        (1, 0): "fact - model",
+        (1, 1): "fact - model",
+    }
     out = summary.rename(
         columns={
             "Факт": "fact",
