@@ -8,6 +8,10 @@ from querulus.training.build_outboxml_configs import (
     with_periods,
     write_outboxml_configs,
 )
+from querulus.training.outboxml_metrics import (
+    display_dsm_collect_metrics,
+    enrich_dsm_model_metrics,
+)
 from querulus.training.backward_elim import (
     BackwardElimResult,
     backward_eliminate_by_metric,
@@ -101,6 +105,8 @@ __all__ = [
     "dataframe_for_dsm",
     "default_model_version",
     "prepare_datasets_from_config",
+    "display_dsm_collect_metrics",
+    "enrich_dsm_model_metrics",
     "TrainLoopFlags",
     "TrainLoopResult",
     "TrainingArtifacts",
