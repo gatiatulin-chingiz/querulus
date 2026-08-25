@@ -27,51 +27,49 @@ def _is_categorical_series(series: pd.Series) -> bool:
     )
 
 
-def _model_cat_feature_names(
-    X: pd.DataFrame,
-    estimator: Any,
-    cat_features: list[str] | tuple[str, ...] | None = None,
-) -> list[str]:
-    """Имена cat-колонок: индексы модели + имена из DSM subset."""
-    names: set[str] = set()
-    if cat_features:
-        names.update(name for name in cat_features if name in X.columns)
+def _model_cat_feature_names(X: pd.DataFrame, estimator: Any) -> list[str]:
+    """Имена cat-колонок строго по индексам обученной CatBoost-модели.
+
+    ``subset.features_categorical`` сюда не мешаем: там могут быть Float-фичи
+    модели (напр. APPLICANT_AGE) → stringify даёт
+    ``Float in model but marked different in the dataset``.
+    """
     getter = getattr(estimator, "_get_cat_feature_indices", None)
-    if callable(getter):
-        try:
-            indices = list(getter())
-        except Exception:
-            indices = []
-        columns = list(X.columns)
-        for idx in indices:
-            if isinstance(idx, (int, np.integer)) and 0 <= int(idx) < len(columns):
-                names.add(columns[int(idx)])
-    return list(names)
+    if not callable(getter):
+        return []
+    try:
+        indices = list(getter())
+    except Exception:
+        return []
+    columns = list(X.columns)
+    names: list[str] = []
+    for idx in indices:
+        if isinstance(idx, (int, np.integer)) and 0 <= int(idx) < len(columns):
+            names.append(columns[int(idx)])
+    return names
 
 
-def _frame_for_catboost_predict(
-    X: pd.DataFrame,
-    estimator: Any,
-    cat_features: list[str] | tuple[str, ...] | None = None,
-) -> pd.DataFrame:
+def _frame_for_catboost_predict(X: pd.DataFrame, estimator: Any) -> pd.DataFrame:
     """Подготовка кадра под CatBoost predict.
 
-    - Колонки cat_features модели → string/int (не float): иначе
-      ``cat_features must be integer or string``.
-    - Остальные ``category`` → numeric: иначе
-      ``dtype 'category' but is not in cat_features list``.
+    - Только cat-индексы модели → string (не float).
+    - Остальные category/object → numeric (совпадение с Float в модели).
     """
     from querulus.training.pipeline import _stringify_categorical_columns
 
     out = X.copy()
-    cat_names = _model_cat_feature_names(out, estimator, cat_features)
+    cat_names = _model_cat_feature_names(out, estimator)
     cat_set = set(cat_names)
 
     for column in out.columns:
         if column in cat_set:
             continue
         series = out[column]
-        if _is_categorical_series(series):
+        if (
+            _is_categorical_series(series)
+            or pd.api.types.is_object_dtype(series.dtype)
+            or pd.api.types.is_string_dtype(series.dtype)
+        ):
             out[column] = pd.to_numeric(series, errors="coerce")
 
     if cat_names:
@@ -84,9 +82,8 @@ def _predict_scores(
     X: pd.DataFrame,
     *,
     task_type: TaskKind,
-    cat_features: list[str] | tuple[str, ...] | None = None,
 ) -> np.ndarray:
-    frame = _frame_for_catboost_predict(X, estimator, cat_features)
+    frame = _frame_for_catboost_predict(X, estimator)
     if task_type == "classification":
         if hasattr(estimator, "predict_proba"):
             return np.asarray(estimator.predict_proba(frame)[:, 1], dtype=float)
@@ -118,19 +115,13 @@ def enrich_dsm_model_metrics(
     result.model = ensure_predictable_model(result.model)
     estimator = unwrap_estimator(result.model)
     subset = result.data_subset
-    cat_features = list(subset.features_categorical or [])
 
     split_metrics: dict[str, dict[str, float]] = {}
     for split_name, x_split, y_split in (
         ("train", subset.X_train, subset.y_train),
         ("test", subset.X_test, subset.y_test),
     ):
-        scores = _predict_scores(
-            estimator,
-            x_split,
-            task_type=task_type,
-            cat_features=cat_features,
-        )
+        scores = _predict_scores(estimator, x_split, task_type=task_type)
         bundle = collect_style_metrics_bundle(y_split, scores, task_type=task_type)
         split_metrics[split_name] = bundle
         if result.metrics is None:
