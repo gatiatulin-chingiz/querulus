@@ -40,7 +40,8 @@ def create_summary_table(
     Берёт ``fin_effect_model`` / ``fin_effect_fact`` / ``fin_effect_economy``
     с кадра как есть (после calculator). Никакого пересчёта факта.
 
-    ``Экономия`` = sum(``fin_effect_economy``) = fact − model по квадранту.
+    ``Экономия`` = sum(``fin_effect_economy``) = model − fact по квадранту
+    (как ``net_effect``: FP → отрицательная, удачное покрытие → положительная).
     ``Регрессия`` (pred_sev) — только при классификации = 1.
     ``itogo_mode`` — совместимость API, игнорируется.
     """
@@ -57,8 +58,8 @@ def create_summary_table(
     if "fin_effect_economy" not in work.columns:
         work = work.copy()
         work["fin_effect_economy"] = (
-            pd.to_numeric(work["fin_effect_fact"], errors="coerce").fillna(0)
-            - pd.to_numeric(work["fin_effect_model"], errors="coerce").fillna(0)
+            pd.to_numeric(work["fin_effect_model"], errors="coerce").fillna(0)
+            - pd.to_numeric(work["fin_effect_fact"], errors="coerce").fillna(0)
         )
 
     freq_col = (
@@ -154,14 +155,14 @@ def compare_formula_summaries(
         effect_df, config, formula="legacy"
     )
     old_frame["fin_effect_economy"] = (
-        old_frame["fin_effect_fact"] - old_frame["fin_effect_model"]
+        old_frame["fin_effect_model"] - old_frame["fin_effect_fact"]
     )
     new_frame = effect_df.copy()
     new_frame["fin_effect_model"] = recompute_fin_effect_model(
         effect_df, config, formula="coverage"
     )
     new_frame["fin_effect_economy"] = (
-        new_frame["fin_effect_fact"] - new_frame["fin_effect_model"]
+        new_frame["fin_effect_model"] - new_frame["fin_effect_fact"]
     )
     return (
         create_summary_table(old_frame, config),

@@ -9,12 +9,12 @@
      (Series с чужим index → reindex; строки без pred отбрасываются);
    - пишет ``pred_freq``, ``pred_sev``, ``fin_effect_model``;
    - при ``negate_fact_for_report`` переводит ``fin_effect_fact`` в знак «расход < 0»;
-   - пишет ``fin_effect_economy = fact − model``.
+   - пишет ``fin_effect_economy = model − fact`` (вклад в net_effect / «экономию»).
 3. ``create_summary_table`` / ``FinEffectResult.summary_table`` **только суммируют**
    колонки кадра по квадрантам fact×pred. Никакого второго расчёта факта.
 
-Итоги: ``sum(model)``, ``sum(fact)`` ≡ поля ``FinEffectResult``;
-``sum(economy)`` ≡ ``fact_effect_total − model_effect_total``.
+Итоги: ``sum(model)``, ``sum(fact)``, ``sum(economy)`` ≡ поля ``FinEffectResult``
+(``economy`` ≡ ``net_effect`` = model − fact).
 """
 from __future__ import annotations
 
@@ -594,8 +594,8 @@ def apply_model_predictions(
     if config.negate_fact_for_report:
         frame["fin_effect_fact"] = -frame["fin_effect_fact"]
     frame["fin_effect_economy"] = (
-        frame["fin_effect_fact"].to_numpy(dtype=float)
-        - frame["fin_effect_model"].to_numpy(dtype=float)
+        frame["fin_effect_model"].to_numpy(dtype=float)
+        - frame["fin_effect_fact"].to_numpy(dtype=float)
     )
     return FinEffectResult(
         frame=frame,

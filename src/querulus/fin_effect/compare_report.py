@@ -385,12 +385,12 @@ def summary_itogo_breakdown(
     """
     summary = create_summary_table(result.frame, config)
     # Ключ (pred, fact) — как в model_quadrant_breakdown.
-    # Экономия в сводке: fact − model.
+    # Экономия = model − fact (= вклад в net_effect).
     mapping = {
-        (0, 0): "fact - model",
-        (0, 1): "fact - model",
-        (1, 0): "fact - model",
-        (1, 1): "fact - model",
+        (0, 0): "model - fact",
+        (0, 1): "model - fact",
+        (1, 0): "model - fact",
+        (1, 1): "model - fact",
     }
     out = summary.rename(
         columns={
