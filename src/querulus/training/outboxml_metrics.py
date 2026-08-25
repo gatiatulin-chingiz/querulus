@@ -23,26 +23,26 @@ TaskKind = Literal["classification", "regression"]
 
 def _frame_for_catboost_predict(
     X: pd.DataFrame,
-    cat_features: list[str] | tuple[str, ...] | None,
+    cat_features: list[str] | tuple[str, ...] | None = None,
 ) -> pd.DataFrame:
-    """Убрать dtype category у колонок вне cat_features.
+    """Снять pandas ``category`` со всех колонок перед CatBoost predict.
 
-    После prepare outboxml часто делает ``object → category`` для всех object,
-    в т.ч. для числовых. CatBoost тогда падает:
-    ``column has dtype 'category' but is not in cat_features list``.
+    После prepare outboxml кодирует cats в int и часто ставит dtype=category.
+    У обученной модели список cat_features — по **индексам** колонок на fit;
+    колонка с dtype=category, которой нет в этом списке (имя есть в
+    ``features_categorical``, индекс другой / CatBoost видел int) →
+    ``CatBoostError: ... dtype 'category' but is not in cat_features list``.
+
+    Значения уже int-коды — достаточно ``to_numeric``; ``cat_features`` не нужен.
     """
+    _ = cat_features
     out = X.copy()
-    cat_set = set(cat_features or [])
     for column in out.columns:
         series = out[column]
-        if not (
-            isinstance(series.dtype, pd.CategoricalDtype)
-            or pd.api.types.is_categorical_dtype(series.dtype)
+        if isinstance(series.dtype, pd.CategoricalDtype) or pd.api.types.is_categorical_dtype(
+            series.dtype
         ):
-            continue
-        if column in cat_set:
-            continue
-        out[column] = pd.to_numeric(series, errors="coerce")
+            out[column] = pd.to_numeric(series, errors="coerce")
     return out
 
 
