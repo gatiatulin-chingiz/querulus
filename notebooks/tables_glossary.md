@@ -35,7 +35,7 @@
 | `outcome` | Смысл |
 |-----------|--------|
 | `0-0` | fact=0, pred=0 |
-| `0-1` | fact=0, pred=1 (ложный иск) |
+| `0-1` | fact=0, pred=1 (ложная тревога / ложный иск) |
 | `1-0` | fact=1, pred=0 (пропуск) |
 | `1-1 хватило` | fact=1, pred=1 и `pred_sev ≥ TARGET_SEV` |
 | `1-1 не хватило` | fact=1, pred=1 и `pred_sev < TARGET_SEV` |

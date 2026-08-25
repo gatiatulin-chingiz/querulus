@@ -563,19 +563,19 @@
             <td><code>TARGET_FREQ_AMOUNT</code> + взносы ФУ</td>
           </tr>
           <tr>
-            <td class="topic">0-0</td>
+            <td class="topic">pred=0, fact=0</td>
             <td class="formula">−(ПСР + взносы)</td>
             <td class="formula">0</td>
           </tr>
           <tr>
-            <td class="topic">0-1</td>
+            <td class="topic">pred=0, fact=1 (пропуск)</td>
             <td class="formula">−(ПСР + взносы)</td>
-            <td class="formula">−pred_sev</td>
+            <td class="formula">−(ПСР + взносы)</td>
           </tr>
           <tr>
-            <td class="topic">1-0</td>
+            <td class="topic">pred=1, fact=0 (ложная тревога)</td>
             <td class="formula">−pred_sev − (ПСР + взносы)</td>
-            <td class="formula">−(ПСР + взносы)</td>
+            <td class="formula">−pred_sev</td>
           </tr>
           <tr>
             <td class="topic">1-1, pred_sev ≥ TARGET_SEV</td>

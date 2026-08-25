@@ -21,12 +21,44 @@ from querulus.training.pipeline import _model_metrics_table, format_metrics_tabl
 TaskKind = Literal["classification", "regression"]
 
 
-def _predict_scores(estimator: Any, X: pd.DataFrame, *, task_type: TaskKind) -> np.ndarray:
+def _frame_for_catboost_predict(
+    X: pd.DataFrame,
+    cat_features: list[str] | tuple[str, ...] | None,
+) -> pd.DataFrame:
+    """Убрать dtype category у колонок вне cat_features.
+
+    После prepare outboxml часто делает ``object → category`` для всех object,
+    в т.ч. для числовых. CatBoost тогда падает:
+    ``column has dtype 'category' but is not in cat_features list``.
+    """
+    out = X.copy()
+    cat_set = set(cat_features or [])
+    for column in out.columns:
+        series = out[column]
+        if not (
+            isinstance(series.dtype, pd.CategoricalDtype)
+            or pd.api.types.is_categorical_dtype(series.dtype)
+        ):
+            continue
+        if column in cat_set:
+            continue
+        out[column] = pd.to_numeric(series, errors="coerce")
+    return out
+
+
+def _predict_scores(
+    estimator: Any,
+    X: pd.DataFrame,
+    *,
+    task_type: TaskKind,
+    cat_features: list[str] | tuple[str, ...] | None = None,
+) -> np.ndarray:
+    frame = _frame_for_catboost_predict(X, cat_features)
     if task_type == "classification":
         if hasattr(estimator, "predict_proba"):
-            return np.asarray(estimator.predict_proba(X)[:, 1], dtype=float)
-        return np.asarray(estimator.predict(X), dtype=float)
-    return np.asarray(estimator.predict(X), dtype=float)
+            return np.asarray(estimator.predict_proba(frame)[:, 1], dtype=float)
+        return np.asarray(estimator.predict(frame), dtype=float)
+    return np.asarray(estimator.predict(frame), dtype=float)
 
 
 def collect_style_metrics_bundle(
@@ -53,13 +85,19 @@ def enrich_dsm_model_metrics(
     result.model = ensure_predictable_model(result.model)
     estimator = unwrap_estimator(result.model)
     subset = result.data_subset
+    cat_features = list(subset.features_categorical or [])
 
     split_metrics: dict[str, dict[str, float]] = {}
     for split_name, x_split, y_split in (
         ("train", subset.X_train, subset.y_train),
         ("test", subset.X_test, subset.y_test),
     ):
-        scores = _predict_scores(estimator, x_split, task_type=task_type)
+        scores = _predict_scores(
+            estimator,
+            x_split,
+            task_type=task_type,
+            cat_features=cat_features,
+        )
         bundle = collect_style_metrics_bundle(y_split, scores, task_type=task_type)
         split_metrics[split_name] = bundle
         if result.metrics is None:

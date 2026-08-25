@@ -338,16 +338,16 @@ def model_quadrant_breakdown(
     if config.uses_legacy_psr_fact:
         specs = [
             (0, 0, "pred=0, fact=0", "-base_sum", None),
-            (0, 1, "pred=0, fact=1", "-base_sum", None),
-            (1, 0, "pred=1, fact=0", "-y_pred_sev - base_sum", None),
+            (0, 1, "pred=0, fact=1 (пропуск)", "-base_sum", None),
+            (1, 0, "pred=1, fact=0 (ложная тревога)", "-y_pred_sev - base_sum", None),
             (1, 1, "pred=1, fact=1, pred_sev≥true_sev", "-y_pred_sev", "over"),
             (1, 1, "pred=1, fact=1, pred_sev<true_sev", "-base_sum", "under"),
         ]
     else:
         specs = [
             (0, 0, "pred=0, fact=0", "0", None),
-            (0, 1, "pred=0, fact=1", "-(ПСР+взносы)", None),
-            (1, 0, "pred=1, fact=0", "-pred_sev", None),
+            (0, 1, "pred=0, fact=1 (пропуск)", "-(ПСР+взносы)", None),
+            (1, 0, "pred=1, fact=0 (ложная тревога)", "-pred_sev", None),
             (1, 1, "pred=1, fact=1, pred_sev≥true_sev", "-pred_sev", "over"),
             (1, 1, "pred=1, fact=1, pred_sev<true_sev", "-(ПСР×(1−pred/T)+взносы)", "under"),
         ]

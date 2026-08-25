@@ -134,9 +134,10 @@ def compute_fin_effect_model_legacy(
     base_sum = np.nan_to_num(np.asarray(base_sum, dtype=float), nan=0.0)
 
     fin_effect_model = np.zeros(len(base_sum), dtype=float)
+    # Имена mask_XY: X=pred, Y=fact (как в Litigant).
     mask_00 = (pred_freq == 0) & (y_true_freq == 0)
-    mask_01 = (pred_freq == 0) & (y_true_freq == 1)
-    mask_10 = (pred_freq == 1) & (y_true_freq == 0)
+    mask_01 = (pred_freq == 0) & (y_true_freq == 1)  # пропуск
+    mask_10 = (pred_freq == 1) & (y_true_freq == 0)  # ложная тревога
     mask_11 = (pred_freq == 1) & (y_true_freq == 1)
     fin_effect_model[mask_00] = -base_sum[mask_00]
     fin_effect_model[mask_01] = -base_sum[mask_01]
@@ -158,9 +159,12 @@ def compute_fin_effect_model_coverage(
 ) -> np.ndarray:
     """Новые квадранты (расход отрицательный).
 
-    0-0 → 0; 0-1 → −pred_sev; 1-0 → −(ПСР+взносы);
-    1-1 хватило → −pred_sev;
-    1-1 не хватило → −(ПСР×(1−pred_sev/T)+взносы); при T=0 — как 1-0.
+    Порядок в комментарии — fact, pred (как маски ниже):
+    fact0 pred0 → 0;
+    fact0 pred1 (ложная тревога) → −pred_sev;
+    fact1 pred0 (пропуск) → −(ПСР+взносы);
+    fact1 pred1 хватило → −pred_sev;
+    fact1 pred1 не хватило → −(ПСР×(1−pred_sev/T)+взносы); при T=0 — как пропуск.
     """
     pred_freq = np.asarray(pred_freq, dtype=int)
     y_true_freq = np.asarray(y_true_freq, dtype=int)
@@ -171,9 +175,10 @@ def compute_fin_effect_model_coverage(
     fact = psr + premiums
 
     out = np.zeros(len(fact), dtype=float)
+    # Маски: fact & pred (не путать с legacy mask_XY, где X=pred, Y=fact).
     m00 = (y_true_freq == 0) & (pred_freq == 0)
-    m01 = (y_true_freq == 0) & (pred_freq == 1)
-    m10 = (y_true_freq == 1) & (pred_freq == 0)
+    m01 = (y_true_freq == 0) & (pred_freq == 1)  # ложная тревога
+    m10 = (y_true_freq == 1) & (pred_freq == 0)  # пропуск
     m11 = (y_true_freq == 1) & (pred_freq == 1)
     covered = m11 & (y_pred_sev >= y_true_sev)
     short = m11 & ~covered

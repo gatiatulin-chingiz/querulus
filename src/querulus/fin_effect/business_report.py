@@ -264,15 +264,15 @@ def render_business_html(
       </tr>
       <tr>
         <td>Нет → да (ложная тревога)</td>
-        <td class="old formula">−(ПСР + взносы)</td>
+        <td class="old formula">−pred_sev − (ПСР + взносы)</td>
         <td class="new formula">−pred_sev</td>
-        <td class="changed">Штраф = предложенная сумма, а не весь факт</td>
+        <td class="changed">Убрали двойной штраф: раньше модель + факт, теперь только предложенная сумма</td>
       </tr>
       <tr>
         <td>Да → нет (пропуск)</td>
-        <td class="old formula">−pred_sev − (ПСР + взносы)</td>
+        <td class="old formula">−(ПСР + взносы)</td>
         <td class="new formula">−(ПСР + взносы)</td>
-        <td class="changed">Убрали двойной штраф (модель + факт)</td>
+        <td class="same">Без изменений</td>
       </tr>
       <tr>
         <td>Да → да, хватило (pred_sev ≥ T)</td>
