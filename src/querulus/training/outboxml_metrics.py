@@ -27,8 +27,19 @@ def _is_categorical_series(series: pd.Series) -> bool:
     )
 
 
-def _model_cat_feature_names(X: pd.DataFrame, estimator: Any) -> list[str]:
-    """Имена cat-колонок строго по индексам обученной CatBoost-модели.
+def _model_feature_names(X: pd.DataFrame, estimator: Any) -> list[str]:
+    """Порядок признаков из модели или исходного кадра для других estimator."""
+    names = list(getattr(estimator, "feature_names_", None) or [])
+    if names and all(name in X.columns for name in names):
+        return names
+    return list(X.columns)
+
+
+def _model_cat_feature_names(
+    feature_names: list[str],
+    estimator: Any,
+) -> list[str]:
+    """Имена cat-колонок строго по схеме обученной CatBoost-модели.
 
     ``subset.features_categorical`` сюда не мешаем: там могут быть Float-фичи
     модели (напр. APPLICANT_AGE) → stringify даёт
@@ -41,11 +52,10 @@ def _model_cat_feature_names(X: pd.DataFrame, estimator: Any) -> list[str]:
         indices = list(getter())
     except Exception:
         return []
-    columns = list(X.columns)
     names: list[str] = []
     for idx in indices:
-        if isinstance(idx, (int, np.integer)) and 0 <= int(idx) < len(columns):
-            names.append(columns[int(idx)])
+        if isinstance(idx, (int, np.integer)) and 0 <= int(idx) < len(feature_names):
+            names.append(feature_names[int(idx)])
     return names
 
 
@@ -57,8 +67,9 @@ def _frame_for_catboost_predict(X: pd.DataFrame, estimator: Any) -> pd.DataFrame
     """
     from querulus.training.pipeline import _stringify_categorical_columns
 
-    out = X.copy()
-    cat_names = _model_cat_feature_names(out, estimator)
+    feature_names = _model_feature_names(X, estimator)
+    out = X.loc[:, feature_names].copy()
+    cat_names = _model_cat_feature_names(feature_names, estimator)
     cat_set = set(cat_names)
 
     for column in out.columns:
