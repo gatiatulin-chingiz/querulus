@@ -4,6 +4,7 @@ from querulus.training.build_outboxml_configs import (
     compute_period_windows,
     dataframe_for_dsm,
     default_model_version,
+    prepare_datasets_from_config,
     with_periods,
     write_outboxml_configs,
 )
@@ -99,6 +100,7 @@ __all__ = [
     "compute_period_windows",
     "dataframe_for_dsm",
     "default_model_version",
+    "prepare_datasets_from_config",
     "TrainLoopFlags",
     "TrainLoopResult",
     "TrainingArtifacts",

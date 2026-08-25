@@ -26,16 +26,60 @@ _OTHER_KEY = "ПРОЧИЕ"
 
 
 def dataframe_for_dsm(df: pd.DataFrame) -> pd.DataFrame:
-    """Копия df: Categorical → object.
+    """Копия df: Categorical → object (и string EA → object).
 
-    Иначе outboxml ``prepare_categorical_feature_series`` падает:
-    ``TypeError: Cannot setitem on a Categorical with a new category (0)``.
+    Outboxml ``prepare_categorical`` делает ``.map`` + ``loc[...] = default``.
+    На ``category`` это падает, если ``default`` ещё не в categories
+    (типично код ``ПРОЧИЕ=0``, которого не было в данных).
+
+    Важно: DSM перед prepare пишет temp parquet и читает обратно — category
+    часто **возвращается**. Поэтому каст нужен ещё и в
+    :class:`SafePrepareDataset` непосредственно перед prepare.
     """
     out = df.copy()
     for name in out.columns:
-        if isinstance(out[name].dtype, pd.CategoricalDtype):
-            out[name] = out[name].astype("object")
+        series = out[name]
+        dtype = series.dtype
+        if isinstance(dtype, pd.CategoricalDtype) or pd.api.types.is_categorical_dtype(dtype):
+            out[name] = series.astype(object)
+        elif pd.api.types.is_string_dtype(dtype) and not pd.api.types.is_object_dtype(dtype):
+            # string[pyarrow] / StringDtype — тоже в plain object
+            out[name] = series.astype(object)
     return out
+
+
+def prepare_datasets_from_config(
+    config_path: str | Path,
+    *,
+    check_prepared: bool = True,
+) -> dict[str, Any]:
+    """PrepareDataset'ы с кастом category→object после temp-parquet DSM."""
+    from outboxml.core.prepared_datasets import PrepareDataset
+    from outboxml.core.pydantic_models import AllModelsConfig
+
+    raw = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    all_cfg = AllModelsConfig.model_validate(raw)
+    group_name = f"{all_cfg.project}_{all_cfg.version}"
+
+    class SafePrepareDataset(PrepareDataset):
+        def prepare_dataset(self, data, train_ind, test_ind, target=None):
+            if isinstance(data, pd.DataFrame):
+                data = dataframe_for_dsm(data)
+            return super().prepare_dataset(
+                data=data,
+                train_ind=train_ind,
+                test_ind=test_ind,
+                target=target,
+            )
+
+    return {
+        model.name: SafePrepareDataset(
+            model_config=model,
+            check_prepared=check_prepared,
+            group_name=group_name,
+        )
+        for model in all_cfg.models_configs
+    }
 
 
 def default_model_version(*, business: str = "2", increment: str = "v1") -> str:
