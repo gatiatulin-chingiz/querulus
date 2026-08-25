@@ -25,6 +25,19 @@ _NA_KEY = "N/A"
 _OTHER_KEY = "ПРОЧИЕ"
 
 
+def dataframe_for_dsm(df: pd.DataFrame) -> pd.DataFrame:
+    """Копия df: Categorical → object.
+
+    Иначе outboxml ``prepare_categorical_feature_series`` падает:
+    ``TypeError: Cannot setitem on a Categorical with a new category (0)``.
+    """
+    out = df.copy()
+    for name in out.columns:
+        if isinstance(out[name].dtype, pd.CategoricalDtype):
+            out[name] = out[name].astype("object")
+    return out
+
+
 def default_model_version(*, business: str = "2", increment: str = "v1") -> str:
     """Бизнес-версия + дата UTC + инкремент, без слова new."""
     stamp = datetime.now(timezone.utc).strftime("%Y_%m_%d")
