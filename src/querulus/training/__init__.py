@@ -11,6 +11,8 @@ from querulus.training.build_outboxml_configs import (
 from querulus.training.outboxml_metrics import (
     display_dsm_collect_metrics,
     enrich_dsm_model_metrics,
+    predict_dsm_series,
+    prepare_dsm_features,
 )
 from querulus.training.backward_elim import (
     BackwardElimResult,
@@ -110,6 +112,8 @@ __all__ = [
     "prepare_datasets_from_config",
     "display_dsm_collect_metrics",
     "enrich_dsm_model_metrics",
+    "predict_dsm_series",
+    "prepare_dsm_features",
     "TrainLoopFlags",
     "TrainLoopResult",
     "TrainingArtifacts",

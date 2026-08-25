@@ -21,6 +21,84 @@ from querulus.training.pipeline import _model_metrics_table, format_metrics_tabl
 TaskKind = Literal["classification", "regression"]
 
 
+def _model_config_without_row_filter(model_config: Any) -> Any:
+    """Копия model_config без ``data_filter_condition`` (для score на полном index)."""
+    if getattr(model_config, "data_filter_condition", None) in (None, ""):
+        return model_config
+    if hasattr(model_config, "model_copy"):
+        return model_config.model_copy(update={"data_filter_condition": None})
+    if hasattr(model_config, "copy"):
+        try:
+            return model_config.copy(update={"data_filter_condition": None})
+        except TypeError:
+            pass
+    raise TypeError(
+        "Не удалось снять data_filter_condition с model_config; "
+        "нужен pydantic model_copy/copy(update=...)."
+    )
+
+
+def prepare_dsm_features(
+    dsm: Any,
+    model_name: str,
+    data: pd.DataFrame,
+    *,
+    ignore_row_filter: bool = False,
+) -> pd.DataFrame:
+    """Признаки DSM для predict; ``ignore_row_filter=True`` — без query фильтра обучения.
+
+    Severity в OutBoxML обычно с ``TARGET_SEV > 0``: без ``ignore_row_filter``
+    на полном Test остаются только позитивы → финэффект/F1 ломаются.
+    """
+    from outboxml.core.prepared_datasets import PrepareDataset
+    from outboxml.datasets_manager import DataPreprocessor
+
+    result = dsm.get_result()[model_name]
+    model_config = result.model_config
+    if ignore_row_filter:
+        model_config = _model_config_without_row_filter(model_config)
+
+    preproc = DataPreprocessor(
+        prepare_dataset_interface_dict={
+            model_name: PrepareDataset(
+                model_config=model_config, check_prepared=False
+            )
+        },
+        dataset=data.copy(),
+        data_config=dsm.data_config,
+        prepare_engine="pandas",
+    )
+    subset = preproc.get_subset(model_name, from_pickle=False)
+    num = list(result.data_subset.features_numerical or [])
+    cat = list(result.data_subset.features_categorical or [])
+    cols = [c for c in num + cat if c in subset.X.columns]
+    return subset.X[cols]
+
+
+def predict_dsm_series(
+    dsm: Any,
+    model_name: str,
+    data: pd.DataFrame,
+    *,
+    task_type: TaskKind,
+    calibrator: Any | None = None,
+    ignore_row_filter: bool = False,
+) -> pd.Series:
+    """Предсказания DSM → Series на index подготовленного X."""
+    X = prepare_dsm_features(
+        dsm, model_name, data, ignore_row_filter=ignore_row_filter
+    )
+    estimator = unwrap_estimator(dsm.get_result()[model_name].model)
+    if task_type == "classification":
+        if calibrator is not None:
+            scores = np.asarray(calibrator.predict_proba(X)[:, 1], dtype=float)
+        else:
+            scores = _predict_scores(estimator, X, task_type="classification")
+    else:
+        scores = _predict_scores(estimator, X, task_type="regression")
+    return pd.Series(scores, index=X.index, dtype=float)
+
+
 def _is_categorical_series(series: pd.Series) -> bool:
     return isinstance(series.dtype, pd.CategoricalDtype) or pd.api.types.is_categorical_dtype(
         series.dtype
