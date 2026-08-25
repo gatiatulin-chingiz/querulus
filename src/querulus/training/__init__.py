@@ -17,7 +17,9 @@ from querulus.training.backward_elim import (
     backward_eliminate_by_metric,
 )
 from querulus.training.calibration import (
+    CalibratorAbResult,
     balance_binary_cal_frame,
+    compare_calibrator_ab,
     expected_calibration_error,
     fit_probability_calibrator,
 )
@@ -122,6 +124,8 @@ __all__ = [
     "score_stack_on_index",
     "train_legacy_matching_new",
     "balance_binary_cal_frame",
+    "CalibratorAbResult",
+    "compare_calibrator_ab",
     "expected_calibration_error",
     "feature_drift_report",
     "filter_features_by_drift",
