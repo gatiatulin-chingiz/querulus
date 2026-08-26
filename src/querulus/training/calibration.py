@@ -1,4 +1,4 @@
-"""Калибровка вероятностей и ECE (positive-class, бинарная частота)."""
+"""Калибровка вероятностей (частота) и уровней сумм (severity)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,6 +8,136 @@ import numpy as np
 import pandas as pd
 
 BinStrategy = Literal["equal_mass", "equal_width"]
+SeverityCalMethod = Literal["isotonic", "affine", "scale"]
+
+
+@dataclass
+class SeverityCalibrator:
+    """Постобработка raw severity → откалиброванный уровень суммы.
+
+    Учится на парах (pred, fact) с ``fact > 0``; на инференсе применяется ко всем pred.
+    """
+
+    method: SeverityCalMethod
+    n_fit: int
+    bias_before: float
+    bias_after: float
+    _iso: Any = None
+    _intercept: float = 0.0
+    _coef: float = 1.0
+    _scale: float = 1.0
+
+    def predict(self, y_pred: pd.Series | np.ndarray) -> np.ndarray:
+        """Сырой pred → откалиброванный; результат ``>= 0``."""
+        raw = np.asarray(y_pred, dtype=float).reshape(-1)
+        out = np.full(raw.shape, np.nan, dtype=float)
+        ok = np.isfinite(raw)
+        if not np.any(ok):
+            return out
+        x = raw[ok]
+        if self.method == "isotonic":
+            cal = np.asarray(self._iso.predict(x), dtype=float)
+        elif self.method == "affine":
+            cal = self._intercept + self._coef * x
+        elif self.method == "scale":
+            cal = self._scale * x
+        else:
+            raise ValueError(f"Неизвестный method={self.method!r}")
+        out[ok] = np.maximum(cal, 0.0)
+        return out
+
+    def predict_series(self, y_pred: pd.Series) -> pd.Series:
+        """То же, что ``predict``, с сохранением index."""
+        return pd.Series(self.predict(y_pred), index=y_pred.index, dtype=float)
+
+
+def severity_mean_bias(
+    y_true: pd.Series | np.ndarray,
+    y_pred: pd.Series | np.ndarray,
+) -> float:
+    """Средний bias = mean(pred − fact) на конечных парах."""
+    y = np.asarray(y_true, dtype=float).reshape(-1)
+    p = np.asarray(y_pred, dtype=float).reshape(-1)
+    if len(y) != len(p):
+        raise ValueError(f"len(y_true)={len(y)} != len(y_pred)={len(p)}")
+    mask = np.isfinite(y) & np.isfinite(p)
+    if not np.any(mask):
+        return float("nan")
+    return float(np.mean(p[mask] - y[mask]))
+
+
+def fit_severity_calibrator(
+    y_true: pd.Series | np.ndarray,
+    y_pred: pd.Series | np.ndarray,
+    *,
+    method: SeverityCalMethod = "isotonic",
+    min_samples: int = 50,
+) -> SeverityCalibrator:
+    """Калибратор уровня суммы на Cal-set (только строки с fact > 0).
+
+    Methods:
+        isotonic — монотонное отображение pred→fact (sklearn IsotonicRegression);
+        affine — fact ≈ a + b·pred (OLS);
+        scale — fact ≈ s·pred, ``s = mean(fact)/mean(pred)``.
+    """
+    y = np.asarray(y_true, dtype=float).reshape(-1)
+    p = np.asarray(y_pred, dtype=float).reshape(-1)
+    if len(y) != len(p):
+        raise ValueError(f"len(y_true)={len(y)} != len(y_pred)={len(p)}")
+    mask = np.isfinite(y) & np.isfinite(p) & (y > 0)
+    n = int(mask.sum())
+    if n < int(min_samples):
+        raise ValueError(
+            f"Мало точек для severity-калибровки: n={n} < min_samples={min_samples}"
+        )
+    y_fit, p_fit = y[mask], p[mask]
+    bias_before = float(np.mean(p_fit - y_fit))
+
+    iso = None
+    intercept, coef, scale = 0.0, 1.0, 1.0
+    if method == "isotonic":
+        from sklearn.isotonic import IsotonicRegression
+
+        iso = IsotonicRegression(y_min=0.0, out_of_bounds="clip")
+        iso.fit(p_fit, y_fit)
+        cal_fit = np.asarray(iso.predict(p_fit), dtype=float)
+    elif method == "affine":
+        # polyfit: y ≈ coef * p + intercept
+        coef, intercept = [float(v) for v in np.polyfit(p_fit, y_fit, deg=1)]
+        cal_fit = intercept + coef * p_fit
+    elif method == "scale":
+        mean_p = float(np.mean(p_fit))
+        if abs(mean_p) < 1e-12:
+            raise ValueError("mean(pred)≈0 — scale-калибровка невозможна")
+        scale = float(np.mean(y_fit) / mean_p)
+        cal_fit = scale * p_fit
+    else:
+        raise ValueError(f"Неизвестный method={method!r}")
+
+    cal_fit = np.maximum(cal_fit, 0.0)
+    bias_after = float(np.mean(cal_fit - y_fit))
+    return SeverityCalibrator(
+        method=method,
+        n_fit=n,
+        bias_before=bias_before,
+        bias_after=bias_after,
+        _iso=iso,
+        _intercept=intercept,
+        _coef=coef,
+        _scale=scale,
+    )
+
+
+def apply_severity_calibrator(
+    calibrator: SeverityCalibrator | None,
+    y_pred: pd.Series | np.ndarray,
+) -> pd.Series | np.ndarray:
+    """Применить калибратор; ``None`` → вернуть ``y_pred`` без изменений."""
+    if calibrator is None:
+        return y_pred
+    if isinstance(y_pred, pd.Series):
+        return calibrator.predict_series(y_pred)
+    return calibrator.predict(y_pred)
 
 
 @dataclass(frozen=True)

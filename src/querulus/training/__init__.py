@@ -20,10 +20,14 @@ from querulus.training.backward_elim import (
 )
 from querulus.training.calibration import (
     CalibratorAbResult,
+    SeverityCalibrator,
+    apply_severity_calibrator,
     balance_binary_cal_frame,
     compare_calibrator_ab,
     expected_calibration_error,
     fit_probability_calibrator,
+    fit_severity_calibrator,
+    severity_mean_bias,
 )
 from querulus.training.config import TrainingConfig
 from querulus.training.drift import (
@@ -128,14 +132,18 @@ __all__ = [
     "payment_year_cohorts",
     "score_stack_on_index",
     "train_legacy_matching_new",
+    "apply_severity_calibrator",
     "balance_binary_cal_frame",
     "CalibratorAbResult",
+    "SeverityCalibrator",
     "compare_calibrator_ab",
     "expected_calibration_error",
     "feature_drift_report",
     "filter_features_by_drift",
     "filter_features_by_noise",
     "fit_probability_calibrator",
+    "fit_severity_calibrator",
+    "severity_mean_bias",
     "format_features_table",
     "format_metrics_table",
     "format_training_summary",
