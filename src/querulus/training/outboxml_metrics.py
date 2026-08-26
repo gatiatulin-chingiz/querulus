@@ -242,9 +242,23 @@ def display_dsm_collect_metrics(
     from IPython.display import Markdown, display
 
     table = enrich_dsm_model_metrics(dsm, model_name, task_type=task_type)
+    # ECE из ModelDiagnostics — не калибратор; к тому же MD считает его с багом (~0).
+    # В таблице example не показываем, чтобы не путать с isotonic.
+    if "metric" in table.columns:
+        table = table.loc[table["metric"].astype(str) != "ece"].reset_index(drop=True)
     label = title or f"{model_name} ({task_type})"
     display(Markdown(f"### Метрики collect-style: {label}"))
     display(format_metrics_table(table))
     raw = dsm.get_result()[model_name].metrics
-    print("raw full:", {k: (v or {}).get("full") for k, v in (raw or {}).items()})
+    print(
+        "raw full:",
+        {
+            k: {
+                mk: mv
+                for mk, mv in ((v or {}).get("full") or {}).items()
+                if mk != "ece"
+            }
+            for k, v in (raw or {}).items()
+        },
+    )
     return table
