@@ -475,10 +475,10 @@ def compute_period_windows(
 
     windows = [
         row("parity_train (core∪val)", parity_train[0], parity_train[1], parity_fit_idx),
-        row("cal (хвост исходного train)", cal_period[0], cal_period[1], splits.cal),
+        row("train_tail (хвост train; в collect — Cal)", cal_period[0], cal_period[1], splits.cal),
         row("holdout Test", test_period[0], test_period[1], splits.test),
         row("prod_fit (train + test до cutoff)", prod_train_period[0], prod_train_period[1], prod_fit_idx),
-        row("prod_cal (15% freshest test)", prod_test_period[0], prod_test_period[1], prod_cal_idx),
+        row("prod_holdout (15% freshest test)", prod_test_period[0], prod_test_period[1], prod_cal_idx),
     ]
     return {
         "date_column": date_column,
