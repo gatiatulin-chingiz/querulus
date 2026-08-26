@@ -85,16 +85,18 @@ def _stack_predictions(
         dtype=float,
     )
     pred_freq = (proba >= FREQ_THRESHOLD).astype(int)
-    pred_sev = pd.Series(
-        severity_predict(
-            training.severity_model,
-            feats[training.severity_features],
-            training.severity_categorical_features,
-            transform=getattr(training, "severity_target_transform", "raw"),
-        ),
-        index=index,
-        dtype=float,
+    sev_raw = severity_predict(
+        training.severity_model,
+        feats[training.severity_features],
+        training.severity_categorical_features,
+        transform=getattr(training, "severity_target_transform", "raw"),
     )
+    sev_calibrator = getattr(training, "severity_calibrator", None)
+    if sev_calibrator is not None:
+        from querulus.training.calibration import apply_severity_calibrator
+
+        sev_raw = apply_severity_calibrator(sev_calibrator, sev_raw)
+    pred_sev = pd.Series(np.asarray(sev_raw, dtype=float), index=index, dtype=float)
     return proba, pred_freq, pred_sev
 
 

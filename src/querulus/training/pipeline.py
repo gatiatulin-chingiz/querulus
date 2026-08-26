@@ -99,6 +99,7 @@ class TrainingArtifacts:
     severity_split: DatasetSplit | None = None
     feature_frame: pd.DataFrame | None = None
     frequency_calibrator: object | None = None
+    severity_calibrator: object | None = None
     frequency_feature_selection_summary: dict[str, object] | None = None
     severity_feature_selection_summary: dict[str, object] | None = None
     severity_target_transform: str = "raw"
@@ -1324,6 +1325,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         severity_importance=_importance_frame(severity_model, severity_features),
         feature_frame=data,
         frequency_calibrator=frequency_calibrator,
+        severity_calibrator=None,
         frequency_feature_selection_summary=frequency_feature_selection_summary,
         severity_feature_selection_summary=severity_feature_selection_summary,
         severity_target_transform=config.severity_target_transform,

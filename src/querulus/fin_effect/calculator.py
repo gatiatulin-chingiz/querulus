@@ -791,15 +791,18 @@ def run_fin_effect_from_training(
         _frequency_proba_from_training(training, predict_frame[freq_features]),
         index=effect_index,
     )
-    sev_pred = pd.Series(
-        severity_predict(
-            training.severity_model,
-            predict_frame[sev_features],
-            getattr(training, "severity_categorical_features", []),
-            transform=getattr(training, "severity_target_transform", "raw"),
-        ),
-        index=effect_index,
+    sev_raw = severity_predict(
+        training.severity_model,
+        predict_frame[sev_features],
+        getattr(training, "severity_categorical_features", []),
+        transform=getattr(training, "severity_target_transform", "raw"),
     )
+    sev_calibrator = getattr(training, "severity_calibrator", None)
+    if sev_calibrator is not None:
+        from querulus.training.calibration import apply_severity_calibrator
+
+        sev_raw = apply_severity_calibrator(sev_calibrator, sev_raw)
+    sev_pred = pd.Series(np.asarray(sev_raw, dtype=float), index=effect_index)
 
     if frequency_target_column:
         y_true = effect_frame[frequency_target_column]
