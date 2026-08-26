@@ -45,6 +45,10 @@ from querulus.training.feature_selection_report import (
     save_feature_selection_report,
 )
 from querulus.training.hpo import HpoResult, run_hpo
+from querulus.training.leadership_report import (
+    export_leadership_html,
+    export_leadership_html_from_collect,
+)
 from querulus.training.noise_cut import NoiseCutResult, filter_features_by_noise
 from querulus.training.pipeline import (
     TrainingArtifacts,
@@ -128,6 +132,8 @@ __all__ = [
     "compare_severity_log1p",
     "drop_zero_importance_features",
     "evaluate_legacy_vs_new",
+    "export_leadership_html",
+    "export_leadership_html_from_collect",
     "evaluate_train_start_years",
     "payment_year_cohorts",
     "score_stack_on_index",
