@@ -2,14 +2,17 @@
 
 Пример::
 
-    from querulus.dataset.hadoop import load_df_final, pandas_to_hive_table
+    from querulus.dataset.hadoop import load_df_final, save_df_final
 
-    pandas_to_hive_table(df, \"models.querulus_df_final_3\")
+    dest, hive_ok = save_df_final(
+        df,
+        parquet_path=\"data/processed/df_final_3.parquet\",
+        hive_table=\"models.querulus_df_final_3\",
+    )
     df, source = load_df_final(
         hive_table=\"models.querulus_df_final_3\",
         parquet_path=\"data/processed/df_final_3.parquet\",
     )
-    # source: \"hive:...\" или \"parquet:...\"
 """
 from __future__ import annotations
 
@@ -371,3 +374,60 @@ def load_df_final(
     logger.info("dataset source=%s shape=%s", source, pdf.shape)
     print(f"[dataset] source={source} shape={pdf.shape}")
     return pdf, source
+
+
+def save_df_final(
+    df: pd.DataFrame,
+    *,
+    parquet_path: str | Path,
+    hive_table: str = DEFAULT_HIVE_TABLE,
+    prefer_hive: bool = True,
+    mode: str = "overwrite",
+    spark: Any | None = None,
+    stop_spark: bool = True,
+    app_name: str = DEFAULT_APP_NAME,
+) -> tuple[str, bool]:
+    """Всегда пишет локальный parquet; Hive — best-effort (Metastore/Kerberos не роняют пайплайн).
+
+    Returns:
+        ``(destination, hive_ok)`` — ``destination`` вида ``hive:...`` или ``parquet:...``.
+    """
+    if df is None or len(df) == 0:
+        raise ValueError("Пустой DataFrame — нечего сохранять")
+
+    path = Path(parquet_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(path, index=False)
+    logger.info("Parquet WRITE done: %s shape=%s", path, df.shape)
+    print(f"[dataset] wrote parquet {path} shape={df.shape}")
+
+    if not prefer_hive:
+        dest = f"parquet:{path}"
+        print(f"[dataset] destination={dest} (Hive skipped)")
+        return dest, False
+
+    try:
+        pandas_to_hive_table(
+            df,
+            hive_table,
+            mode=mode,
+            spark=spark,
+            stop_spark=stop_spark,
+            app_name=app_name,
+        )
+        dest = f"hive:{hive_table}"
+        print(f"[dataset] destination={dest} (parquet cache={path})")
+        return dest, True
+    except Exception as exc:  # noqa: BLE001 — HMS/Kerberos/Spark convert quirks
+        msg = f"{type(exc).__name__}: {exc}"
+        logger.warning(
+            "Hive WRITE failed (%s) — остаётся parquet: %s",
+            msg.splitlines()[0][:200],
+            path,
+        )
+        print(
+            f"[dataset] Hive WRITE failed ({type(exc).__name__}) → keep parquet\n"
+            f"  detail: {msg.splitlines()[0][:240]}\n"
+            f"[dataset] destination=parquet:{path}"
+        )
+        return f"parquet:{path}", False

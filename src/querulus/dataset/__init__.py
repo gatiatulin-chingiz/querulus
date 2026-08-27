@@ -6,6 +6,7 @@ from querulus.dataset.hadoop import (
     hive_table_to_pandas,
     load_df_final,
     pandas_to_hive_table,
+    save_df_final,
 )
 from querulus.dataset.pipeline import run_pipeline
 
@@ -16,4 +17,5 @@ __all__ = [
     "load_df_final",
     "pandas_to_hive_table",
     "run_pipeline",
+    "save_df_final",
 ]
