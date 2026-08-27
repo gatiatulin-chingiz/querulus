@@ -1,16 +1,21 @@
 """Запись / чтение итогового датафрейма Querulus через Spark → Hive.
 
-Пример использования (как в ``comments.txt``)::
+Пример::
 
-    from querulus.dataset.hadoop import pandas_to_hive_table, hive_table_to_pandas
+    from querulus.dataset.hadoop import load_df_final, pandas_to_hive_table
 
     pandas_to_hive_table(df, \"models.querulus_df_final_3\")
-    df = hive_table_to_pandas(\"models.querulus_df_final_3\")
+    df, source = load_df_final(
+        hive_table=\"models.querulus_df_final_3\",
+        parquet_path=\"data/processed/df_final_3.parquet\",
+    )
+    # source: \"hive:...\" или \"parquet:...\"
 """
 from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -40,7 +45,7 @@ def build_spark_session(
     """SparkSession с Hive (как в рабочем примере на jovyan)."""
     from pyspark.sql import SparkSession
 
-    return (
+    spark = (
         SparkSession.builder.appName(app_name)
         .enableHiveSupport()
         .config("spark.executor.memory", executor_memory)
@@ -51,6 +56,9 @@ def build_spark_session(
         .config("spark.dynamicAllocation.enabled", "false")
         .getOrCreate()
     )
+    logger.info("SparkSession ready: app=%s enableHiveSupport=True", app_name)
+    print(f"[hive] SparkSession ready app={app_name} enableHiveSupport=True")
+    return spark
 
 
 def _is_nested_value(value: Any) -> bool:
@@ -115,6 +123,26 @@ def _to_spark_string_or_none(value: Any) -> str | None:
     return str(scalar)
 
 
+def _datetime_to_iso_or_none(value: Any) -> str | None:
+    """Datetime → ISO-строка без tz (обход Spark DST NonExistentTimeError)."""
+    if value is None:
+        return None
+    try:
+        if value is pd.NaT or pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        ts = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if pd.isna(ts):
+        return None
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert("UTC").tz_localize(None)
+    return ts.isoformat(sep=" ", timespec="seconds")
+
+
 def _prepare_frame_for_spark(df: pd.DataFrame) -> pd.DataFrame:
     """Копия кадра: index → колонка; nested/ndarray → JSON; типы под Spark schema."""
     out = df.copy()
@@ -126,6 +154,7 @@ def _prepare_frame_for_spark(df: pd.DataFrame) -> pd.DataFrame:
 
     nested_cols: list[str] = []
     all_null_as_str: list[str] = []
+    datetime_as_str: list[str] = []
     for col in list(out.columns):
         series = out[col]
         # Все NULL → StringType + None (иначе Spark: CANNOT_DETERMINE_TYPE / NullType)
@@ -133,8 +162,10 @@ def _prepare_frame_for_spark(df: pd.DataFrame) -> pd.DataFrame:
             all_null_as_str.append(str(col))
             out[col] = pd.Series([None] * len(out), index=out.index, dtype=object)
             continue
+        # datetime64 → ISO string: Spark tz_localize падает на DST gaps (1984-04-01 и т.п.)
         if pd.api.types.is_datetime64_any_dtype(series):
-            out[col] = pd.to_datetime(series, errors="coerce")
+            datetime_as_str.append(str(col))
+            out[col] = pd.to_datetime(series, errors="coerce").map(_datetime_to_iso_or_none)
             continue
         if isinstance(series.dtype, pd.CategoricalDtype):
             out[col] = series.astype(object).map(_to_spark_string_or_none)
@@ -167,6 +198,15 @@ def _prepare_frame_for_spark(df: pd.DataFrame) -> pd.DataFrame:
             nested_cols,
         )
         print(f"[hive] nested->json columns ({len(nested_cols)}): {nested_cols[:20]}")
+    if datetime_as_str:
+        logger.warning(
+            "Hive: datetime → ISO-строка (обход DST/tz Spark): %s",
+            datetime_as_str,
+        )
+        print(
+            f"[hive] datetime→string columns ({len(datetime_as_str)}): "
+            f"{datetime_as_str[:30]}"
+        )
     if all_null_as_str:
         logger.warning(
             "Hive: полностью пустые колонки → StringType: %s",
@@ -190,7 +230,6 @@ def _spark_schema_for_pandas(df: pd.DataFrame) -> Any:
         StringType,
         StructField,
         StructType,
-        TimestampType,
     )
 
     fields: list[Any] = []
@@ -199,9 +238,6 @@ def _spark_schema_for_pandas(df: pd.DataFrame) -> Any:
         series = df[col]
         if series.isna().all():
             fields.append(StructField(name, StringType(), True))
-            continue
-        if pd.api.types.is_datetime64_any_dtype(series):
-            fields.append(StructField(name, TimestampType(), True))
             continue
         if pd.api.types.is_bool_dtype(series):
             fields.append(StructField(name, BooleanType(), True))
@@ -217,6 +253,7 @@ def _spark_schema_for_pandas(df: pd.DataFrame) -> Any:
         if pd.api.types.is_float_dtype(series) or pd.api.types.is_integer_dtype(series):
             fields.append(StructField(name, DoubleType(), True))
             continue
+        # datetime уже в ISO-строках на этапе prepare; object/string → StringType
         fields.append(StructField(name, StringType(), True))
     return StructType(fields)
 
@@ -267,7 +304,11 @@ def hive_table_to_pandas(
     stop_spark: bool = True,
     app_name: str = DEFAULT_APP_NAME,
 ) -> pd.DataFrame:
-    """Hive-таблица → Pandas DataFrame."""
+    """Hive-таблица → Pandas DataFrame.
+
+    SparkSession создаётся в ``build_spark_session`` (``enableHiveSupport``),
+    если ``spark`` не передан. Ошибки Metastore — уже после инициализации сессии.
+    """
     own_spark = spark is None
     spark = spark or build_spark_session(app_name=app_name)
     try:
@@ -280,3 +321,53 @@ def hive_table_to_pandas(
     finally:
         if own_spark and stop_spark:
             spark.stop()
+
+
+def load_df_final(
+    *,
+    hive_table: str = DEFAULT_HIVE_TABLE,
+    parquet_path: str | Path,
+    prefer_hive: bool = True,
+    spark: Any | None = None,
+    stop_spark: bool = True,
+    app_name: str = DEFAULT_APP_NAME,
+) -> tuple[pd.DataFrame, str]:
+    """Читает итоговый df: Hive → при сбое локальный parquet.
+
+    Returns:
+        ``(df, source)``, где ``source`` — ``hive:<table>`` или ``parquet:<path>``.
+    """
+    path = Path(parquet_path)
+    if prefer_hive:
+        try:
+            pdf = hive_table_to_pandas(
+                hive_table,
+                spark=spark,
+                stop_spark=stop_spark,
+                app_name=app_name,
+            )
+            source = f"hive:{hive_table}"
+            logger.info("dataset source=%s shape=%s", source, pdf.shape)
+            print(f"[dataset] source={source} shape={pdf.shape}")
+            return pdf, source
+        except Exception as exc:  # noqa: BLE001 — любой сбой Hive/Spark → parquet
+            msg = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "Hive недоступен (%s) — fallback на parquet: %s",
+                msg.splitlines()[0][:200],
+                path,
+            )
+            print(
+                f"[dataset] Hive failed ({type(exc).__name__}) → fallback parquet\n"
+                f"  detail: {msg.splitlines()[0][:240]}"
+            )
+
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Нет Hive и нет локального parquet: table={hive_table!r} path={path}"
+        )
+    pdf = pd.read_parquet(path)
+    source = f"parquet:{path}"
+    logger.info("dataset source=%s shape=%s", source, pdf.shape)
+    print(f"[dataset] source={source} shape={pdf.shape}")
+    return pdf, source
