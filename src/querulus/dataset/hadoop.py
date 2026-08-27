@@ -101,8 +101,22 @@ def _object_column_has_nested(series: pd.Series, *, sample_n: int = 200) -> bool
     return any(_is_nested_value(v) for v in sample)
 
 
+def _to_spark_string_or_none(value: Any) -> str | None:
+    """Значение для StringType: None или str (без nested)."""
+    scalar = _cell_to_spark_scalar(value)
+    if scalar is None:
+        return None
+    if isinstance(scalar, str):
+        return scalar
+    if isinstance(scalar, (bool, int, float)):
+        if isinstance(scalar, float) and np.isnan(scalar):
+            return None
+        return str(scalar)
+    return str(scalar)
+
+
 def _prepare_frame_for_spark(df: pd.DataFrame) -> pd.DataFrame:
-    """Копия кадра: index → колонка; nested/ndarray → JSON string (иначе Spark падает)."""
+    """Копия кадра: index → колонка; nested/ndarray → JSON; типы под Spark schema."""
     out = df.copy()
     if out.index.name or not isinstance(out.index, pd.RangeIndex):
         idx_name = out.index.name or "index"
@@ -111,24 +125,41 @@ def _prepare_frame_for_spark(df: pd.DataFrame) -> pd.DataFrame:
         out = out.reset_index(names=idx_name)
 
     nested_cols: list[str] = []
+    all_null_as_str: list[str] = []
     for col in list(out.columns):
         series = out[col]
+        # Все NULL → StringType + None (иначе Spark: CANNOT_DETERMINE_TYPE / NullType)
+        if series.isna().all():
+            all_null_as_str.append(str(col))
+            out[col] = pd.Series([None] * len(out), index=out.index, dtype=object)
+            continue
         if pd.api.types.is_datetime64_any_dtype(series):
             out[col] = pd.to_datetime(series, errors="coerce")
             continue
         if isinstance(series.dtype, pd.CategoricalDtype):
-            out[col] = series.astype(object)
-            series = out[col]
-        if pd.api.types.is_bool_dtype(series) and str(series.dtype) != "boolean":
-            out[col] = series.astype("boolean")
+            out[col] = series.astype(object).map(_to_spark_string_or_none)
             continue
-        # object / string: проверить nested (begin_calc и т.п. с ndarray)
+        if pd.api.types.is_bool_dtype(series):
+            out[col] = series.map(lambda x: None if pd.isna(x) else bool(x))
+            continue
+        # Nullable Int64 / все NA уже отсечены: NA в int → float64, иначе Long schema
+        if pd.api.types.is_integer_dtype(series):
+            if series.isna().any():
+                out[col] = series.astype("float64")
+            else:
+                out[col] = series.astype("int64")
+            continue
+        if pd.api.types.is_float_dtype(series):
+            out[col] = series.astype("float64")
+            continue
+        # object / string: nested → JSON, остальное → строка/скаляр для StringType
         if series.dtype == object or pd.api.types.is_string_dtype(series):
             if _object_column_has_nested(series):
                 nested_cols.append(str(col))
-                out[col] = series.map(_cell_to_spark_scalar)
-            else:
-                out[col] = series.map(_cell_to_spark_scalar)
+            out[col] = series.map(_to_spark_string_or_none)
+            continue
+        # неизвестный dtype → строка
+        out[col] = series.map(_to_spark_string_or_none)
 
     if nested_cols:
         logger.warning(
@@ -136,9 +167,58 @@ def _prepare_frame_for_spark(df: pd.DataFrame) -> pd.DataFrame:
             nested_cols,
         )
         print(f"[hive] nested->json columns ({len(nested_cols)}): {nested_cols[:20]}")
+    if all_null_as_str:
+        logger.warning(
+            "Hive: полностью пустые колонки → StringType: %s",
+            all_null_as_str,
+        )
+        print(
+            f"[hive] all-null→string columns ({len(all_null_as_str)}): "
+            f"{all_null_as_str[:30]}"
+        )
 
     out.columns = [str(c) for c in out.columns]
     return out
+
+
+def _spark_schema_for_pandas(df: pd.DataFrame) -> Any:
+    """Явная схема: без inference NullType (CANNOT_DETERMINE_TYPE)."""
+    from pyspark.sql.types import (
+        BooleanType,
+        DoubleType,
+        LongType,
+        StringType,
+        StructField,
+        StructType,
+        TimestampType,
+    )
+
+    fields: list[Any] = []
+    for col in df.columns:
+        name = str(col)
+        series = df[col]
+        if series.isna().all():
+            fields.append(StructField(name, StringType(), True))
+            continue
+        if pd.api.types.is_datetime64_any_dtype(series):
+            fields.append(StructField(name, TimestampType(), True))
+            continue
+        if pd.api.types.is_bool_dtype(series):
+            fields.append(StructField(name, BooleanType(), True))
+            continue
+        # после prepare bool → object с True/False/None
+        sample = series.dropna().head(50)
+        if len(sample) > 0 and all(isinstance(x, bool) for x in sample):
+            fields.append(StructField(name, BooleanType(), True))
+            continue
+        if pd.api.types.is_integer_dtype(series) and not series.isna().any():
+            fields.append(StructField(name, LongType(), True))
+            continue
+        if pd.api.types.is_float_dtype(series) or pd.api.types.is_integer_dtype(series):
+            fields.append(StructField(name, DoubleType(), True))
+            continue
+        fields.append(StructField(name, StringType(), True))
+    return StructType(fields)
 
 
 def pandas_to_hive_table(
@@ -163,13 +243,14 @@ def pandas_to_hive_table(
     spark = spark or build_spark_session(app_name=app_name)
     try:
         prepared = _prepare_frame_for_spark(df)
+        schema = _spark_schema_for_pandas(prepared)
         logger.info(
             "Hive WRITE start: table=%s mode=%s shape=%s",
             table_name,
             mode,
             prepared.shape,
         )
-        sdf = spark.createDataFrame(prepared)
+        sdf = spark.createDataFrame(prepared, schema=schema)
         sdf.write.mode(mode).saveAsTable(table_name)
         logger.info("Hive WRITE done: %s", table_name)
         print(f"[hive] wrote {table_name} shape={prepared.shape} mode={mode}")
