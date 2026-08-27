@@ -17,8 +17,8 @@ class FeatureThresholds:
     apply_delay_high: int = 30
     apply_delay_notify: int = 7
     vehicle_weight_heavy: float = 3500.0
-    amount_repair_high: float = 300_000.0
-    amount_repair_bins: tuple[float, ...] = (100_000.0, 300_000.0)
+    amount_repair_high: float = 365_000.0
+    amount_repair_bins: tuple[float, ...] = (120_000.0, 365_000.0)
     insurance_amount_bins: tuple[float, ...] = (400_000.0, 1_000_000.0)
     victim_loss_sum_bins: tuple[float, ...] = (50_000.0, 200_000.0)
     kbm_low: float = 1.0
@@ -33,7 +33,7 @@ class FeatureConfig:
     t0_column: str = "PAYMENT_ORDER_DATE_TIME"
     thresholds: FeatureThresholds = field(default_factory=FeatureThresholds)
     vehicle_age_bins: tuple[float, ...] = (3.0, 7.0, 15.0)
-    inflation_base_year: int = 2020
+    inflation_base_year: int = 2022
     dedup_target: str = "VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR"
     dedup_sources: tuple[str, ...] = (
         "VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR_x",
@@ -76,8 +76,8 @@ def load_feature_config(path: Path | None = None) -> FeatureConfig:
         apply_delay_high=int(raw_thresholds.get("apply_delay_high", 30)),
         apply_delay_notify=int(raw_thresholds.get("apply_delay_notify", 7)),
         vehicle_weight_heavy=float(raw_thresholds.get("vehicle_weight_heavy", 3500)),
-        amount_repair_high=float(raw_thresholds.get("amount_repair_high", 300_000)),
-        amount_repair_bins=tuple(raw_thresholds.get("amount_repair_bins", [100_000, 300_000])),
+        amount_repair_high=float(raw_thresholds.get("amount_repair_high", 365_000)),
+        amount_repair_bins=tuple(raw_thresholds.get("amount_repair_bins", [120_000, 365_000])),
         insurance_amount_bins=tuple(raw_thresholds.get("insurance_amount_bins", [400_000, 1_000_000])),
         victim_loss_sum_bins=tuple(raw_thresholds.get("victim_loss_sum_bins", [50_000, 200_000])),
         kbm_low=float(raw_thresholds.get("kbm_low", 1.0)),
@@ -90,7 +90,7 @@ def load_feature_config(path: Path | None = None) -> FeatureConfig:
         t0_column=str(data.get("t0_column", "PAYMENT_ORDER_DATE_TIME")),
         thresholds=thresholds,
         vehicle_age_bins=tuple(data.get("vehicle_age_bins", [3, 7, 15])),
-        inflation_base_year=int(data.get("inflation_base_year", 2020)),
+        inflation_base_year=int(data.get("inflation_base_year", 2022)),
         dedup_target=str(dedup.get("target", "VICTIM_VEHICLE_TYPE_BY_CLASSIFICATOR")),
         dedup_sources=tuple(dedup.get("sources", FeatureConfig.dedup_sources)),
         fe_columns=tuple(data.get("fe_columns", [])),

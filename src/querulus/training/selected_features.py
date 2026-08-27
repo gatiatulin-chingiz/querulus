@@ -2,7 +2,7 @@
 
 ``PROD_*`` — фактический прод (для HTML «старая модель»).
 ``DEFAULT_*`` — пул ``features_source=selected`` (без FS); severity уже
-на ``FE_VALUE_BEFORE_WITHOUT_REAL_2020`` вместо номинала / AMOUNT_REPAIR.
+на ``FE_VALUE_BEFORE_WITHOUT_REAL_2022`` вместо номинала / AMOUNT_REPAIR.
 """
 
 from __future__ import annotations
@@ -35,5 +35,5 @@ DEFAULT_SEVERITY_FEATURES: tuple[str, ...] = (
     "LOSS_UNIT_ZONE",
     "VICTIM_VEHICLE_COUNTRY",
     "APPLY_DELAY",
-    "FE_VALUE_BEFORE_WITHOUT_REAL_2020",
+    "FE_VALUE_BEFORE_WITHOUT_REAL_2022",
 )

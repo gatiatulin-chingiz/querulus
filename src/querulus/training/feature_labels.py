@@ -58,9 +58,9 @@ RAW_FEATURE_RU: dict[str, str] = {
     "USED_AS_CARSH": "Использование как каршеринг",
     "DTPOSAGO_TYPE": "Тип ДТП ОСАГО",
     "DTPOSAGOType": "Тип ДТП ОСАГО",
-    "FE_VALUE_BEFORE_WITHOUT_REAL_2020": "Калькуляция без износа (руб. 2020)",
-    "FE_VALUE_BEFORE_WITH_REAL_2020": "Калькуляция с износом (руб. 2020)",
-    "FE_PREMIUM_SUM_ALL_REAL_2020": "Сумма премий (руб. 2020)",
+    "FE_VALUE_BEFORE_WITHOUT_REAL_2022": "Калькуляция без износа (руб. 2022)",
+    "FE_VALUE_BEFORE_WITH_REAL_2022": "Калькуляция с износом (руб. 2022)",
+    "FE_PREMIUM_SUM_ALL_REAL_2022": "Сумма премий (руб. 2022)",
 }
 
 _TOKEN_RU: dict[str, str] = {

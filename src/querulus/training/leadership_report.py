@@ -447,7 +447,7 @@ def _features_section(data: LeadershipReportData) -> str:
         {_kpi("Freq, старая", _int(len(old_freq)), "фиксированный прод-пул")}
         {_kpi("Freq, новая", n_new_f, "после FS / HPO")}
         {_kpi("Sev, старая", _int(len(old_sev)), "в т.ч. номинал AMOUNT_REPAIR")}
-        {_kpi("Sev, новая", n_new_s, "часто VALUE_BEFORE в ценах 2020")}
+        {_kpi("Sev, новая", n_new_s, "часто VALUE_BEFORE в ценах 2022")}
       </div>
       <table>
         <thead>
@@ -629,7 +629,7 @@ def render_leadership_html(data: LeadershipReportData | None = None) -> str:
     <div class="lead-box" id="summary">
       <strong>Главное.</strong>
       С июня 2026 моделирование вынесено из Litigant в Querulus: новые таргеты из судебных требований
-      и доплат, датасет по дате поручения на выплату с вызреванием, рублёвые фичи в ценах 2020,
+      и доплат, датасет по дате поручения на выплату с вызреванием, рублёвые фичи в ценах 2022,
       отбор фич и HPO, калибровка, единая формула финэффекта с покрытием планки.
       Решение «переходить ли на новую модель» — по блоку C2+ на holdout, а не по черновым метрикам блока A.
     </div>
@@ -672,7 +672,7 @@ def render_leadership_html(data: LeadershipReportData | None = None) -> str:
         </li>
         <li>
           <span class="when">Середина июля</span>
-          <span>Честный as-of: история претензий/судов на дату поручения, дефляция в цены 2020, person-фичи, отсев leakage. Сверка старых и новых меток. Три стека: legacy / new / new_claims.</span>
+          <span>Честный as-of: история претензий/судов на дату поручения, дефляция в цены 2022, person-фичи, отсев leakage. Сверка старых и новых меток. Три стека: legacy / new / new_claims.</span>
         </li>
         <li>
           <span class="when">Конец июля — август</span>
@@ -717,7 +717,7 @@ def render_leadership_html(data: LeadershipReportData | None = None) -> str:
           <tr><td class="topic">Зерно</td><td>Инцидент; TARGET_2 на событие</td><td>Одна строка на инцидент; первичный убыток = min LOSS_NUMBER</td></tr>
           <tr><td class="topic">Фильтр дат</td><td>LOSS_DATE_TIME с 2022</td><td>PAYMENT_ORDER_DATE_TIME с 2020, верхняя граница по вызреванию</td></tr>
           <tr><td class="topic">Вызревание</td><td>Неявное / по дате убытка</td><td>Поручение + H месяцев ≤ дата среза; без «Не принято» по иску</td></tr>
-          <tr><td class="topic">Деньги в фичах</td><td>Номинальные рубли</td><td>ИПЦ Росстата → *_REAL_2020</td></tr>
+          <tr><td class="topic">Деньги в фичах</td><td>Номинальные рубли</td><td>ИПЦ Росстата → *_REAL_2022</td></tr>
         </tbody>
       </table>
     </section>

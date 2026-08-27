@@ -11,11 +11,13 @@ from typing import Mapping
 import numpy as np
 import pandas as pd
 
-# Базис для «реальных» рублей (можно сменить в FeatureConfig / ноутбуке).
-INFLATION_BASE_YEAR: int = 2020
+# Базис для «реальных» рублей (совпадает с началом train_period).
+# Меняется также в FeatureConfig / features_v1.json.
+INFLATION_BASE_YEAR: int = 2022
 
-# Уровень цен к декабрю 2020 (=1.0): цепочка ИПЦ «к декабрю предыдущего года»
-# из Росстата, файл ipc_mes_06-2026.xlsx, лист «01»
+# Уровни цен из Росстата (цепочка Dec/Dec), в файле нормированы к дек.2020=1.0.
+# ``cpi_level_for_years`` дополнительно нормирует к ``INFLATION_BASE_YEAR`` (=1.0).
+# Источник: ipc_mes_06-2026.xlsx, лист «01»
 # (https://rosstat.gov.ru/storage/mediabank/ipc_mes_06-2026.xlsx).
 # Для 2026 в файле — накопленный ИПЦ янв–июнь к дек. 2025 (сноска).
 RU_CPI_LEVEL_VS_BASE: dict[int, float] = {

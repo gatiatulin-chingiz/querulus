@@ -95,7 +95,7 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': [],
              'LONGITUDE',
              'LATITUDE',
              'Выплаченный_износ_инцидент',
-             # VALUE_BEFORE_* / PREMIUM / person-pret суммы — номинал; в модели *_REAL_2020
+             # VALUE_BEFORE_* / PREMIUM / person-pret суммы — номинал; в модели *_REAL_2022
              'VALUE_BEFORE_WITH',
              'VALUE_BEFORE_WITHOUT',
              'PREMIUM_SUM_ALL',
