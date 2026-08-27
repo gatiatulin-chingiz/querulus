@@ -341,6 +341,7 @@ def load_df_final(
         ``(df, source)``, где ``source`` — ``hive:<table>`` или ``parquet:<path>``.
     """
     path = Path(parquet_path)
+    hive_error: str | None = None
     if prefer_hive:
         try:
             pdf = hive_table_to_pandas(
@@ -351,18 +352,18 @@ def load_df_final(
             )
             source = f"hive:{hive_table}"
             logger.info("dataset source=%s shape=%s", source, pdf.shape)
-            print(f"[dataset] source={source} shape={pdf.shape}")
+            print("=" * 72)
+            print("ИСТОЧНИК ДАТАСЕТА: Hive (Hadoop)")
+            print(f"  таблица: {hive_table}")
+            print(f"  shape:   {pdf.shape}")
+            print("=" * 72)
             return pdf, source
         except Exception as exc:  # noqa: BLE001 — любой сбой Hive/Spark → parquet
-            msg = f"{type(exc).__name__}: {exc}"
+            hive_error = f"{type(exc).__name__}: {exc}"
             logger.warning(
                 "Hive недоступен (%s) — fallback на parquet: %s",
-                msg.splitlines()[0][:200],
+                hive_error.splitlines()[0][:200],
                 path,
-            )
-            print(
-                f"[dataset] Hive failed ({type(exc).__name__}) → fallback parquet\n"
-                f"  detail: {msg.splitlines()[0][:240]}"
             )
 
     if not path.is_file():
@@ -372,7 +373,17 @@ def load_df_final(
     pdf = pd.read_parquet(path)
     source = f"parquet:{path}"
     logger.info("dataset source=%s shape=%s", source, pdf.shape)
-    print(f"[dataset] source={source} shape={pdf.shape}")
+    print("=" * 72)
+    if hive_error is not None:
+        print("ИСТОЧНИК ДАТАСЕТА: локальный parquet (Hive недоступен)")
+        print(f"  причина: {hive_error.splitlines()[0][:240]}")
+    elif prefer_hive:
+        print("ИСТОЧНИК ДАТАСЕТА: локальный parquet")
+    else:
+        print("ИСТОЧНИК ДАТАСЕТА: локальный parquet (Hive не запрашивался)")
+    print(f"  файл:  {path}")
+    print(f"  shape: {pdf.shape}")
+    print("=" * 72)
     return pdf, source
 
 

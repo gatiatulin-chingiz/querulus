@@ -71,3 +71,7 @@ src/querulus/dataset/sql/
 **/CHANGELOG.md
 **/REPORT*.md
 **/REPORT_*.md
+
+# Локальные HTML-отчёты (не в git)
+notebooks/pi_estimate_querulus.html
+**/pi_estimate_querulus.html
