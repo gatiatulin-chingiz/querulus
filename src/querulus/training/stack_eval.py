@@ -8,8 +8,11 @@ import pandas as pd
 from sklearn.metrics import (
     average_precision_score,
     f1_score,
+    mean_absolute_error,
     precision_score,
+    r2_score,
     recall_score,
+    roc_auc_score,
 )
 
 from querulus.fin_effect.calculator import add_premiums_column
@@ -30,10 +33,11 @@ _STACKS = (
 
 @dataclass(frozen=True)
 class StackEvalReport:
-    """Сверка меток, freq-метрики, покрытие (новая классификация) и доля планки."""
+    """Сверка меток, freq/sev-метрики, покрытие (новая классификация) и доля планки."""
 
     label_agreement: pd.DataFrame
     frequency_metrics: pd.DataFrame
+    severity_metrics: pd.DataFrame
     coverage: pd.DataFrame
     pred_freq_disagree: pd.DataFrame
     coverage_share: pd.DataFrame
@@ -100,6 +104,19 @@ def _stack_predictions(
     return proba, pred_freq, pred_sev
 
 
+def _gini(y_true: np.ndarray, proba: np.ndarray) -> float:
+    """Gini из ModelDiagnostics, иначе 2·ROC-AUC − 1."""
+    try:
+        from modeldiagnostics.src.gini import Gini
+
+        return float(Gini(y_true, proba))
+    except Exception:  # noqa: BLE001
+        try:
+            return float(2.0 * roc_auc_score(y_true, proba) - 1.0)
+        except ValueError:
+            return float("nan")
+
+
 def _freq_metrics_row(
     stack: str,
     y_true: pd.Series,
@@ -108,23 +125,64 @@ def _freq_metrics_row(
     *,
     split_label: str = "test",
 ) -> dict[str, object]:
-    """PR-AUC и метрики при пороге 0.5."""
+    """PR-AUC, ROC-AUC, Gini, shift (= pred+/fact+) при пороге 0.5."""
     y = y_true.astype(int)
+    y_np = y.to_numpy()
+    proba_np = np.asarray(proba, dtype=float)
     p = pred.astype(int)
+    fact_pos = float(y_np.sum())
     try:
-        pr_auc = float(average_precision_score(y, proba))
+        pr_auc = float(average_precision_score(y_np, proba_np))
     except ValueError:
         pr_auc = float("nan")
+    try:
+        roc_auc = float(roc_auc_score(y_np, proba_np))
+    except ValueError:
+        roc_auc = float("nan")
     return {
         "stack": stack,
         "split": split_label,
         "y_true": y.name,
         "n": int(len(y)),
         "pr_auc": pr_auc,
+        "roc_auc": roc_auc,
+        "gini": _gini(y_np, proba_np),
+        "shift": float(p.sum() / fact_pos) if fact_pos > 0 else float("nan"),
         "precision": float(precision_score(y, p, zero_division=0)),
         "recall": float(recall_score(y, p, zero_division=0)),
         "f1": float(f1_score(y, p, zero_division=0)),
         "threshold": FREQ_THRESHOLD,
+    }
+
+
+def _sev_metrics_row(
+    stack: str,
+    y_true: pd.Series,
+    y_pred: pd.Series,
+    *,
+    split_label: str = "test",
+) -> dict[str, object]:
+    """MAE, RMSE, R², shift (= Σpred / Σfact) на том же holdout."""
+    yt = np.asarray(y_true, dtype=float)
+    yp = np.asarray(y_pred, dtype=float)
+    mask = np.isfinite(yt) & np.isfinite(yp)
+    yt, yp = yt[mask], yp[mask]
+    n = int(len(yt))
+    fact_sum = float(np.nansum(yt))
+    try:
+        r2 = float(r2_score(yt, yp)) if n > 1 else float("nan")
+    except ValueError:
+        r2 = float("nan")
+    err = yp - yt
+    return {
+        "stack": stack,
+        "split": split_label,
+        "y_true": y_true.name,
+        "n": n,
+        "mae": float(mean_absolute_error(yt, yp)) if n else float("nan"),
+        "rmse": float(np.sqrt(np.mean(err**2))) if n else float("nan"),
+        "r2": r2,
+        "shift": float(np.nansum(yp) / fact_sum) if fact_sum > 0 else float("nan"),
     }
 
 
@@ -426,7 +484,7 @@ def evaluate_legacy_vs_new(
     Покрытие обеих регрессий — на ``pred_freq`` new. ``index`` — явный holdout
     (после B: ``splits.test``), иначе пересечение ``frequency_split.x_test``.
     """
-    for col in ("TARGET_2", "TARGET_FREQ", _SEV_COL, _PSR_COL):
+    for col in ("TARGET_2", "TARGET_FREQ", "TARGET_3_SEV", _SEV_COL, _PSR_COL):
         if col not in df.columns:
             raise KeyError(f"Для сравнения нужна колонка {col}")
 
@@ -508,9 +566,21 @@ def evaluate_legacy_vs_new(
         one_one,
     )
     pred_freq_disagree = _pred_freq_disagree_table(pred_l, pred_freq_new)
+
+    y_3 = holdout["TARGET_3_SEV"].fillna(0) if "TARGET_3_SEV" in holdout.columns else target_sev
+    y_3.name = "TARGET_3_SEV"
+    y_sev = target_sev.copy()
+    y_sev.name = "TARGET_SEV"
+    sev_rows = [
+        _sev_metrics_row("legacy", y_3, pred_sev_legacy, split_label="test"),
+        _sev_metrics_row("legacy @ TARGET_SEV", y_sev, pred_sev_legacy, split_label="test"),
+        _sev_metrics_row("new", y_sev, pred_sev_new, split_label="test"),
+    ]
+
     return StackEvalReport(
         label_agreement=agreement,
         frequency_metrics=pd.DataFrame(freq_rows),
+        severity_metrics=pd.DataFrame(sev_rows),
         coverage=pd.concat(cov_parts, ignore_index=True),
         pred_freq_disagree=pred_freq_disagree,
         coverage_share=coverage_share,
