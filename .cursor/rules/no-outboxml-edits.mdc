@@ -1,0 +1,25 @@
+---
+description: Не изменять код библиотеки OutBoxML — только Querulus
+alwaysApply: true
+---
+
+# OutBoxML — внешняя зависимость
+
+Querulus живёт в `examples/querulus/`. Библиотека OutBoxML — в корне монорепозитория (`outboxml/`, `docs/` для библиотеки).
+
+## Запрещено
+
+- Редактировать файлы в `outboxml/**` и корневой `docs/CHANGELOG.md` библиотеки.
+- Предлагать патчи в OutBoxML вместо обхода в Querulus.
+
+## Разрешено и ожидается
+
+- Исправления, обходы и расширения — только в `examples/querulus/**` (`src/querulus/`, `notebooks/`, `configs/`, `integration/`, `monitoring/`).
+- Если поведение OutBoxML не подходит: subclass, wrapper или helper в `src/querulus/` (см. `training/email_report.py`).
+
+## Пример
+
+```python
+# ❌ Править outboxml/core/email.py
+# ✅ from querulus.training.email_report import QuerulusEMailDSResult
+```
