@@ -231,6 +231,87 @@ def enrich_dsm_model_metrics(
     return table
 
 
+def metrics_bundle_on_index(
+    dsm: Any,
+    model_name: str,
+    df: pd.DataFrame,
+    index: pd.Index,
+    *,
+    task_type: TaskKind,
+    ignore_row_filter: bool = False,
+) -> tuple[dict[str, float], int]:
+    """Collect-style метрики на произвольном index (модель уже обучена)."""
+    result = dsm.get_result()[model_name]
+    target = result.model_config.column_target
+    preds = predict_dsm_series(
+        dsm,
+        model_name,
+        df.loc[index],
+        task_type=task_type,
+        ignore_row_filter=ignore_row_filter,
+    )
+    y_true = df.loc[preds.index, target]
+    bundle = collect_style_metrics_bundle(
+        y_true, preds.to_numpy(), task_type=task_type
+    )
+    return bundle, int(len(preds))
+
+
+def display_dsm_collect_metrics_cross_test(
+    dsm: Any,
+    model_name: str,
+    df: pd.DataFrame,
+    *,
+    test_slices: dict[str, pd.Index],
+    task_type: TaskKind,
+    title: str | None = None,
+    ignore_row_filter: bool = False,
+) -> pd.DataFrame:
+    """Одна модель (parity train): метрики train + несколько test-срезов."""
+    from IPython.display import Markdown, display
+
+    result = dsm.get_result()[model_name]
+    result.model = ensure_predictable_model(result.model)
+    estimator = unwrap_estimator(result.model)
+    subset = result.data_subset
+
+    bundles: dict[str, dict[str, float]] = {}
+    counts: dict[str, int] = {}
+
+    train_scores = _predict_scores(estimator, subset.X_train, task_type=task_type)
+    bundles["train"] = collect_style_metrics_bundle(
+        subset.y_train, train_scores, task_type=task_type
+    )
+    counts["train"] = int(len(subset.y_train))
+
+    for slice_name, index in test_slices.items():
+        bundle, n_rows = metrics_bundle_on_index(
+            dsm,
+            model_name,
+            df,
+            index,
+            task_type=task_type,
+            ignore_row_filter=ignore_row_filter,
+        )
+        bundles[slice_name] = bundle
+        counts[slice_name] = n_rows
+
+    table = _model_metrics_table(bundles)
+    if "metric" in table.columns:
+        table = table.loc[table["metric"].astype(str) != "ece"].reset_index(drop=True)
+
+    label = title or f"{model_name} ({task_type}) cross-test"
+    display(Markdown(f"### Метрики collect-style: {label}"))
+    display(
+        Markdown(
+            "Строки после фильтра модели (severity: `TARGET_SEV > 0`): "
+            + ", ".join(f"**{name}**={counts[name]:,}" for name in bundles)
+        )
+    )
+    display(format_metrics_table(table))
+    return table
+
+
 def display_dsm_collect_metrics(
     dsm: Any,
     model_name: str,
@@ -242,8 +323,7 @@ def display_dsm_collect_metrics(
     from IPython.display import Markdown, display
 
     table = enrich_dsm_model_metrics(dsm, model_name, task_type=task_type)
-    # ECE из ModelDiagnostics — не калибратор; к тому же MD считает его с багом (~0).
-    # В таблице example не показываем, чтобы не путать с isotonic.
+    # ECE в example/collect-style таблицах не показываем (prod без калибровки).
     if "metric" in table.columns:
         table = table.loc[table["metric"].astype(str) != "ece"].reset_index(drop=True)
     label = title or f"{model_name} ({task_type})"

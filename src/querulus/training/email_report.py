@@ -68,6 +68,9 @@ class QuerulusEMailDSResult(EMailDSResult):
                 df2.columns = [ResultNames.metric, ResultNames.new_result_test]
 
                 metrics_df = pd.concat([df1, df2["Новая модель||Тестовая выборка"]], axis=1)
+                metrics_df = metrics_df.loc[
+                    metrics_df[ResultNames.metric].astype(str).str.lower() != "ece"
+                ].reset_index(drop=True)
                 metrics_df["Имя модели"] = key
                 df = pd.concat([df, metrics_df])
             except Exception as exc:

@@ -494,6 +494,7 @@ def compute_period_windows(
         "prod_test_period": prod_test_period,
         "prod_cutoff": _fmt(cutoff),
         "prod_cal_fraction": float(prod_cal_fraction),
+        "prod_holdout_idx": prod_cal_idx,
         "splits": splits,
         "windows": windows,
         "table": pd.DataFrame([w.__dict__ for w in windows]),
