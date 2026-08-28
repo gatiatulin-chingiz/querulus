@@ -19,6 +19,20 @@ DEFAULT_BINARY_TARGETS: frozenset[str] = frozenset(
     {"TARGET", "TARGET_2", "TARGET_FREQ", "TARGET_FREQ_CLAIMS"}
 )
 
+# Вес для exact_match_pct_by_amount: сумма колонок; () — вес = max(|ref|, |cnd|).
+TARGET_AMOUNT_WEIGHT_COLS: dict[str, tuple[str, ...]] = {
+    "TARGET_2": (
+        "Сумма_выплат_по_претензиям",
+        "Сумма_взыскано_по_ФУ",
+        "Суммы_взыскано_по_иску",
+    ),
+    "TARGET_FREQ": ("TARGET_FREQ_AMOUNT",),
+    "TARGET_FREQ_CLAIMS": ("TARGET_FREQ_CLAIMS_AMOUNT",),
+    "TARGET_3_SEV": (),
+    "TARGET_SEV": (),
+    "TARGET_SEV_CLAIMS": ("TARGET_SEV_CLAIMS_AMOUNT",),
+}
+
 # Слагаемые в top_*: только листовые суммы (без pivot RECOVERED*_1..5).
 # TARGET_3_SEV — last-nonzero по pivot, аддитивных слагаемых нет.
 TARGET_COMPONENTS: dict[str, tuple[str, ...]] = {
@@ -66,6 +80,65 @@ class TargetComparisonSuite:
 
     litigant: TargetComparisonResult | None
     old_vs_new: TargetComparisonResult
+
+
+def _amount_weight_from_frame(
+    df: pd.DataFrame,
+    keys: pd.Series,
+    target_col: str,
+    *,
+    key: str = "INCIDENT_NUMBER",
+    out_index: pd.Index | None = None,
+) -> pd.Series | None:
+    """Вес по сумме для target_col, выровненный по порядку keys → out_index."""
+    specs = TARGET_AMOUNT_WEIGHT_COLS.get(target_col)
+    if specs is None:
+        specs = ()
+    if key not in df.columns:
+        return None
+    work = df.drop_duplicates(key).set_index(key)
+    cols = [c for c in specs if c in work.columns]
+    if not cols and "TARGET_FREQ_AMOUNT" in work.columns:
+        cols = ["TARGET_FREQ_AMOUNT"]
+    if not cols:
+        return None
+    weight = None
+    for col in cols:
+        part = pd.to_numeric(work[col], errors="coerce").fillna(0.0).abs()
+        weight = part if weight is None else weight.add(part, fill_value=0.0)
+    assert weight is not None
+    values = weight.reindex(pd.Index(keys.to_numpy())).fillna(0.0).to_numpy(dtype=float)
+    return pd.Series(values, index=out_index if out_index is not None else keys.index)
+
+
+def _pair_amount_weights(
+    both: pd.DataFrame,
+    *,
+    key: str,
+    col_ref: str,
+    col_cnd: str,
+    a: pd.Series,
+    b: pd.Series,
+    is_binary: bool,
+    df_reference: pd.DataFrame,
+    df_candidate: pd.DataFrame,
+) -> pd.Series:
+    """Веса строк для % совпадения по суммам (приоритет candidate → reference → |a|,|b|)."""
+    keys = both[key]
+    w_cnd = _amount_weight_from_frame(
+        df_candidate, keys, col_cnd, key=key, out_index=both.index
+    )
+    w_ref = _amount_weight_from_frame(
+        df_reference, keys, col_ref, key=key, out_index=both.index
+    )
+    if w_cnd is not None and float(w_cnd.sum()) > 0:
+        return w_cnd
+    if w_ref is not None and float(w_ref.sum()) > 0:
+        return w_ref
+    if not is_binary:
+        return pd.concat([a.abs().fillna(0.0), b.abs().fillna(0.0)], axis=1).max(axis=1)
+    # binary без amount-колонок: равные веса → совпадает с % по строкам
+    return pd.Series(1.0, index=both.index)
 
 
 def compare_target_pairs(
@@ -145,6 +218,26 @@ def compare_target_pairs(
             denom = b.abs().clip(lower=1.0)
             pct_ok = both_nan | ((a.sub(b).abs() / denom) <= float_pct_threshold)
 
+        weights = _pair_amount_weights(
+            both,
+            key=key,
+            col_ref=col_ref,
+            col_cnd=col_cnd,
+            a=a.astype(float) if not is_binary else a.astype(float),
+            b=b.astype(float) if not is_binary else b.astype(float),
+            is_binary=is_binary,
+            df_reference=ref,
+            df_candidate=df_candidate,
+        )
+        w_sum = float(weights.sum())
+        if w_sum > 0:
+            match_by_amount = round(
+                100.0 * float(weights[exact].sum() / w_sum),
+                2,
+            )
+        else:
+            match_by_amount = None
+
         pair_masks[pair_label] = exact
         n = len(both)
         report_rows.append(
@@ -156,6 +249,7 @@ def compare_target_pairs(
                 "common_n": n,
                 "exact_match_n": int(exact.sum()),
                 "exact_match_pct": round(100 * float(exact.mean()), 4),
+                "exact_match_pct_by_amount": match_by_amount,
                 "mismatch_n": int((~exact).sum()),
                 "mismatch_pct": round(100 * (1 - float(exact.mean())), 4),
                 "pct_match_at_threshold": None
@@ -166,6 +260,8 @@ def compare_target_pairs(
         if not quiet:
             print(f"--- {pair_label} ({'binary' if is_binary else 'float'}) ---")
             print(f"  точное совпадение: {int(exact.sum()):,} / {n:,} ({100 * exact.mean():.2f}%)")
+            if match_by_amount is not None:
+                print(f"  совпадение по суммам: {match_by_amount:.2f}%")
             print(f"  расхождения:       {int((~exact).sum()):,} ({100 * (1 - exact.mean()):.2f}%)")
             if not is_binary:
                 print(f"  ≤{float_pct_threshold:.0%} от candidate: {100 * pct_ok.mean():.2f}%")

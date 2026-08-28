@@ -259,22 +259,51 @@ def _holdout(data: LeadershipReportData) -> pd.DataFrame | None:
     return data.df
 
 
-def _match_binary(frame: pd.DataFrame, left: str, right: str) -> tuple[int | None, float | None]:
+def _match_binary(frame: pd.DataFrame, left: str, right: str) -> tuple[int | None, float | None, float | None]:
     if left not in frame.columns or right not in frame.columns:
-        return None, None
+        return None, None, None
     a = pd.to_numeric(frame[left], errors="coerce").fillna(0).astype(int)
     b = pd.to_numeric(frame[right], errors="coerce").fillna(0).astype(int)
     n = int(len(frame))
-    return n, float((a == b).mean()) if n else None
+    if n == 0:
+        return 0, None, None
+    exact = a == b
+    row_pct = float(exact.mean())
+    if "TARGET_FREQ_AMOUNT" in frame.columns:
+        weights = pd.to_numeric(frame["TARGET_FREQ_AMOUNT"], errors="coerce").fillna(0).abs()
+    else:
+        legacy_cols = [
+            c
+            for c in (
+                "Сумма_выплат_по_претензиям",
+                "Сумма_взыскано_по_ФУ",
+                "Суммы_взыскано_по_иску",
+            )
+            if c in frame.columns
+        ]
+        if legacy_cols:
+            weights = frame[legacy_cols].apply(pd.to_numeric, errors="coerce").fillna(0).abs().sum(axis=1)
+        else:
+            weights = pd.Series(1.0, index=frame.index)
+    w_sum = float(weights.sum())
+    amt_pct = float(weights[exact].sum() / w_sum) if w_sum > 0 else None
+    return n, row_pct, amt_pct
 
 
-def _match_float(frame: pd.DataFrame, left: str, right: str) -> tuple[int | None, float | None]:
+def _match_float(frame: pd.DataFrame, left: str, right: str) -> tuple[int | None, float | None, float | None]:
     if left not in frame.columns or right not in frame.columns:
-        return None, None
+        return None, None, None
     a = pd.to_numeric(frame[left], errors="coerce").fillna(0)
     b = pd.to_numeric(frame[right], errors="coerce").fillna(0)
     n = int(len(frame))
-    return n, float(((a - b).abs() <= 1e-6).mean()) if n else None
+    if n == 0:
+        return 0, None, None
+    exact = (a - b).abs() <= 1e-6
+    row_pct = float(exact.mean())
+    weights = pd.concat([a.abs(), b.abs()], axis=1).max(axis=1)
+    w_sum = float(weights.sum())
+    amt_pct = float(weights[exact].sum() / w_sum) if w_sum > 0 else None
+    return n, row_pct, amt_pct
 
 
 def _status_pills(data: LeadershipReportData) -> str:
@@ -333,10 +362,10 @@ def _split_table(data: LeadershipReportData) -> str:
 
 def _targets_section(data: LeadershipReportData) -> str:
     holdout = _holdout(data)
-    n_freq = pct_freq = n_sev = pct_sev = None
+    n_freq = pct_freq = pct_freq_amt = n_sev = pct_sev = pct_sev_amt = None
     if holdout is not None:
-        n_freq, pct_freq = _match_binary(holdout, "TARGET_2", "TARGET_FREQ")
-        n_sev, pct_sev = _match_float(holdout, "TARGET_3_SEV", "TARGET_SEV")
+        n_freq, pct_freq, pct_freq_amt = _match_binary(holdout, "TARGET_2", "TARGET_FREQ")
+        n_sev, pct_sev, pct_sev_amt = _match_float(holdout, "TARGET_3_SEV", "TARGET_SEV")
     return f"""
       <table>
         <thead>
@@ -360,7 +389,11 @@ def _targets_section(data: LeadershipReportData) -> str:
               <code>Datamart.oisuu81_t_IncomingClaimNewLogicByInst</code>
               + <code>dbo.oisuu81_t_Pretensions</code>
             </td>
-            <td class="num">{_pct(pct_freq, 2)}<br/><span class="pending">n={_int(n_freq)}</span></td>
+            <td class="num">
+              по строкам: {_pct(pct_freq, 2)}<br/>
+              по суммам: {_pct(pct_freq_amt, 2)}<br/>
+              <span class="pending">n={_int(n_freq)}</span>
+            </td>
           </tr>
           <tr>
             <td class="topic">Severity</td>
@@ -372,10 +405,19 @@ def _targets_section(data: LeadershipReportData) -> str:
               <code>TARGET_SEV</code> = сумма (ОД + УТС + износ) на последней принятой инстанции + доплаты претензий<br/>
               та же таблица исков, инстанция по <code>ClaimedValuePeriod</code>
             </td>
-            <td class="num">{_pct(pct_sev, 2)}<br/><span class="pending">n={_int(n_sev)}</span></td>
+            <td class="num">
+              по строкам: {_pct(pct_sev, 2)}<br/>
+              по суммам: {_pct(pct_sev_amt, 2)}<br/>
+              <span class="pending">n={_int(n_sev)}</span>
+            </td>
           </tr>
         </tbody>
       </table>
+      <p>
+        Совпадение по строкам — доля инцидентов с равными метками/значениями.
+        Совпадение по суммам — доля веса <code>TARGET_FREQ_AMOUNT</code> (frequency)
+        или max(|старое|, |новое|) (severity), на которой метки/значения совпали.
+      </p>
       <p>
         <code>TARGET_3_SEV</code> и <code>TARGET_SEV</code> — одни компоненты (ОД + УТС + износ), но считаются иначе:
         в старой берётся последнее ненулевое значение по слотам инстанций 1…5;
@@ -427,13 +469,19 @@ def _overlap_section(data: LeadershipReportData) -> str:
     labels = None if eval_report is None else eval_report.label_agreement
     disagree = None if eval_report is None else eval_report.pred_freq_disagree
     share = None if eval_report is None else eval_report.coverage_share
-    label_cols = ("pair", "common_n", "exact_match_n", "exact_match_pct")
+    label_cols = (
+        "pair",
+        "common_n",
+        "exact_match_n",
+        "exact_match_pct",
+        "exact_match_pct_by_amount",
+    )
     return f"""
       <h3>TARGET_2 vs TARGET_FREQ</h3>
       {_df_html(
           labels,
           columns=label_cols,
-          pct100_cols=("exact_match_pct",),
+          pct100_cols=("exact_match_pct", "exact_match_pct_by_amount"),
           empty="нужен C2+",
       )}
       <h3>pred_freq old vs new</h3>
