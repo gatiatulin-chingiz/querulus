@@ -22,7 +22,6 @@ from querulus.training.pipeline import TrainingArtifacts, frequency_predict_prob
 from querulus.training.severity_training import severity_predict
 from querulus.training.target_compare import compare_old_vs_new_targets
 
-FREQ_THRESHOLD = 0.5
 _PSR_COL = "TARGET_FREQ_AMOUNT"
 _SEV_COL = "TARGET_SEV"
 _STACKS = (
@@ -76,19 +75,26 @@ def _holdout_index(
     )
 
 
+def _classification_threshold(training: TrainingArtifacts) -> float:
+    from querulus.fin_effect.threshold_policy import resolve_val_threshold
+
+    return resolve_val_threshold(training)
+
+
 def _stack_predictions(
     training: TrainingArtifacts,
     df: pd.DataFrame,
     index: pd.Index,
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
-    """proba, pred_freq (порог 0.5), pred_sev на index."""
+    """proba, pred_freq (порог Val), pred_sev на index."""
+    thr = _classification_threshold(training)
     feats = _predict_features(training, df, index)
     proba = pd.Series(
         frequency_predict_proba(training, feats[training.frequency_features]),
         index=index,
         dtype=float,
     )
-    pred_freq = (proba >= FREQ_THRESHOLD).astype(int)
+    pred_freq = (proba >= thr).astype(int)
     sev_raw = severity_predict(
         training.severity_model,
         feats[training.severity_features],
@@ -124,8 +130,9 @@ def _freq_metrics_row(
     pred: pd.Series,
     *,
     split_label: str = "test",
+    threshold: float,
 ) -> dict[str, object]:
-    """PR-AUC, ROC-AUC, Gini, shift (= pred+/fact+) при пороге 0.5."""
+    """PR-AUC, ROC-AUC, Gini, shift (= pred+/fact+) при пороге с Val."""
     y = y_true.astype(int)
     y_np = y.to_numpy()
     proba_np = np.asarray(proba, dtype=float)
@@ -151,7 +158,7 @@ def _freq_metrics_row(
         "precision": float(precision_score(y, p, zero_division=0)),
         "recall": float(recall_score(y, p, zero_division=0)),
         "f1": float(f1_score(y, p, zero_division=0)),
-        "threshold": FREQ_THRESHOLD,
+        "threshold": threshold,
     }
 
 
@@ -410,7 +417,8 @@ def _retrain_freq_on_target(
         index=eval_index,
         dtype=float,
     )
-    pred = (proba >= FREQ_THRESHOLD).astype(int)
+    thr = _classification_threshold(training)
+    pred = (proba >= thr).astype(int)
     return proba, pred
 
 
@@ -434,7 +442,9 @@ def score_stack_on_index(
     proba, pred_freq, pred_sev = _stack_predictions(training, df, index)
     y_true = holdout[freq_target].fillna(0).astype(int)
     y_true.name = freq_target
-    freq_row = _freq_metrics_row(stack, y_true, proba, pred_freq)
+    freq_row = _freq_metrics_row(
+        stack, y_true, proba, pred_freq, threshold=_classification_threshold(training)
+    )
     coverage = _coverage_table(
         stack,
         y_true,
@@ -509,8 +519,16 @@ def evaluate_legacy_vs_new(
             proba, pred_freq, _ = _stack_predictions(trainings[stack], df, eval_index)
             y_true = part[y_col].fillna(0).astype(int)
             y_true.name = y_col
+            thr = _classification_threshold(trainings[stack])
             freq_rows.append(
-                _freq_metrics_row(stack, y_true, proba, pred_freq, split_label=split_label)
+                _freq_metrics_row(
+                    stack,
+                    y_true,
+                    proba,
+                    pred_freq,
+                    split_label=split_label,
+                    threshold=thr,
+                )
             )
 
     _append_stack_rows(index, "test", ("legacy", "new"))
@@ -531,6 +549,7 @@ def evaluate_legacy_vs_new(
     proba_re, pred_re = _retrain_freq_on_target(
         df, legacy, target_column="TARGET_FREQ", eval_index=index
     )
+    thr_legacy = _classification_threshold(legacy)
     freq_rows.insert(
         1,
         _freq_metrics_row(
@@ -539,6 +558,7 @@ def evaluate_legacy_vs_new(
             proba_re,
             pred_re,
             split_label="test",
+            threshold=thr_legacy,
         ),
     )
 

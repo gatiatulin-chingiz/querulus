@@ -269,12 +269,13 @@ def compare_calibrator_ab(
     y_true_freq: pd.Series | np.ndarray,
     *,
     config: Any | None = None,
+    val_threshold: float | None = None,
     title: str | None = None,
     print_summary: bool = True,
 ) -> CalibratorAbResult:
     """Сравнить raw vs cal: ECE + порог + финэффект на той же шкале proba.
 
-    Порог для каждой ветки ищется заново на её вероятностях (``threshold=None``).
+    Порог — один с Val (``val_threshold`` или подбор на ``effect_index`` по raw proba).
     """
     from querulus.fin_effect.calculator import run_fin_effect_pipeline
     from querulus.fin_effect.config import FinEffectConfig
@@ -304,12 +305,23 @@ def compare_calibrator_ab(
         threshold=None,
         config=cfg,
     )
+    if val_threshold is None:
+        val_threshold = float(fe_raw.best_threshold)
+    thr = float(val_threshold)
+    fe_raw = run_fin_effect_pipeline(
+        aligned,
+        proba_raw_s,
+        sev_s,
+        y_s,
+        threshold=thr,
+        config=cfg,
+    )
     fe_cal = run_fin_effect_pipeline(
         aligned,
         proba_cal_s,
         sev_s,
         y_s,
-        threshold=None,
+        threshold=thr,
         config=cfg,
     )
 
@@ -318,12 +330,12 @@ def compare_calibrator_ab(
         ("raw", proba_raw_s, fe_raw),
         ("cal", proba_cal_s, fe_cal),
     ):
-        pred = (proba.to_numpy(dtype=float) >= float(fe.best_threshold)).astype(int)
+        pred = (proba.to_numpy(dtype=float) >= thr).astype(int)
         rows.append(
             {
                 "branch": name,
                 "ece": expected_calibration_error(y_s, proba, strategy="equal_mass"),
-                "best_threshold": float(fe.best_threshold),
+                "best_threshold": thr,
                 "net_effect": float(fe.net_effect),
                 "model_effect": float(fe.model_effect_total),
                 "fact_effect": float(fe.fact_effect_total),

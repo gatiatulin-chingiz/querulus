@@ -227,11 +227,17 @@ def run_triple_fin_effects(
     stacks: Iterable[tuple[str, str, str]] = TARGET_STACKS,
 ) -> tuple[dict[str, FinEffectResult], pd.DataFrame]:
     """Фин. эффект по каждому стеку + одна сводная таблица."""
+    from querulus.fin_effect.threshold_policy import (
+        pick_threshold_on_val_from_training,
+        resolve_val_threshold,
+    )
+
     results: dict[str, FinEffectResult] = {}
     rows: list[dict[str, object]] = []
     for stack_name, freq_target, sev_target in stacks:
         if stack_name not in trainings:
             continue
+        training = trainings[stack_name]
         cfg = resolve_fin_effect_config(
             df,
             frequency_target=freq_target,
@@ -239,10 +245,24 @@ def run_triple_fin_effects(
             loaded_from_checkpoint=loaded_from_checkpoint,
             legacy_dataset=legacy_dataset,
         )
+        if training.val_threshold is not None:
+            thr = resolve_val_threshold(training)
+        elif training.frequency_split is not None and training.frequency_split.has_val:
+            thr = pick_threshold_on_val_from_training(
+                df,
+                training,
+                training.frequency_split.x_val.index,
+                config=cfg,
+            ).threshold
+        else:
+            raise ValueError(
+                f"stack {stack_name}: нет val_threshold и Val split для подбора порога"
+            )
         result = run_fin_effect_from_training(
             df,
-            trainings[stack_name],
+            training,
             split=split,
+            threshold=thr,
             config=cfg,
         )
         results[stack_name] = result
@@ -257,7 +277,7 @@ def run_triple_fin_effects(
                     if cfg.uses_legacy_psr_fact
                     else cfg.fact_amount_column
                 ),
-                "best_threshold": result.best_threshold,
+                "best_threshold": thr,
                 "fact_effect": result.fact_effect_total,
                 "model_effect": result.model_effect_total,
                 "net_effect": result.net_effect,

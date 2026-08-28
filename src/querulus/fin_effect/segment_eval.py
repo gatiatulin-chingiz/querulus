@@ -213,6 +213,9 @@ def compare_severity_fin_effect_variants(
     """Обучить raw / log1p / weighted severity и сравнить fin-effect + MAE."""
     training_config = training_config or TrainingConfig()
     effect_index, _ = _effect_index_and_freq(training, split)
+    from querulus.fin_effect.threshold_policy import resolve_val_threshold
+
+    use_threshold = resolve_val_threshold(training, explicit=threshold)
     from querulus.fin_effect.calculator import _feature_rows_for_predict
 
     predict_frame = _feature_rows_for_predict(training, effect_index, df.loc[effect_index])
@@ -243,7 +246,7 @@ def compare_severity_fin_effect_variants(
             training,
             sev_pred,
             split=split,
-            threshold=threshold,
+            threshold=use_threshold,
             config=fin_config,
         )
         err = sev_pred - y_true_sev.to_numpy(dtype=float)
@@ -267,7 +270,7 @@ def compare_severity_fin_effect_variants(
                 "variant": name,
                 "transform": transform,
                 "sample_weight": weight_mode,
-                "best_threshold": result.best_threshold,
+                "best_threshold": use_threshold,
                 "net_effect": result.net_effect,
                 "model_effect": result.model_effect_total,
                 "fact_effect": result.fact_effect_total,
@@ -354,23 +357,9 @@ def compare_value_before_segment_strategies(
         segment_model, feats, cat, transform=segment_transform
     )
 
-    # Общий порог: от полной модели на полном test (если не задан явно).
-    if threshold is None:
-        from querulus.fin_effect.calculator import _feature_rows_for_predict as _fr
+    from querulus.fin_effect.threshold_policy import resolve_val_threshold
 
-        all_frame = _fr(training, effect_index, df.loc[effect_index])
-        full_all_sev = severity_predict(
-            training.severity_model,
-            all_frame[training.severity_features],
-            cat,
-            transform=getattr(training, "severity_target_transform", "raw"),
-        )
-        full_all = run_fin_effect_with_severity_predictions(
-            df, training, full_all_sev, split=split, config=fin_config
-        )
-        use_threshold = full_all.best_threshold
-    else:
-        use_threshold = threshold
+    use_threshold = resolve_val_threshold(training, explicit=threshold)
 
     full_on_seg = _fin_on_index(
         df, training, seg_idx, full_sev, fin_config, threshold=use_threshold

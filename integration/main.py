@@ -23,8 +23,9 @@
 
 Порог классификации (число float)
     1) Если во входном векторе есть поле ``'THRESHOLD'`` — используется оно.
-    2) Иначе ``config.classification_threshold``.
-    3) Иначе ``DEFAULT_CLASSIFICATION_THRESHOLD`` (0.6).
+    2) ``querulus_meta_*.json`` рядом с pickle (``best_threshold`` с Val).
+    3) Иначе ``config.classification_threshold``.
+    4) Иначе ``DEFAULT_CLASSIFICATION_THRESHOLD`` (0.6).
 
 Ответ POST (верхний уровень)
     oisuu_responce — короткий блок для интеграций;
@@ -65,7 +66,7 @@ app = FastAPI()
 # Версия API в oisuu_responce["version"] и GET /api/health (см. CHANGELOG.md)
 version = "1.2.0"
 
-# Порог классификации, если не задан во входном векторе
+# Порог классификации, если не задан во входном векторе и нет meta
 DEFAULT_CLASSIFICATION_THRESHOLD = 0.6
 
 # Имена колонок, которые должны присутствовать в main_request для классификации
@@ -283,6 +284,28 @@ def get_threshold_from_vector(df_common: pd.DataFrame) -> Optional[float]:
         return None
 
     return float(value)
+
+# reviewed
+def _threshold_from_meta(group_name: str) -> Optional[float]:
+    """``best_threshold`` из ``querulus_meta_{version}.json`` в каталоге моделей."""
+    models_dir = _prod_models_dir()
+    candidates: List[Path] = []
+    prefix = "querulus_ansamble_"
+    if group_name.startswith(prefix):
+        version = group_name[len(prefix) :]
+        candidates.append(models_dir / f"querulus_meta_{version}.json")
+    candidates.append(models_dir / f"querulus_meta_{group_name}.json")
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            raw = payload.get("best_threshold")
+            if raw is not None and not pd.isna(raw):
+                return float(raw)
+        except Exception:
+            logger.warning("Не удалось прочитать best_threshold из meta: {}", path)
+    return None
 
 # reviewed
 def _masked_predictions(
@@ -923,6 +946,10 @@ def main_predict(
     # 2) Если поле есть, но пустое/битое — DEFAULT.
     # 3) Если поля нет — config → DEFAULT.
     threshold_value = get_threshold_from_vector(df_common)
+    if threshold_value is None:
+        threshold_value = _threshold_from_meta(group_name)
+    if threshold_value is None:
+        threshold_value = getattr(config, "classification_threshold", None)
     if threshold_value is None:
         threshold_value = DEFAULT_CLASSIFICATION_THRESHOLD
 

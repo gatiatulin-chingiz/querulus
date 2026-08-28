@@ -579,48 +579,12 @@ def _fold_metrics_bundle(
     y_pred: np.ndarray,
     *,
     task_type: TaskType,
-    threshold: float = 0.5,
+    threshold: float | None = None,
 ) -> dict[str, float]:
-    """Метрики fold в духе ModelDiagnostics.
+    """Collect-style метрики; для classification нужен ``threshold`` (с Val)."""
+    from querulus.training.collect_metrics import metrics_bundle
 
-    Classification: порогозависимые метрики только на ``threshold`` (без перебора 0..1).
-    """
-    diagnostics = _model_diagnostics_stub(task_type)
-    y_np = np.asarray(y_true)
-    if task_type == "classification":
-        proba = np.asarray(y_pred, dtype=float)
-        thr = float(threshold)
-        # При thr==0.5 пробуем MD; иначе / при TypeError — свой расчёт.
-        raw: dict[str, Any]
-        if abs(thr - 0.5) < 1e-12:
-            try:
-                raw = diagnostics.compute_classification_metrics(
-                    y_np, proba, thresholds=[0.5]
-                )
-            except TypeError:
-                raw = _classification_metrics_at_threshold(
-                    diagnostics, y_np, proba, threshold=0.5
-                )
-        else:
-            raw = _classification_metrics_at_threshold(
-                diagnostics, y_np, proba, threshold=thr
-            )
-    else:
-        pred = np.asarray(y_pred, dtype=float)
-        raw = diagnostics.compute_regression_metrics(y_np, pred)
-
-    out: dict[str, float] = {}
-    for key, value in raw.items():
-        if isinstance(value, (bool, str)):
-            continue
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            continue
-        if math.isnan(number) or math.isinf(number):
-            continue
-        out[str(key)] = number
-    return out
+    return metrics_bundle(y_true, y_pred, task_type=task_type, threshold=threshold)
 
 
 def _mean_metrics(fold_bundles: list[dict[str, float]]) -> dict[str, float]:

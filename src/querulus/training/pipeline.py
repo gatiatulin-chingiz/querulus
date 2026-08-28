@@ -100,6 +100,7 @@ class TrainingArtifacts:
     feature_frame: pd.DataFrame | None = None
     frequency_calibrator: object | None = None
     severity_calibrator: object | None = None
+    val_threshold: float | None = None
     frequency_feature_selection_summary: dict[str, object] | None = None
     severity_feature_selection_summary: dict[str, object] | None = None
     severity_target_transform: str = "raw"
@@ -630,7 +631,7 @@ def frequency_metrics_table_at_threshold(
     training: "TrainingArtifacts",
     split_indices: dict[str, pd.Index],
     *,
-    threshold: float = 0.5,
+    threshold: float,
     target_column: str,
 ) -> pd.DataFrame:
     """Classification-метрики frequency на train/val/test при заданном пороге.
@@ -667,6 +668,89 @@ def frequency_metrics_table_at_threshold(
             threshold=float(threshold),
         )
     return _model_metrics_table(bundles)
+
+
+def _metrics_table_to_bundles(table: pd.DataFrame) -> dict[str, dict[str, float]]:
+    """Обратное преобразование ``_model_metrics_table`` → split → metric → value."""
+    bundles: dict[str, dict[str, float]] = {}
+    if table.empty or "metric" not in table.columns:
+        return bundles
+    for split in ("train", "val", "test"):
+        if split not in table.columns:
+            continue
+        bundles[split] = {}
+        for _, row in table.iterrows():
+            value = row.get(split)
+            if value is None or (isinstance(value, float) and pd.isna(value)):
+                continue
+            bundles[split][str(row["metric"])] = float(value)
+    return bundles
+
+
+def _apply_val_threshold_policy(
+    data: pd.DataFrame,
+    artifacts: TrainingArtifacts,
+    *,
+    frequency_target: str,
+    config: TrainingConfig,
+) -> TrainingArtifacts:
+    """Подбор порога на Val и пересчёт frequency-метрик на ``val_threshold``."""
+    split = artifacts.frequency_split
+    if not config.use_train_val_test_split:
+        return artifacts
+    if split is None or not split.has_val or split.x_val is None or len(split.x_val) == 0:
+        return artifacts
+
+    from querulus.fin_effect.threshold_policy import pick_threshold_on_val_from_training
+
+    thr_result = pick_threshold_on_val_from_training(
+        data,
+        artifacts,
+        split.x_val.index,
+        frequency_target_column=frequency_target,
+    )
+    val_threshold = thr_result.threshold
+    split_indices = {
+        "train": split.x_train.index,
+        "val": split.x_val.index,
+        "test": split.x_test.index,
+    }
+    freq_table = frequency_metrics_table_at_threshold(
+        data,
+        artifacts,
+        split_indices,
+        threshold=val_threshold,
+        target_column=frequency_target,
+    )
+    metrics = dict(artifacts.metrics)
+    metrics["frequency"] = _metrics_table_to_bundles(freq_table)
+    return TrainingArtifacts(
+        frequency_model=artifacts.frequency_model,
+        severity_model=artifacts.severity_model,
+        metrics=metrics,
+        frequency_metrics_table=freq_table,
+        severity_metrics_table=artifacts.severity_metrics_table,
+        frequency_diagnostics=artifacts.frequency_diagnostics,
+        severity_diagnostics=artifacts.severity_diagnostics,
+        summary=artifacts.summary,
+        feature_names=artifacts.feature_names,
+        categorical_features=artifacts.categorical_features,
+        frequency_features=artifacts.frequency_features,
+        severity_features=artifacts.severity_features,
+        frequency_categorical_features=artifacts.frequency_categorical_features,
+        severity_categorical_features=artifacts.severity_categorical_features,
+        frequency_importance=artifacts.frequency_importance,
+        severity_importance=artifacts.severity_importance,
+        frequency_split=artifacts.frequency_split,
+        severity_split=artifacts.severity_split,
+        feature_frame=artifacts.feature_frame,
+        frequency_calibrator=artifacts.frequency_calibrator,
+        severity_calibrator=artifacts.severity_calibrator,
+        val_threshold=val_threshold,
+        frequency_feature_selection_summary=artifacts.frequency_feature_selection_summary,
+        severity_feature_selection_summary=artifacts.severity_feature_selection_summary,
+        severity_target_transform=artifacts.severity_target_transform,
+    )
 
 
 def _diagnostics_metrics(
@@ -1304,29 +1388,34 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
     )
     log_training_summary(summary)
 
-    return TrainingArtifacts(
-        frequency_model=frequency_model,
-        severity_model=severity_model,
-        metrics=metrics,
-        frequency_metrics_table=_model_metrics_table(frequency_metrics),
-        severity_metrics_table=_model_metrics_table(severity_metrics),
-        frequency_diagnostics=frequency_diagnostics,
-        severity_diagnostics=severity_diagnostics,
-        frequency_split=frequency_split,
-        severity_split=severity_split,
-        summary=summary,
-        feature_names=features,
-        categorical_features=cat_features,
-        frequency_features=frequency_features,
-        severity_features=severity_features,
-        frequency_categorical_features=frequency_cat_features,
-        severity_categorical_features=severity_cat_features,
-        frequency_importance=_importance_frame(frequency_model, frequency_features),
-        severity_importance=_importance_frame(severity_model, severity_features),
-        feature_frame=data,
-        frequency_calibrator=frequency_calibrator,
-        severity_calibrator=None,
-        frequency_feature_selection_summary=frequency_feature_selection_summary,
-        severity_feature_selection_summary=severity_feature_selection_summary,
-        severity_target_transform=config.severity_target_transform,
+    return _apply_val_threshold_policy(
+        data,
+        TrainingArtifacts(
+            frequency_model=frequency_model,
+            severity_model=severity_model,
+            metrics=metrics,
+            frequency_metrics_table=_model_metrics_table(frequency_metrics),
+            severity_metrics_table=_model_metrics_table(severity_metrics),
+            frequency_diagnostics=frequency_diagnostics,
+            severity_diagnostics=severity_diagnostics,
+            frequency_split=frequency_split,
+            severity_split=severity_split,
+            summary=summary,
+            feature_names=features,
+            categorical_features=cat_features,
+            frequency_features=frequency_features,
+            severity_features=severity_features,
+            frequency_categorical_features=frequency_cat_features,
+            severity_categorical_features=severity_cat_features,
+            frequency_importance=_importance_frame(frequency_model, frequency_features),
+            severity_importance=_importance_frame(severity_model, severity_features),
+            feature_frame=data,
+            frequency_calibrator=frequency_calibrator,
+            severity_calibrator=None,
+            frequency_feature_selection_summary=frequency_feature_selection_summary,
+            severity_feature_selection_summary=severity_feature_selection_summary,
+            severity_target_transform=config.severity_target_transform,
+        ),
+        frequency_target=config.frequency_target,
+        config=config,
     )

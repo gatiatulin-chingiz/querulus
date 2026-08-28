@@ -161,6 +161,9 @@ def run_severity_zoo_compare(
     if training.severity_split is None:
         raise ValueError("severity_split отсутствует")
 
+    from querulus.fin_effect.threshold_policy import resolve_val_threshold
+
+    use_threshold = resolve_val_threshold(training, explicit=threshold)
     from querulus.fin_effect.calculator import _feature_rows_for_predict
 
     sev_target = fin_config.severity_target_column
@@ -170,19 +173,6 @@ def run_severity_zoo_compare(
     sev_train_idx = training.severity_split.x_train.index
     sev_test_idx = training.severity_split.x_test.index
     effect_index, _ = _effect_index_and_freq(training, split)
-
-    # Общий порог freq — от raw на полном test.
-    predict_all = _feature_rows_for_predict(training, effect_index, df.loc[effect_index])
-    raw_full_pred = severity_predict(
-        training.severity_model,
-        predict_all[features],
-        cat,
-        transform=getattr(training, "severity_target_transform", "raw"),
-    )
-    raw_full_fe = run_fin_effect_with_severity_predictions(
-        df, training, raw_full_pred, split=split, threshold=threshold, config=fin_config
-    )
-    use_threshold = threshold if threshold is not None else raw_full_fe.best_threshold
 
     # Общие границы квантилей по true severity на severity-test.
     y_true_sev_test = pd.to_numeric(
