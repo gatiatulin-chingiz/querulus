@@ -66,7 +66,7 @@ def main() -> None:
     print("[1/6] configs OK", built["cf_path"].name, "n=", len(df))
 
     thr_val = load_collect_val_threshold(PROJECT_ROOT)
-    print(f"[2/6] τ (collect Val) = {thr_val:.4f}")
+    print(f"[2/6] τ (collect) = {thr_val:.2f}")
 
     dsm_cf = DataSetsManager(
         config_name=str(built["cf_path"]),

@@ -650,7 +650,7 @@ def _shap_top_features_comment(
                 base_raw = float(v[0, -1, class_idx])
                 raw = base_raw + float(np.sum(v[0, :-1, class_idx]))
                 p = 1.0 / (1.0 + float(np.exp(-raw)))
-                proba_prefix = f"p={p:.4f} | "
+                proba_prefix = f"p={p:.2f} | "
                 base_raw_for_pct = base_raw
             v = v[:, :, class_idx]
         if v.ndim == 2 and v.shape[1] == len(feature_names) + 1:
@@ -658,7 +658,7 @@ def _shap_top_features_comment(
                 base_raw = float(v[0, -1])
                 raw = base_raw + float(np.sum(v[0, :-1]))
                 p = 1.0 / (1.0 + float(np.exp(-raw)))
-                proba_prefix = f"p={p:.4f} | "
+                proba_prefix = f"p={p:.2f} | "
                 base_raw_for_pct = base_raw
             v = v[:, :-1]
         # TreeExplainer ветка: expected_value может быть доступен отдельно.
@@ -671,7 +671,7 @@ def _shap_top_features_comment(
                 base_raw = float(ev)
                 raw = base_raw + float(np.sum(v[0]))
                 p = 1.0 / (1.0 + float(np.exp(-raw)))
-                proba_prefix = f"p={p:.4f} | "
+                proba_prefix = f"p={p:.2f} | "
                 base_raw_for_pct = base_raw
             except Exception:
                 proba_prefix = ""
@@ -701,7 +701,7 @@ def _shap_top_features_comment(
             return f"{prefix}: " + proba_prefix + ", ".join(parts)
 
         idx = np.argsort(np.abs(row))[::-1][:top_n]
-        parts = [f"{feature_names[i]}={row[i]:+.4f}" for i in idx]
+        parts = [f"{feature_names[i]}={row[i]:+.2f}" for i in idx]
         return f"{prefix}: " + proba_prefix + ", ".join(parts)
     except Exception as e:
         msg = str(e).replace("\n", " ").strip()

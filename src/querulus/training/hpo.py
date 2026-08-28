@@ -1123,7 +1123,7 @@ def run_hpo(
             if child_id:
                 trial.set_user_attr("mlflow_run_id", child_id)
             logger.info(
-                "HPO trial %s: val=%.4f gap=%.4f → objective=%.4f tree_count≈%s",
+                "HPO trial %s: val=%.2f gap=%.2f → objective=%.2f tree_count≈%s",
                 trial.number,
                 raw_val,
                 fit_stats["train_val_gap"],
@@ -1484,7 +1484,7 @@ def run_hpo(
         best_params.get("iterations_cap", best_params.get("iterations", 800))
     )
     logger.info(
-        "HPO champion: objective=%.4f val_raw=%.4f gap=%.4f tree_count=%s cap=%s",
+        "HPO champion: objective=%.2f val_raw=%.2f gap=%.2f tree_count=%s cap=%s",
         best_value,
         best_value_raw,
         float(mean_gap) if mean_gap is not None else float("nan"),

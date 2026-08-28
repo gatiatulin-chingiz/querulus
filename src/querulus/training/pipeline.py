@@ -914,7 +914,7 @@ def _model_metrics_table(model_metrics: dict[str, dict[str, float]]) -> pd.DataF
 
 
 def _format_metric_value(value: float | int | None) -> str:
-    """Форматировать одно значение метрики для читаемого вывода."""
+    """Форматировать одно значение метрики: не более 2 знаков после запятой."""
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return "—"
     if isinstance(value, (int, bool)) or float(value).is_integer():
@@ -922,9 +922,7 @@ def _format_metric_value(value: float | int | None) -> str:
     numeric = float(value)
     if abs(numeric) >= 100:
         return f"{numeric:,.2f}"
-    if abs(numeric) >= 1:
-        return f"{numeric:.4f}"
-    return f"{numeric:.6f}"
+    return f"{numeric:.2f}"
 
 
 def _target_mean(series: pd.Series) -> float | None:
@@ -1036,12 +1034,12 @@ def format_training_summary(summary: TrainingSummary) -> pd.DataFrame:
                 {
                     "model": report.model,
                     "parameter": "train_target_mean",
-                    "value": "—" if report.train_target_mean is None else f"{report.train_target_mean:.6f}",
+                    "value": "—" if report.train_target_mean is None else f"{report.train_target_mean:.2f}",
                 },
                 {
                     "model": report.model,
                     "parameter": "test_target_mean",
-                    "value": "—" if report.test_target_mean is None else f"{report.test_target_mean:.6f}",
+                    "value": "—" if report.test_target_mean is None else f"{report.test_target_mean:.2f}",
                 },
                 {
                     "model": report.model,
@@ -1097,13 +1095,15 @@ def log_training_summary(summary: TrainingSummary) -> None:
 
 
 def format_metrics_table(table: pd.DataFrame) -> pd.DataFrame:
-    """Вернуть копию таблицы метрик с форматированными train/val/test колонками."""
+    """Вернуть копию таблицы метрик с форматированными колонками срезов (≤2 знака)."""
     if table.empty:
         return table.copy()
     formatted = table.copy()
-    for column in ("train", "val", "test"):
-        if column in formatted.columns:
-            formatted[column] = formatted[column].map(_format_metric_value)
+    skip = {"metric", "task", "split", "stack"}
+    for column in formatted.columns:
+        if column in skip:
+            continue
+        formatted[column] = formatted[column].map(_format_metric_value)
     return formatted
 
 

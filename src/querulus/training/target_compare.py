@@ -248,13 +248,13 @@ def compare_target_pairs(
                 "kind": "binary" if is_binary else "float",
                 "common_n": n,
                 "exact_match_n": int(exact.sum()),
-                "exact_match_pct": round(100 * float(exact.mean()), 4),
+                "exact_match_pct": round(100 * float(exact.mean()), 2),
                 "exact_match_pct_by_amount": match_by_amount,
                 "mismatch_n": int((~exact).sum()),
-                "mismatch_pct": round(100 * (1 - float(exact.mean())), 4),
+                "mismatch_pct": round(100 * (1 - float(exact.mean())), 2),
                 "pct_match_at_threshold": None
                 if is_binary
-                else round(100 * float(pct_ok.mean()), 4),
+                else round(100 * float(pct_ok.mean()), 2),
             }
         )
         if not quiet:

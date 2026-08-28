@@ -238,6 +238,6 @@ def format_psi_filter_report(report: pd.DataFrame) -> str:
     view = report[cols].copy()
     if "score" in view.columns:
         view["score"] = view["score"].map(
-            lambda x: f"{x:.3f}" if isinstance(x, (int, float)) and x == x else "—"
+            lambda x: f"{x:.2f}" if isinstance(x, (int, float)) and x == x else "—"
         )
     return view.to_string(index=False)

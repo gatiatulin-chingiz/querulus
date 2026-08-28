@@ -144,7 +144,7 @@ def _rate_summary_table(detail: pd.DataFrame, rates: tuple[float, ...]) -> pd.Da
             "n_дел": len(sub),
             "инвестиции_окупили": int(ok.sum()),
             "не_окупили": int((~ok).sum()),
-            "доля_надо_платить": round(float((~ok).mean()), 4) if len(sub) else None,
+            "доля_надо_платить": round(float((~ok).mean()), 2) if len(sub) else None,
             "суммарный_profit (₽)": round(float(profit.sum()), 2),
             "суммарный_profit_окупившихся (₽)": round(float(profit[ok].sum()), 2),
             "суммарный_убыток (₽)": round(float(profit[~ok].sum()), 2),

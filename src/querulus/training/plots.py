@@ -116,9 +116,9 @@ def plot_frequency_probability_diagnostics(
         neg = probs[labels == 0]
         pos = probs[labels == 1]
         print(f"\n{name}:")
-        print(f"  Класс 0: mean={neg.mean():.3f}, std={neg.std():.3f}, median={np.median(neg):.3f}")
-        print(f"  Класс 1: mean={pos.mean():.3f}, std={pos.std():.3f}, median={np.median(pos):.3f}")
-        print(f"  Разрыв mean: {pos.mean() - neg.mean():.3f}")
+        print(f"  Класс 0: mean={neg.mean():.2f}, std={neg.std():.2f}, median={np.median(neg):.2f}")
+        print(f"  Класс 1: mean={pos.mean():.2f}, std={pos.std():.2f}, median={np.median(pos):.2f}")
+        print(f"  Разрыв mean: {pos.mean() - neg.mean():.2f}")
         return float(pos.mean() - neg.mean())
 
     print("=" * 50)
@@ -126,7 +126,7 @@ def plot_frequency_probability_diagnostics(
     print("=" * 50)
     gap_train = _calc_stats(y_pred_train, y_train, "Train")
     gap_test = _calc_stats(y_pred_test, y_test, "Test")
-    print(f"\nРазница в разрыве (test - train): {gap_test - gap_train:+.3f}")
+    print(f"\nРазница в разрыве (test - train): {gap_test - gap_train:+.2f}")
 
     ap_train = average_precision_score(y_train, y_pred_train)
     ap_test = average_precision_score(y_test, y_pred_test)
@@ -134,13 +134,13 @@ def plot_frequency_probability_diagnostics(
     auc_test = roc_auc_score(y_test, y_pred_test)
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    PrecisionRecallDisplay.from_predictions(y_train, y_pred_train, ax=axes[0], label=f"Train (AP={ap_train:.3f})")
-    PrecisionRecallDisplay.from_predictions(y_test, y_pred_test, ax=axes[0], label=f"Test (AP={ap_test:.3f})")
+    PrecisionRecallDisplay.from_predictions(y_train, y_pred_train, ax=axes[0], label=f"Train (AP={ap_train:.2f})")
+    PrecisionRecallDisplay.from_predictions(y_test, y_pred_test, ax=axes[0], label=f"Test (AP={ap_test:.2f})")
     axes[0].set_title("Precision-Recall Curve")
     axes[0].grid(alpha=0.3)
 
-    RocCurveDisplay.from_predictions(y_train, y_pred_train, ax=axes[1], label=f"Train (AUC={auc_train:.3f})")
-    RocCurveDisplay.from_predictions(y_test, y_pred_test, ax=axes[1], label=f"Test (AUC={auc_test:.3f})")
+    RocCurveDisplay.from_predictions(y_train, y_pred_train, ax=axes[1], label=f"Train (AUC={auc_train:.2f})")
+    RocCurveDisplay.from_predictions(y_test, y_pred_test, ax=axes[1], label=f"Test (AUC={auc_test:.2f})")
     axes[1].set_title("ROC Curve")
     axes[1].plot([0, 1], [0, 1], "k--", alpha=0.5)
     axes[1].grid(alpha=0.3)
@@ -150,8 +150,8 @@ def plot_frequency_probability_diagnostics(
     print("\n" + "=" * 50)
     print("СВОДКА ПО МЕТРИКАМ")
     print("=" * 50)
-    print(f"Average Precision: Train={ap_train:.3f}, Test={ap_test:.3f}, Δ={ap_test - ap_train:+.3f}")
-    print(f"ROC-AUC:           Train={auc_train:.3f}, Test={auc_test:.3f}, Δ={auc_test - auc_train:+.3f}")
+    print(f"Average Precision: Train={ap_train:.2f}, Test={ap_test:.2f}, Δ={ap_test - ap_train:+.2f}")
+    print(f"ROC-AUC:           Train={auc_train:.2f}, Test={auc_test:.2f}, Δ={auc_test - auc_train:+.2f}")
 
 
 def _plot_features_eda(

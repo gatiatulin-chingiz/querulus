@@ -506,13 +506,13 @@ def run_train_loop_new(
             )
             print(
                 f"[B] backward-elim freq: best {freq_back.metric_name}="
-                f"{freq_back.best_metric:.4f} "
+                f"{freq_back.best_metric:.2f} "
                 f"n={len(freq_back.selected_features)}/{len(freq_features)} "
                 f"(steps={len(freq_back.history)})"
             )
             print(
                 f"[B] backward-elim sev: best {sev_back.metric_name}="
-                f"{sev_back.best_metric:.4f} "
+                f"{sev_back.best_metric:.2f} "
                 f"n={len(sev_back.selected_features)}/{len(sev_features)} "
                 f"(steps={len(sev_back.history)})"
             )
@@ -814,8 +814,8 @@ def run_train_loop_new(
         stage_done(
             "hpo",
             detail=(
-                f"freq obj={freq_hpo.best_value:.4f} tree={freq_hpo.tree_count}; "
-                f"sev obj={sev_hpo.best_value:.4f} tree={sev_hpo.tree_count}"
+                f"freq obj={freq_hpo.best_value:.2f} tree={freq_hpo.tree_count}; "
+                f"sev obj={sev_hpo.best_value:.2f} tree={sev_hpo.tree_count}"
             ),
         )
         (out_dir / "hpo_best_params_new.json").write_text(
@@ -989,8 +989,8 @@ def run_train_loop_new(
         stage_done(
             "calibration",
             detail=(
-                f"ECE_mass before={ece_before:.4f} after={ece_after:.4f}; "
-                f"ECE_width before={ece_before_w:.4f} after={ece_after_w:.4f}; "
+                f"ECE_mass before={ece_before:.2f} after={ece_after:.2f}; "
+                f"ECE_width before={ece_before_w:.2f} after={ece_after_w:.2f}; "
                 f"balance={base.frequency_calibration_balance}"
             ),
         )

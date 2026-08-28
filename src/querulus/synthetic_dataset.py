@@ -189,7 +189,7 @@ def main(argv: list[str] | None = None) -> None:
     train = df["PAYMENT_ORDER_DATE_TIME"] < "2024-06-01"
     print(f"Wrote {path}")
     print(f"shape={df.shape} train={int(train.sum())} test={int((~train).sum())}")
-    print(f"TARGET_FREQ mean={df['TARGET_FREQ'].mean():.3f}")
+    print(f"TARGET_FREQ mean={df['TARGET_FREQ'].mean():.2f}")
     print(f"sev>0={int((df['TARGET_SEV'] > 0).sum())}")
 
 

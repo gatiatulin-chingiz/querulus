@@ -846,8 +846,8 @@ def print_best_threshold_report(result: FinEffectResult) -> None:
         for strategy in result.threshold_strategies.values():
             print(
                 f"  {strategy.strategy:20s} threshold={strategy.threshold:.2f} "
-                f"net_effect={strategy.net_effect:,.0f} F1={strategy.f1:.3f} "
-                f"PR-AUC={strategy.average_precision:.3f}"
+                f"net_effect={strategy.net_effect:,.0f} F1={strategy.f1:.2f} "
+                f"PR-AUC={strategy.average_precision:.2f}"
             )
 
 

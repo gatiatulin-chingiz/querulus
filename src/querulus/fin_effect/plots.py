@@ -90,7 +90,7 @@ def plot_precision_recall_vs_threshold(
         x=best_threshold,
         color="green",
         linestyle="--",
-        label=f"Лучший threshold (F1={best_f1:.3f})",
+        label=f"Лучший threshold (F1={best_f1:.2f})",
         linewidth=2,
     )
     ax.legend(loc="best", fontsize=11)

@@ -9,7 +9,7 @@ import pandas as pd
 from querulus.fin_effect.calculator import FinEffectResult, run_fin_effect_from_training
 from querulus.fin_effect.resolve import resolve_fin_effect_config
 from querulus.training.config import TrainingConfig, resolve_features_config
-from querulus.training.pipeline import TrainingArtifacts, train_models
+from querulus.training.pipeline import TrainingArtifacts, _format_metric_value, train_models
 
 from querulus.training.splits import default_inner_periods_from_train
 
@@ -214,7 +214,11 @@ def build_metrics_summary(
     wide.columns.name = None
     cols = ["task", "metric", "split"] + [c for c in stack_order if c in wide.columns]
     cols += [c for c in wide.columns if c not in cols]
-    return wide[cols].sort_values(["task", "split", "metric"]).reset_index(drop=True)
+    wide = wide[cols].sort_values(["task", "split", "metric"]).reset_index(drop=True)
+    for col in wide.columns:
+        if col not in ("task", "metric", "split"):
+            wide[col] = wide[col].map(_format_metric_value)
+    return wide
 
 
 def run_triple_fin_effects(

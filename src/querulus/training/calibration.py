@@ -350,14 +350,14 @@ def compare_calibrator_ab(
         print(f"\n=== {label} ===")
         print(
             table.to_string(
-                float_format=lambda x: f"{x:,.4f}" if abs(x) < 1e6 else f"{x:,.0f}"
+                float_format=lambda x: f"{x:,.2f}" if abs(x) < 1e6 else f"{x:,.0f}"
             )
         )
         delta_net = float(fe_cal.net_effect) - float(fe_raw.net_effect)
         delta_ece = float(table.loc["cal", "ece"]) - float(table.loc["raw", "ece"])
         print(
             f"Δ net_effect (cal−raw)={delta_net:,.0f} ₽; "
-            f"Δ ECE (cal−raw)={delta_ece:+.4f}"
+            f"Δ ECE (cal−raw)={delta_ece:+.2f}"
         )
 
     return CalibratorAbResult(table=table, fe_raw=fe_raw, fe_cal=fe_cal)
