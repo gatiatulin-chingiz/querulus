@@ -28,6 +28,13 @@ data/raw/*
 data/processed/*
 !data/processed/.gitkeep
 
+# Синтетика и локальный smoke (make synthetic-data / scripts/*_synthetic.py)
+**/df_final_3_synthetic.parquet
+**/*_synthetic.parquet
+configs/config_cf_2_*.json
+configs/config_rg_2_*.json
+notebooks/fin_effect_detailed.html
+
 # Форматы данных (на случай файлов вне data/)
 *.parquet
 *.pickle
