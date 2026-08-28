@@ -19,7 +19,11 @@ from querulus.training.build_outboxml_configs import (
     unwrap_estimator,
 )
 from querulus.training.collect_metrics import metrics_bundle as _collect_metrics_bundle
-from querulus.training.pipeline import _model_metrics_table, format_metrics_table
+from querulus.training.pipeline import (
+    _model_metrics_table,
+    bundles_metrics_table,
+    format_metrics_table,
+)
 
 TaskKind = Literal["classification", "regression"]
 
@@ -345,21 +349,22 @@ def display_dsm_collect_metrics_cross_test(
         bundles[slice_name] = bundle
         counts[slice_name] = n_rows
 
-    table = _model_metrics_table(bundles)
+    column_order = ["train", *list(test_slices.keys())]
+    table = bundles_metrics_table(bundles, column_order=column_order)
     if "metric" in table.columns:
         table = table.loc[table["metric"].astype(str) != "ece"].reset_index(drop=True)
 
     thr_note = (
-        f", порог Val={val_threshold:.2f}"
+        f", τ = {val_threshold:.2f}"
         if task_type == "classification" and val_threshold is not None
         else ""
     )
-    label = title or f"{model_name} ({task_type}) cross-test"
-    display(Markdown(f"### Метрики collect-style: {label}{thr_note}"))
+    label = title or f"{model_name} ({task_type})"
+    display(Markdown(f"### {label}{thr_note}"))
     display(
         Markdown(
-            "Строки после фильтра модели (severity: `TARGET_SEV > 0`): "
-            + ", ".join(f"**{name}**={counts[name]:,}" for name in bundles)
+            "Число строк по срезам: "
+            + ", ".join(f"**{name}** = {counts[name]:,}" for name in column_order)
         )
     )
     display(format_metrics_table(table))
@@ -383,23 +388,11 @@ def display_dsm_collect_metrics(
     if "metric" in table.columns:
         table = table.loc[table["metric"].astype(str) != "ece"].reset_index(drop=True)
     thr_note = (
-        f", порог Val={val_threshold:.2f}"
+        f", τ = {val_threshold:.2f}"
         if task_type == "classification" and val_threshold is not None
         else ""
     )
     label = title or f"{model_name} ({task_type})"
-    display(Markdown(f"### Метрики collect-style: {label}{thr_note}"))
+    display(Markdown(f"### {label}{thr_note}"))
     display(format_metrics_table(table))
-    raw = dsm.get_result()[model_name].metrics
-    print(
-        "raw full:",
-        {
-            k: {
-                mk: mv
-                for mk, mv in ((v or {}).get("full") or {}).items()
-                if mk != "ece"
-            }
-            for k, v in (raw or {}).items()
-        },
-    )
     return table

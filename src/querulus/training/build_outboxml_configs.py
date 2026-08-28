@@ -23,6 +23,48 @@ DEFAULT_HPO_PATH = DEFAULT_ARTIFACTS_DIR / "hpo_best_params_new.json"
 PROD_CAL_FRACTION = 0.15
 _NA_KEY = "N/A"
 _OTHER_KEY = "ПРОЧИЕ"
+_load_subset_patched = False
+
+
+def _patch_model_data_subset_load_subset() -> None:
+    """OutBoxML: при ``data_filter_condition`` y_train не режется под X_train — выравниваем."""
+    global _load_subset_patched
+    if _load_subset_patched:
+        return
+    from outboxml.data_subsets import ModelDataSubset
+
+    _orig = ModelDataSubset.load_subset
+
+    @classmethod
+    def _load_subset_aligned(cls, *args, **kwargs):
+        subset = _orig(*args, **kwargs)
+        if not subset.X_train.index.equals(subset.y_train.index):
+            subset.y_train = subset.y_train.loc[subset.X_train.index]
+            if getattr(subset, "exposure_train", None) is not None:
+                subset.exposure_train = subset.exposure_train.loc[subset.X_train.index]
+        if not subset.X_test.index.equals(subset.y_test.index):
+            subset.y_test = subset.y_test.loc[subset.X_test.index]
+            if getattr(subset, "exposure_test", None) is not None:
+                subset.exposure_test = subset.exposure_test.loc[subset.X_test.index]
+        return subset
+
+    ModelDataSubset.load_subset = _load_subset_aligned  # type: ignore[method-assign]
+    _load_subset_patched = True
+
+
+def ensure_legacy_inflation_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Алиас FE_*_2020 для артефактов FS, обученных до смены базового года CPI."""
+    legacy = "FE_VALUE_BEFORE_WITHOUT_REAL_2020"
+    if legacy in df.columns:
+        return df
+    from querulus.features.inflation import real_feature_name
+
+    current = real_feature_name("VALUE_BEFORE_WITHOUT")
+    if current in df.columns:
+        out = df.copy()
+        out[legacy] = out[current]
+        return out
+    return df
 
 
 def dataframe_for_dsm(df: pd.DataFrame) -> pd.DataFrame:
@@ -54,6 +96,7 @@ def prepare_datasets_from_config(
     check_prepared: bool = True,
 ) -> dict[str, Any]:
     """PrepareDataset'ы с кастом category→object после temp-parquet DSM."""
+    _patch_model_data_subset_load_subset()
     from outboxml.core.prepared_datasets import PrepareDataset
     from outboxml.core.pydantic_models import AllModelsConfig
 

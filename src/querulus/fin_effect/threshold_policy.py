@@ -1,16 +1,23 @@
 """Политика порога frequency: подбор только на Val (max net_effect)."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 
+from querulus import PROJECT_ROOT
 from querulus.fin_effect.calculator import (
     FinEffectResult,
     run_fin_effect_from_training,
     run_fin_effect_pipeline,
 )
 from querulus.fin_effect.config import FinEffectConfig
+
+COLLECT_VAL_THRESHOLD_JSON = "val_threshold_latest.json"
+DEFAULT_COLLECT_ARTIFACTS_DIR = PROJECT_ROOT / "data" / "processed" / "train_loop_new"
 
 
 @dataclass(frozen=True)
@@ -157,3 +164,71 @@ def resolve_or_pick_val_threshold(
         config=config,
         frequency_target_column=frequency_target_column,
     ).threshold
+
+
+def collect_val_threshold_path(
+    artifacts_dir: Path | str | None = None,
+) -> Path:
+    """Путь JSON с τ из collect (блок B/C, ``training.val_threshold``)."""
+    base = Path(artifacts_dir) if artifacts_dir is not None else DEFAULT_COLLECT_ARTIFACTS_DIR
+    return base / COLLECT_VAL_THRESHOLD_JSON
+
+
+def save_collect_val_threshold(
+    threshold: float,
+    path: Path | str | None = None,
+    *,
+    artifacts_dir: Path | str | None = None,
+    n_val: int | None = None,
+    source: str = "training.val_threshold",
+) -> Path:
+    """Записать τ для ``example.ipynb`` и сервиса (единый источник — collect Val)."""
+    out = Path(path) if path is not None else collect_val_threshold_path(artifacts_dir)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, object] = {
+        "val_threshold": float(threshold),
+        "source": source,
+        "saved_at_utc": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+    }
+    if n_val is not None:
+        payload["n_val"] = int(n_val)
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
+
+
+def load_collect_val_threshold(
+    project_root: Path | str | None = None,
+    *,
+    training: object | None = None,
+    artifacts_dir: Path | str | None = None,
+) -> float:
+    """τ с Val collect: in-memory ``training`` → JSON ``val_threshold_latest.json``."""
+    if training is not None:
+        thr = getattr(training, "val_threshold", None)
+        if thr is not None:
+            return float(thr)
+
+    root = Path(project_root) if project_root is not None else PROJECT_ROOT
+    candidates = [
+        collect_val_threshold_path(artifacts_dir),
+        collect_val_threshold_path(root / "data" / "processed" / "train_loop_new"),
+    ]
+    seen: set[Path] = set()
+    for path in candidates:
+        path = path.resolve()
+        if path in seen:
+            continue
+        seen.add(path)
+        if not path.is_file():
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw = payload.get("val_threshold")
+        if raw is None:
+            continue
+        return float(raw)
+
+    tried = ", ".join(str(p) for p in seen)
+    raise FileNotFoundError(
+        "Нет val_threshold из collect. Запустите collect (блок B fit / C3) или положите "
+        f"{COLLECT_VAL_THRESHOLD_JSON} в train_loop_new. Пробовали: {tried}"
+    )

@@ -334,6 +334,9 @@ def load_df_final(
     spark: Any | None = None,
     stop_spark: bool = True,
     app_name: str = DEFAULT_APP_NAME,
+    fallback_parquet_path: str | Path | None = None,
+    generate_synthetic_if_missing: bool = False,
+    synthetic_n_rows: int = 600,
 ) -> tuple[pd.DataFrame, str]:
     """Читает итоговый df: Hive → при сбое локальный parquet.
 
@@ -366,12 +369,36 @@ def load_df_final(
                 path,
             )
 
-    if not path.is_file():
+    candidates: list[Path] = [path]
+    if fallback_parquet_path is not None:
+        fb = Path(fallback_parquet_path)
+        if fb not in candidates:
+            candidates.append(fb)
+    elif path.name == "df_final_3.parquet":
+        synthetic = path.parent / "df_final_3_synthetic.parquet"
+        if synthetic not in candidates:
+            candidates.append(synthetic)
+
+    resolved: Path | None = next((c for c in candidates if c.is_file()), None)
+    if resolved is None and generate_synthetic_if_missing:
+        target = candidates[-1]
+        from querulus.synthetic_dataset import write_synthetic_final_dataset
+
+        resolved = write_synthetic_final_dataset(target, n_rows=synthetic_n_rows)
+        print(f"[dataset] синтетика сгенерирована: {resolved}")
+
+    if resolved is None:
+        tried = ", ".join(str(c) for c in candidates)
         raise FileNotFoundError(
-            f"Нет Hive и нет локального parquet: table={hive_table!r} path={path}"
+            f"Нет Hive и нет локального parquet (пробовали: {tried}). "
+            "Запустите: python -m querulus.synthetic_dataset или make synthetic-data"
         )
-    pdf = pd.read_parquet(path)
-    source = f"parquet:{path}"
+    if resolved != path:
+        logger.warning("parquet fallback: %s → %s", path, resolved)
+        print(f"[dataset] parquet fallback: {resolved}")
+
+    pdf = pd.read_parquet(resolved)
+    source = f"parquet:{resolved}"
     logger.info("dataset source=%s shape=%s", source, pdf.shape)
     print("=" * 72)
     if hive_error is not None:
@@ -381,7 +408,7 @@ def load_df_final(
         print("ИСТОЧНИК ДАТАСЕТА: локальный parquet")
     else:
         print("ИСТОЧНИК ДАТАСЕТА: локальный parquet (Hive не запрашивался)")
-    print(f"  файл:  {path}")
+    print(f"  файл:  {resolved}")
     print(f"  shape: {pdf.shape}")
     print("=" * 72)
     return pdf, source

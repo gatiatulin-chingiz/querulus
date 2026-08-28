@@ -998,6 +998,14 @@ def run_train_loop_new(
         stage_skipped("calibration", "RUN_CALIBRATION")
 
     print(f"[B] artifacts → {out_dir}")
+    if training.val_threshold is not None:
+        from querulus.fin_effect.threshold_policy import save_collect_val_threshold
+
+        save_collect_val_threshold(
+            training.val_threshold,
+            artifacts_dir=out_dir,
+            n_val=len(splits.val),
+        )
     return TrainLoopResult(
         training=training,
         flags=flags,

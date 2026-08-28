@@ -304,6 +304,18 @@ def _mvp_features(df: pd.DataFrame, config: TrainingConfig) -> tuple[pd.DataFram
             + [column for column in fe_cat if column in features]
         )
     )
+    # Selected/явные фичи из TO_DROP: dtype object/str → cat (иначе CatBoost: "ЮГ" in num_feature).
+    for column in requested:
+        if column not in categorical and column in features:
+            series = data[column]
+            if (
+                column in fe_cat
+                or pd.api.types.is_object_dtype(series)
+                or pd.api.types.is_string_dtype(series)
+                or pd.api.types.is_bool_dtype(series)
+            ):
+                categorical.append(column)
+    data = _stringify_categorical_columns(data, categorical)
     return data, features, categorical
 
 
@@ -874,23 +886,30 @@ def _fit_catboost(
     return model
 
 
+def bundles_metrics_table(
+    bundles: dict[str, dict[str, float]],
+    *,
+    column_order: list[str] | None = None,
+) -> pd.DataFrame:
+    """Таблица metric × split; колонки — ключи ``bundles`` (произвольные имена срезов)."""
+    if not bundles:
+        return pd.DataFrame(columns=["metric"])
+    columns = list(column_order) if column_order is not None else list(bundles.keys())
+    metric_names = sorted({metric for split in bundles.values() for metric in split})
+    if not metric_names:
+        return pd.DataFrame({"metric": []})
+    data: dict[str, object] = {"metric": metric_names}
+    for column in columns:
+        split_metrics = bundles.get(column, {})
+        data[column] = [split_metrics.get(metric) for metric in metric_names]
+    return pd.DataFrame(data)
+
+
 def _model_metrics_table(model_metrics: dict[str, dict[str, float]]) -> pd.DataFrame:
     """Собрать train / val / test метрики одной модели в таблицу."""
-    train_metrics = model_metrics.get("train", {})
-    val_metrics = model_metrics.get("val", {})
-    test_metrics = model_metrics.get("test", {})
-    metric_names = sorted(
-        set(train_metrics) | set(val_metrics) | set(test_metrics)
-    )
-    if not metric_names:
-        return pd.DataFrame(columns=["metric", "train", "val", "test"])
-    return pd.DataFrame(
-        {
-            "metric": metric_names,
-            "train": [train_metrics.get(metric) for metric in metric_names],
-            "val": [val_metrics.get(metric) for metric in metric_names],
-            "test": [test_metrics.get(metric) for metric in metric_names],
-        }
+    return bundles_metrics_table(
+        model_metrics,
+        column_order=["train", "val", "test"],
     )
 
 
