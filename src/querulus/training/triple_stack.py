@@ -228,10 +228,11 @@ def run_triple_fin_effects(
 ) -> tuple[dict[str, FinEffectResult], pd.DataFrame]:
     """Фин. эффект по каждому стеку + одна сводная таблица."""
     from querulus.fin_effect.threshold_policy import (
-        pick_threshold_on_val_from_training,
-        resolve_val_threshold,
+        resolve_or_pick_val_threshold,
+        val_index_from_trainings,
     )
 
+    shared_val_index = val_index_from_trainings(trainings)
     results: dict[str, FinEffectResult] = {}
     rows: list[dict[str, object]] = []
     for stack_name, freq_target, sev_target in stacks:
@@ -245,19 +246,13 @@ def run_triple_fin_effects(
             loaded_from_checkpoint=loaded_from_checkpoint,
             legacy_dataset=legacy_dataset,
         )
-        if training.val_threshold is not None:
-            thr = resolve_val_threshold(training)
-        elif training.frequency_split is not None and training.frequency_split.has_val:
-            thr = pick_threshold_on_val_from_training(
-                df,
-                training,
-                training.frequency_split.x_val.index,
-                config=cfg,
-            ).threshold
-        else:
-            raise ValueError(
-                f"stack {stack_name}: нет val_threshold и Val split для подбора порога"
-            )
+        thr = resolve_or_pick_val_threshold(
+            df,
+            training,
+            val_index=shared_val_index,
+            frequency_target_column=freq_target,
+            config=cfg,
+        )
         result = run_fin_effect_from_training(
             df,
             training,

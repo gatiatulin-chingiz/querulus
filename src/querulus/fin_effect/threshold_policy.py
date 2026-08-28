@@ -98,3 +98,62 @@ def resolve_val_threshold(
             "training.val_threshold не задан; сначала pick_threshold_on_val_from_training"
         )
     return float(thr)
+
+
+def val_index_from_training(training: object | None) -> pd.Index | None:
+    """Index Val из ``TrainingArtifacts.frequency_split``, если есть."""
+    split = getattr(training, "frequency_split", None)
+    if split is None or not getattr(split, "has_val", False):
+        return None
+    x_val = getattr(split, "x_val", None)
+    if x_val is None or len(x_val) == 0:
+        return None
+    return pd.Index(x_val.index)
+
+
+def val_index_from_trainings(
+    trainings: dict[str, object],
+    *,
+    prefer: tuple[str, ...] = ("new", "new_claims", "legacy"),
+) -> pd.Index | None:
+    """Общий Val-календарь для стеков без собственного Val (legacy train/test)."""
+    for name in prefer:
+        idx = val_index_from_training(trainings.get(name))
+        if idx is not None and len(idx) > 0:
+            return idx
+    for training in trainings.values():
+        idx = val_index_from_training(training)
+        if idx is not None and len(idx) > 0:
+            return idx
+    return None
+
+
+def resolve_or_pick_val_threshold(
+    df: pd.DataFrame,
+    training: object,
+    *,
+    val_index: pd.Index | None = None,
+    frequency_target_column: str | None = None,
+    config: FinEffectConfig | None = None,
+    explicit: float | None = None,
+) -> float:
+    """``training.val_threshold`` или подбор на Val (свой split или ``val_index``)."""
+    if explicit is not None:
+        return float(explicit)
+    cached = getattr(training, "val_threshold", None)
+    if cached is not None:
+        return float(cached)
+
+    own_val = val_index_from_training(training)
+    pick_index = own_val if own_val is not None and len(own_val) > 0 else val_index
+    if pick_index is None or len(pick_index) == 0:
+        raise ValueError(
+            "Нужен training.val_threshold или val_index для подбора порога на Val"
+        )
+    return pick_threshold_on_val_from_training(
+        df,
+        training,
+        pick_index,
+        config=config,
+        frequency_target_column=frequency_target_column,
+    ).threshold

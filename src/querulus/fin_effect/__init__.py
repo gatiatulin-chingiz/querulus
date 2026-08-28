@@ -42,7 +42,10 @@ from querulus.fin_effect.threshold_policy import (
     ValThresholdResult,
     pick_threshold_on_val,
     pick_threshold_on_val_from_training,
+    resolve_or_pick_val_threshold,
     resolve_val_threshold,
+    val_index_from_training,
+    val_index_from_trainings,
 )
 from querulus.fin_effect.resolve import (
     CLAIMS_FREQUENCY_TARGETS,
@@ -147,7 +150,10 @@ __all__ = [
     "ValThresholdResult",
     "pick_threshold_on_val",
     "pick_threshold_on_val_from_training",
+    "resolve_or_pick_val_threshold",
     "resolve_val_threshold",
+    "val_index_from_training",
+    "val_index_from_trainings",
     "search_best_threshold",
     "search_best_threshold_by_f1",
     "search_threshold_strategies",

@@ -75,19 +75,38 @@ def _holdout_index(
     )
 
 
-def _classification_threshold(training: TrainingArtifacts) -> float:
-    from querulus.fin_effect.threshold_policy import resolve_val_threshold
+def _classification_threshold(
+    training: TrainingArtifacts,
+    *,
+    df: pd.DataFrame,
+    val_index: pd.Index | None = None,
+    frequency_target: str | None = None,
+) -> float:
+    from querulus.fin_effect.threshold_policy import resolve_or_pick_val_threshold
 
-    return resolve_val_threshold(training)
+    return resolve_or_pick_val_threshold(
+        df,
+        training,
+        val_index=val_index,
+        frequency_target_column=frequency_target,
+    )
 
 
 def _stack_predictions(
     training: TrainingArtifacts,
     df: pd.DataFrame,
     index: pd.Index,
+    *,
+    val_index: pd.Index | None = None,
+    frequency_target: str | None = None,
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
     """proba, pred_freq (порог Val), pred_sev на index."""
-    thr = _classification_threshold(training)
+    thr = _classification_threshold(
+        training,
+        df=df,
+        val_index=val_index,
+        frequency_target=frequency_target,
+    )
     feats = _predict_features(training, df, index)
     proba = pd.Series(
         frequency_predict_proba(training, feats[training.frequency_features]),
@@ -365,6 +384,7 @@ def _retrain_freq_on_target(
     *,
     target_column: str,
     eval_index: pd.Index,
+    threshold: float,
 ) -> tuple[pd.Series, pd.Series]:
     """Переобучить freq clf (фичи + hparams training) на ``target_column``; score на eval.
 
@@ -417,7 +437,7 @@ def _retrain_freq_on_target(
         index=eval_index,
         dtype=float,
     )
-    thr = _classification_threshold(training)
+    thr = float(threshold)
     pred = (proba >= thr).astype(int)
     return proba, pred
 
@@ -431,6 +451,7 @@ def score_stack_on_index(
     freq_target: str,
     sev_target: str = _SEV_COL,
     psr_col: str = _PSR_COL,
+    val_index: pd.Index | None = None,
 ) -> tuple[dict[str, object], pd.DataFrame]:
     """Freq-метрики и ₽-квадранты одного стека на фиксированном index."""
     if index.empty:
@@ -439,11 +460,26 @@ def score_stack_on_index(
     for col in (freq_target, sev_target, psr_col):
         if col not in holdout.columns:
             raise KeyError(f"Для оценки нужна колонка {col}")
-    proba, pred_freq, pred_sev = _stack_predictions(training, df, index)
+    proba, pred_freq, pred_sev = _stack_predictions(
+        training,
+        df,
+        index,
+        val_index=val_index,
+        frequency_target=freq_target,
+    )
     y_true = holdout[freq_target].fillna(0).astype(int)
     y_true.name = freq_target
     freq_row = _freq_metrics_row(
-        stack, y_true, proba, pred_freq, threshold=_classification_threshold(training)
+        stack,
+        y_true,
+        proba,
+        pred_freq,
+        threshold=_classification_threshold(
+            training,
+            df=df,
+            val_index=val_index,
+            frequency_target=freq_target,
+        ),
     )
     coverage = _coverage_table(
         stack,
@@ -509,6 +545,10 @@ def evaluate_legacy_vs_new(
         quiet=True,
     ).report
 
+    from querulus.fin_effect.threshold_policy import val_index_from_training
+
+    val_index = val_index_from_training(new)
+
     freq_rows: list[dict[str, object]] = []
     trainings = {"legacy": legacy, "new": new}
 
@@ -516,10 +556,21 @@ def evaluate_legacy_vs_new(
         part = df.loc[eval_index]
         for stack in stacks:
             y_col = _STACKS[0][1] if stack == "legacy" else _STACKS[1][1]
-            proba, pred_freq, _ = _stack_predictions(trainings[stack], df, eval_index)
+            proba, pred_freq, _ = _stack_predictions(
+                trainings[stack],
+                df,
+                eval_index,
+                val_index=val_index,
+                frequency_target=y_col,
+            )
             y_true = part[y_col].fillna(0).astype(int)
             y_true.name = y_col
-            thr = _classification_threshold(trainings[stack])
+            thr = _classification_threshold(
+                trainings[stack],
+                df=df,
+                val_index=val_index,
+                frequency_target=y_col,
+            )
             freq_rows.append(
                 _freq_metrics_row(
                     stack,
@@ -533,23 +584,36 @@ def evaluate_legacy_vs_new(
 
     _append_stack_rows(index, "test", ("legacy", "new"))
 
-    if new.frequency_split is not None and new.frequency_split.has_val:
-        val_index = new.frequency_split.x_val.index
-        if len(val_index) > 0:
-            _append_stack_rows(val_index, "val", ("new",))
+    if val_index is not None and len(val_index) > 0:
+        _append_stack_rows(val_index, "val", ("legacy", "new"))
 
     preds: dict[str, tuple[pd.Series, pd.Series, pd.Series]] = {}
     for stack, y_col in _STACKS:
-        proba, pred_freq, pred_sev = _stack_predictions(trainings[stack], df, index)
+        proba, pred_freq, pred_sev = _stack_predictions(
+            trainings[stack],
+            df,
+            index,
+            val_index=val_index,
+            frequency_target=y_col,
+        )
         preds[stack] = (proba, pred_freq, pred_sev)
 
     # legacy retrain on TARGET_FREQ — только test holdout (test-tuned baseline).
     y_freq = holdout["TARGET_FREQ"].fillna(0).astype(int)
     y_freq.name = "TARGET_FREQ"
-    proba_re, pred_re = _retrain_freq_on_target(
-        df, legacy, target_column="TARGET_FREQ", eval_index=index
+    thr_freq = _classification_threshold(
+        new,
+        df=df,
+        val_index=val_index,
+        frequency_target="TARGET_FREQ",
     )
-    thr_legacy = _classification_threshold(legacy)
+    proba_re, pred_re = _retrain_freq_on_target(
+        df,
+        legacy,
+        target_column="TARGET_FREQ",
+        eval_index=index,
+        threshold=thr_freq,
+    )
     freq_rows.insert(
         1,
         _freq_metrics_row(
@@ -558,7 +622,7 @@ def evaluate_legacy_vs_new(
             proba_re,
             pred_re,
             split_label="test",
-            threshold=thr_legacy,
+            threshold=thr_freq,
         ),
     )
 
