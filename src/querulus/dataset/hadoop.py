@@ -374,10 +374,6 @@ def load_df_final(
         fb = Path(fallback_parquet_path)
         if fb not in candidates:
             candidates.append(fb)
-    elif path.name == "df_final_3.parquet":
-        synthetic = path.parent / "df_final_3_synthetic.parquet"
-        if synthetic not in candidates:
-            candidates.append(synthetic)
 
     resolved: Path | None = next((c for c in candidates if c.is_file()), None)
     if resolved is None and generate_synthetic_if_missing:
@@ -390,8 +386,7 @@ def load_df_final(
     if resolved is None:
         tried = ", ".join(str(c) for c in candidates)
         raise FileNotFoundError(
-            f"Нет Hive и нет локального parquet (пробовали: {tried}). "
-            "Запустите: python -m querulus.synthetic_dataset или make synthetic-data"
+            f"Нет Hive и нет локального parquet (пробовали: {tried})."
         )
     if resolved != path:
         logger.warning("parquet fallback: %s → %s", path, resolved)
