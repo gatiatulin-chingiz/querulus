@@ -1,4 +1,12 @@
-"""Политика порога frequency: подбор только на Val (max net_effect)."""
+"""Политика порога τ для модели frequency (TARGET_FREQ).
+
+Подбор τ выполняется только в collect (блок B): max net_effect на holdout Val,
+модель обучена на train_core. Артефакт — ``val_threshold_latest.json``.
+
+example.ipynb и prod-пайплайн **не подбирают** τ повторно: загрузка через
+``load_collect_val_threshold``. DSM/OutBoxML по умолчанию использует 0.5 —
+см. ``querulus.training.dsm_fit``.
+"""
 from __future__ import annotations
 
 import json
@@ -182,7 +190,7 @@ def save_collect_val_threshold(
     n_val: int | None = None,
     source: str = "training.val_threshold",
 ) -> Path:
-    """Записать τ для ``example.ipynb`` и сервиса (единый источник — collect Val)."""
+    """Сохранить τ frequency для downstream (example, integration, сервис)."""
     out = Path(path) if path is not None else collect_val_threshold_path(artifacts_dir)
     out.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, object] = {
@@ -202,7 +210,7 @@ def load_collect_val_threshold(
     training: object | None = None,
     artifacts_dir: Path | str | None = None,
 ) -> float:
-    """τ с Val collect: in-memory ``training`` → JSON ``val_threshold_latest.json``."""
+    """Загрузить τ frequency из in-memory training или ``val_threshold_latest.json``."""
     if training is not None:
         thr = getattr(training, "val_threshold", None)
         if thr is not None:

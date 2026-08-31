@@ -27,7 +27,12 @@ _load_subset_patched = False
 
 
 def _patch_model_data_subset_load_subset() -> None:
-    """OutBoxML: при ``data_filter_condition`` y_train не режется под X_train — выравниваем."""
+    """Согласовать индексы X/y в OutBoxML при ``data_filter_condition`` (RG parity).
+
+    Без патча ``ModelDataSubset.load_subset`` оставляет ``y_train`` длиннее
+    ``X_train`` после query-фильтра severity — DSM fit падает или даёт смещение.
+    Патч идемпотентен; правки только в querulus, OutBoxML не меняем.
+    """
     global _load_subset_patched
     if _load_subset_patched:
         return
@@ -53,7 +58,11 @@ def _patch_model_data_subset_load_subset() -> None:
 
 
 def ensure_legacy_inflation_column(df: pd.DataFrame) -> pd.DataFrame:
-    """Алиас FE_*_2020 для артефактов FS, обученных до смены базового года CPI."""
+    """Добавить алиас ``FE_VALUE_BEFORE_WITHOUT_REAL_2020`` для совместимости с FS-артефактами.
+
+    Отбор severity в train_loop мог быть выполнен до смены базового года CPI;
+    без алиаса колонка из ``new_severity_latest.json`` отсутствует в df.
+    """
     legacy = "FE_VALUE_BEFORE_WITHOUT_REAL_2020"
     if legacy in df.columns:
         return df
@@ -68,15 +77,11 @@ def ensure_legacy_inflation_column(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def dataframe_for_dsm(df: pd.DataFrame) -> pd.DataFrame:
-    """Копия df: Categorical → object (и string EA → object).
+    """Подготовить df для OutBoxML: categorical/string → object.
 
-    Outboxml ``prepare_categorical`` делает ``.map`` + ``loc[...] = default``.
-    На ``category`` это падает, если ``default`` ещё не в categories
-    (типично код ``ПРОЧИЕ=0``, которого не было в данных).
-
-    Важно: DSM перед prepare пишет temp parquet и читает обратно — category
-    часто **возвращается**. Поэтому каст нужен ещё и в
-    :class:`SafePrepareDataset` непосредственно перед prepare.
+    OutBoxML ``prepare_categorical`` не допускает присвоение default вне
+    ``categories`` pandas.Categorical. DSM дополнительно пишет temp parquet,
+    поэтому каст дублируется в ``SafePrepareDataset`` перед prepare.
     """
     out = df.copy()
     for name in out.columns:

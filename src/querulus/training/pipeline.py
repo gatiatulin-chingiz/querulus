@@ -304,7 +304,9 @@ def _mvp_features(df: pd.DataFrame, config: TrainingConfig) -> tuple[pd.DataFram
             + [column for column in fe_cat if column in features]
         )
     )
-    # Selected/явные фичи из TO_DROP: dtype object/str → cat (иначе CatBoost: "ЮГ" in num_feature).
+    # Явные frequency/severity из конфига могут ссылаться на колонки из TO_DROP
+    # AutoMVP (напр. LOSS_UNIT_ZONE). Такие колонки добавляем в пул и помечаем
+    # categorical по dtype, иначе CatBoost получает строки в num_feature.
     for column in requested:
         if column not in categorical and column in features:
             series = data[column]
@@ -914,7 +916,7 @@ def _model_metrics_table(model_metrics: dict[str, dict[str, float]]) -> pd.DataF
 
 
 def _format_metric_value(value: float | int | None) -> str:
-    """Форматировать одно значение метрики: не более 2 знаков после запятой."""
+    """Строковое представление метрики для таблиц (не более 2 знаков после запятой)."""
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return "—"
     if isinstance(value, (int, bool)) or float(value).is_integer():

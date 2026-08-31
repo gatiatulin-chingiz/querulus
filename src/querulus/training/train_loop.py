@@ -998,6 +998,7 @@ def run_train_loop_new(
         stage_skipped("calibration", "RUN_CALIBRATION")
 
     print(f"[B] artifacts → {out_dir}")
+    # Единый τ frequency для example / prod / метрик (источник — collect, не DSM).
     if training.val_threshold is not None:
         from querulus.fin_effect.threshold_policy import save_collect_val_threshold
 

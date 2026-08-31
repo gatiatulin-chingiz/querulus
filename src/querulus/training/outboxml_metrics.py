@@ -1,10 +1,15 @@
-"""Метрики DSM в стиле collect, без правок outboxml и без modeldiagnostics.
+"""Метрики DSM в стиле collect без правок OutBoxML и без modeldiagnostics.
 
-OutBoxML ``BaseMetrics`` отдаёт урезанный набор (clf: f1/precision/recall/gini;
-reg: mae/rmse/r2). Здесь считаем полный bundle как в ``train_loop`` / collect
-и подставляем в ``result.metrics[*]['full']``.
+OutBoxML ``BaseMetrics`` для classification считает F1/precision/recall/gini
+только при ``cut_off = 0.5``. Для frequency используется τ из collect
+(``load_collect_val_threshold``); подмена порога при ``fit_models`` —
+``querulus.training.dsm_fit.outboxml_classification_cutoff`` /
+``fit_dsm_classification``.
 
-Classification: один порог с Val (``val_threshold``), без 0.5 по умолчанию.
+Здесь — полный набор метрик как в train_loop/collect; результат пишется
+в ``result.metrics[*]['full']`` (см. ``enrich_dsm_model_metrics``).
+Classification: обязателен ``val_threshold``; значение 0.5 по умолчанию не
+применяется.
 """
 from __future__ import annotations
 

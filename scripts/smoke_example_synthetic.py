@@ -30,6 +30,7 @@ from querulus.training.outboxml_metrics import (  # noqa: E402
     display_dsm_collect_metrics_cross_test,
     predict_dsm_series,
 )
+from querulus.training.dsm_fit import fit_dsm_classification  # noqa: E402
 from querulus.fin_effect import (  # noqa: E402
     export_business_html,
     load_collect_val_threshold,
@@ -74,7 +75,7 @@ def main() -> None:
         prepared_datasets=prepare_datasets_from_config(built["cf_path"]),
     )
     dsm_cf.load_dataset(data=df)
-    dsm_cf.fit_models()
+    fit_dsm_classification(dsm_cf, cf_name, threshold=thr_val)
     patch_dsm(dsm_cf)
 
     dsm_rg = DataSetsManager(
@@ -144,7 +145,7 @@ def main() -> None:
         prepared_datasets=prepare_datasets_from_config(built["cf_prod_path"]),
     )
     dsm_cf_prod.load_dataset(data=df)
-    dsm_cf_prod.fit_models()
+    fit_dsm_classification(dsm_cf_prod, cf_name, threshold=thr_val)
     patch_dsm(dsm_cf_prod)
 
     dsm_rg_prod = DataSetsManager(
