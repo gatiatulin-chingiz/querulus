@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import importlib
 import io
 import logging
@@ -1439,4 +1439,74 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         ),
         frequency_target=config.frequency_target,
         config=config,
+    )
+
+
+def _clone_catboost_for_refit(model: object, model_cls: type) -> object:
+    """Новая модель CatBoost с теми же гиперпараметрами и числом деревьев."""
+    params = dict(model.get_params(deep=False))
+    tree_count = getattr(model, "tree_count_", None)
+    if tree_count is not None:
+        params["iterations"] = int(tree_count)
+    return model_cls(**params)
+
+
+def refit_training_on_index(
+    df: pd.DataFrame,
+    source: TrainingArtifacts,
+    fit_index: pd.Index,
+    *,
+    frequency_target: str = "TARGET_FREQ",
+    severity_target: str = "TARGET_SEV",
+    config: TrainingConfig | None = None,
+) -> TrainingArtifacts:
+    """Переобучить freq/severity CatBoost на ``fit_index`` (те же фичи и HPO, без FS)."""
+    config = config or TrainingConfig()
+    CatBoostClassifier, CatBoostRegressor, _, _, _ = _require_catboost()
+    idx = pd.Index(fit_index).intersection(df.index)
+    if len(idx) == 0:
+        raise ValueError("fit_index пуст или не пересекается с df.index")
+
+    cat_columns = list(
+        {
+            *source.frequency_categorical_features,
+            *source.severity_categorical_features,
+        }
+    )
+    frame = _stringify_categorical_columns(df.loc[idx].copy(), cat_columns)
+
+    freq_feats = source.frequency_features
+    freq_cats = [c for c in source.frequency_categorical_features if c in freq_feats]
+    freq_pool = _make_pool(
+        frame[freq_feats],
+        frame[frequency_target].astype(int),
+        cat_features=freq_cats,
+        feature_names=freq_feats,
+    )
+    freq_model = _clone_catboost_for_refit(source.frequency_model, CatBoostClassifier)
+    freq_model.fit(freq_pool, plot=False)
+
+    sev_feats = source.severity_features
+    sev_cats = [c for c in source.severity_categorical_features if c in sev_feats]
+    sev_frame = frame[frame[severity_target] > 0]
+    if sev_frame.empty:
+        raise ValueError(f"Нет строк {severity_target} > 0 на prod_fit")
+    sev_pool = _make_pool(
+        sev_frame[sev_feats],
+        severity_train_target(sev_frame[severity_target], source.severity_target_transform),
+        cat_features=sev_cats,
+        feature_names=sev_feats,
+        weight=severity_sample_weights(
+            sev_frame[severity_target], config.severity_sample_weight
+        ),
+    )
+    sev_model = _clone_catboost_for_refit(source.severity_model, CatBoostRegressor)
+    sev_model.fit(sev_pool, plot=False)
+
+    return replace(
+        source,
+        frequency_model=freq_model,
+        severity_model=sev_model,
+        frequency_calibrator=None,
+        val_threshold=None,
     )

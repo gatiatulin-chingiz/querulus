@@ -1,11 +1,11 @@
 """Политика порога τ для модели frequency (TARGET_FREQ).
 
-Подбор τ выполняется только в collect (блок B): max net_effect на holdout Val,
-модель обучена на train_core. Артефакт — ``val_threshold_latest.json``.
+Подбор τ выполняется только в collect:
+- parity: max net_effect на Val → ``val_threshold_latest.json``;
+- prod refit: max net_effect на τ-cal (15% test) → ``prod_threshold_latest.json``.
 
 example.ipynb и prod-пайплайн **не подбирают** τ повторно: загрузка через
-``load_collect_val_threshold``. DSM/OutBoxML по умолчанию использует 0.5 —
-см. ``querulus.training.dsm_fit``.
+``load_collect_val_threshold`` / ``load_collect_prod_threshold``.
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from querulus.fin_effect.calculator import (
 from querulus.fin_effect.config import FinEffectConfig
 
 COLLECT_VAL_THRESHOLD_JSON = "val_threshold_latest.json"
+COLLECT_PROD_THRESHOLD_JSON = "prod_threshold_latest.json"
 DEFAULT_COLLECT_ARTIFACTS_DIR = PROJECT_ROOT / "data" / "processed" / "train_loop_new"
 
 
@@ -239,4 +240,66 @@ def load_collect_val_threshold(
     raise FileNotFoundError(
         "Нет val_threshold из collect. Запустите collect (блок B fit / C3) или положите "
         f"{COLLECT_VAL_THRESHOLD_JSON} в train_loop_new. Пробовали: {tried}"
+    )
+
+
+def collect_prod_threshold_path(
+    artifacts_dir: Path | str | None = None,
+) -> Path:
+    """Путь JSON с τ prod-refit из collect (блок C3b)."""
+    base = Path(artifacts_dir) if artifacts_dir is not None else DEFAULT_COLLECT_ARTIFACTS_DIR
+    return base / COLLECT_PROD_THRESHOLD_JSON
+
+
+def save_collect_prod_threshold(
+    threshold: float,
+    path: Path | str | None = None,
+    *,
+    artifacts_dir: Path | str | None = None,
+    n_tau_cal: int | None = None,
+    source: str = "collect C3b",
+) -> Path:
+    """Сохранить τ frequency для prod-refit (downstream example, meta, сервис)."""
+    out = Path(path) if path is not None else collect_prod_threshold_path(artifacts_dir)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, object] = {
+        "prod_threshold": float(threshold),
+        "source": source,
+        "saved_at_utc": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+    }
+    if n_tau_cal is not None:
+        payload["n_tau_cal"] = int(n_tau_cal)
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
+
+
+def load_collect_prod_threshold(
+    project_root: Path | str | None = None,
+    *,
+    artifacts_dir: Path | str | None = None,
+) -> float:
+    """Загрузить τ prod-refit из ``prod_threshold_latest.json``."""
+    root = Path(project_root) if project_root is not None else PROJECT_ROOT
+    candidates = [
+        collect_prod_threshold_path(artifacts_dir),
+        collect_prod_threshold_path(root / "data" / "processed" / "train_loop_new"),
+    ]
+    seen: set[Path] = set()
+    for path in candidates:
+        path = path.resolve()
+        if path in seen:
+            continue
+        seen.add(path)
+        if not path.is_file():
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw = payload.get("prod_threshold")
+        if raw is None:
+            continue
+        return float(raw)
+
+    tried = ", ".join(str(p) for p in seen)
+    raise FileNotFoundError(
+        "Нет prod_threshold из collect. Запустите collect (блок C3b) или положите "
+        f"{COLLECT_PROD_THRESHOLD_JSON} в train_loop_new. Пробовали: {tried}"
     )

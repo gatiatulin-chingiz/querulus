@@ -20,7 +20,10 @@ from querulus.training.splits import default_inner_periods_from_train, split_by_
 DEFAULT_ARTIFACTS_DIR = PROJECT_ROOT / "data" / "processed" / "train_loop_new"
 DEFAULT_CONFIGS_DIR = PROJECT_ROOT / "configs"
 DEFAULT_HPO_PATH = DEFAULT_ARTIFACTS_DIR / "hpo_best_params_new.json"
-PROD_CAL_FRACTION = 0.15
+PROD_FIT_TEST_FRACTION = 0.70
+PROD_TAU_CAL_FRACTION = 0.15
+PROD_HOLDOUT_FRACTION = 0.15
+PROD_CAL_FRACTION = PROD_HOLDOUT_FRACTION  # alias: доля Test_prod (holdout)
 _NA_KEY = "N/A"
 _OTHER_KEY = "ПРОЧИЕ"
 _load_subset_patched = False
@@ -474,9 +477,11 @@ def compute_period_windows(
     train_period: tuple[str, str] | None = None,
     test_period: tuple[str, str] | None = None,
     freq_target: str = "TARGET_FREQ",
-    prod_cal_fraction: float = PROD_CAL_FRACTION,
+    prod_fit_test_fraction: float = PROD_FIT_TEST_FRACTION,
+    prod_tau_cal_fraction: float = PROD_TAU_CAL_FRACTION,
+    prod_holdout_fraction: float = PROD_HOLDOUT_FRACTION,
 ) -> dict[str, Any]:
-    """Parity (train_core∪val / cal / test) и prod 85/15 по дате cutoff."""
+    """Parity (train_core∪val / cal / test) и prod 70/15/15 внутри holdout Test."""
     cfg = TrainingConfig()
     train_period = train_period or cfg.train_period
     test_period = test_period or cfg.test_period
@@ -496,20 +501,34 @@ def compute_period_windows(
     n_test = int(len(ordered))
     if n_test < 10:
         raise ValueError(f"Слишком мало строк test={n_test}")
-    n_cal = max(1, int(round(n_test * float(prod_cal_fraction))))
-    n_cal = min(n_cal, n_test - 1)
-    cutoff = pd.Timestamp(ordered.iloc[n_test - n_cal])
-    prod_train_end = cutoff - pd.Timedelta(days=1)
+    n_fit = max(1, int(round(n_test * float(prod_fit_test_fraction))))
+    n_tau = max(1, int(round(n_test * float(prod_tau_cal_fraction))))
+    n_hold = n_test - n_fit - n_tau
+    if n_hold < 1:
+        n_hold = 1
+        n_tau = max(1, n_test - n_fit - n_hold)
+    if n_fit + n_tau + n_hold != n_test:
+        n_hold = n_test - n_fit - n_tau
+
+    ordered_idx = pd.Index(ordered.index)
+    fit_test_idx = ordered_idx[:n_fit]
+    tau_cal_test_idx = ordered_idx[n_fit : n_fit + n_tau]
+    holdout_test_idx = ordered_idx[n_fit + n_tau :]
+
+    tau_start_ts = pd.Timestamp(ordered.iloc[n_fit])
+    tau_end_ts = pd.Timestamp(ordered.iloc[n_fit + n_tau - 1])
+    holdout_start_ts = pd.Timestamp(ordered.iloc[n_fit + n_tau])
+    prod_train_end = tau_start_ts - pd.Timedelta(days=1)
     prod_train_period = (train_period[0], _fmt(prod_train_end))
-    prod_test_period = (_fmt(cutoff), test_period[1])
+    prod_tau_cal_period = (_fmt(tau_start_ts), _fmt(tau_end_ts))
+    prod_test_period = (_fmt(holdout_start_ts), test_period[1])
     prod_fit_idx = df.index[
         (dates >= pd.Timestamp(prod_train_period[0]))
         & (dates <= pd.Timestamp(prod_train_period[1]))
     ]
-    prod_cal_idx = df.index[
-        (dates >= pd.Timestamp(prod_test_period[0]))
-        & (dates <= pd.Timestamp(prod_test_period[1]))
-    ]
+    prod_tau_cal_idx = tau_cal_test_idx
+    prod_holdout_idx = holdout_test_idx
+    prod_cal_idx = prod_holdout_idx
     parity_fit_idx = splits.train.union(splits.val)
 
     def row(role: str, start: str, end: str, index: pd.Index) -> PeriodWindow:
@@ -525,8 +544,24 @@ def compute_period_windows(
         row("parity_train (core∪val)", parity_train[0], parity_train[1], parity_fit_idx),
         row("train_tail (хвост train; в collect — Cal)", cal_period[0], cal_period[1], splits.cal),
         row("holdout Test", test_period[0], test_period[1], splits.test),
-        row("prod_fit (train + test до cutoff)", prod_train_period[0], prod_train_period[1], prod_fit_idx),
-        row("prod_holdout (15% freshest test)", prod_test_period[0], prod_test_period[1], prod_cal_idx),
+        row(
+            f"prod_fit (train + {prod_fit_test_fraction:.0%} test)",
+            prod_train_period[0],
+            prod_train_period[1],
+            prod_fit_idx,
+        ),
+        row(
+            f"prod_tau_cal ({prod_tau_cal_fraction:.0%} test; τ в collect)",
+            prod_tau_cal_period[0],
+            prod_tau_cal_period[1],
+            prod_tau_cal_idx,
+        ),
+        row(
+            f"Test_prod ({prod_holdout_fraction:.0%} freshest test)",
+            prod_test_period[0],
+            prod_test_period[1],
+            prod_holdout_idx,
+        ),
     ]
     return {
         "date_column": date_column,
@@ -539,10 +574,17 @@ def compute_period_windows(
         "parity_train_period": parity_train,
         "parity_test_period": test_period,
         "prod_train_period": prod_train_period,
+        "prod_tau_cal_period": prod_tau_cal_period,
         "prod_test_period": prod_test_period,
-        "prod_cutoff": _fmt(cutoff),
-        "prod_cal_fraction": float(prod_cal_fraction),
-        "prod_holdout_idx": prod_cal_idx,
+        "prod_cutoff": _fmt(holdout_start_ts),
+        "prod_tau_cal_cutoff": _fmt(holdout_start_ts),
+        "prod_fit_test_fraction": float(prod_fit_test_fraction),
+        "prod_tau_cal_fraction": float(prod_tau_cal_fraction),
+        "prod_holdout_fraction": float(prod_holdout_fraction),
+        "prod_cal_fraction": float(prod_holdout_fraction),
+        "prod_fit_idx": prod_fit_idx,
+        "prod_tau_cal_idx": prod_tau_cal_idx,
+        "prod_holdout_idx": prod_holdout_idx,
         "splits": splits,
         "windows": windows,
         "table": pd.DataFrame([w.__dict__ for w in windows]),
