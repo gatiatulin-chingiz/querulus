@@ -1,0 +1,21 @@
+# Querulus notebooks / training (example, collect, example_final)
+ipykernel
+pandas
+numpy
+pyarrow
+scikit-learn
+catboost
+optuna
+matplotlib
+seaborn
+plotly
+kaleido
+environs
+pymssql
+openpyxl
+loguru
+mlflow
+shap
+lightgbm
+xgboost
+scipy

@@ -11,7 +11,6 @@ from querulus.dataset.preprocess.filters import (
     ensure_victim_object_type_column,
     select_primary_loss_per_incident,
 )
-from querulus.dataset.preprocess.maturity import MATURITY_REPORT_NAME, apply_target_maturity
 
 TARGET_FREQ_CLAIMS_GROUP = ("LOSS_NUMBER", "INCOMING_CLAIM_NUMBER")
 _FU_CLAIM_ORIGIN = "Обращение к ФУ"
@@ -467,6 +466,12 @@ def build_targets(
             df[col] = df[col].fillna(0)
 
     df = ensure_victim_object_type_column(df)
+
+    # Lazy import: maturity → targets (CLAIM_PERIOD_COL / is_void_claim_instance).
+    from querulus.dataset.preprocess.maturity import (
+        MATURITY_REPORT_NAME,
+        apply_target_maturity,
+    )
 
     report_path = paths.processed_dir / MATURITY_REPORT_NAME if save_checkpoint else None
     df, _ = apply_target_maturity(
