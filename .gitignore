@@ -70,9 +70,6 @@ _cells_dump/
 # FE-документация (локально, не в git)
 features_engineering/discriptions/
 
-# SQL-справочник колонок (локально, не в git)
-src/querulus/dataset/sql/
-
 # Журналы работ и отчёты — локально, пока не в git
 **/CHANGELOG.md
 **/REPORT*.md
