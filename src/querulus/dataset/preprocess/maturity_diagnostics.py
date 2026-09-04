@@ -50,25 +50,41 @@ def load_maturity_report(
 def maturity_policy_summary(
     project_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Текущая политика из dataset_filters + S / mature_until."""
+    """Текущая политика из dataset_filters + S / silent_until / cooloff_until."""
     filters = load_dataset_filters()
     cfg = filters.get("target_maturity") or {}
     snapshot, source = resolve_snapshot_date(filters)
-    if cfg.get("horizon_months_no_court") is not None:
-        horizon = int(cfg["horizon_months_no_court"])
+    if cfg.get("silent_horizon_months_fu_court") is not None:
+        silent_court = int(cfg["silent_horizon_months_fu_court"])
+    elif cfg.get("silent_horizon_months") is not None:
+        silent_court = int(cfg["silent_horizon_months"])
+    elif cfg.get("horizon_months_no_court") is not None:
+        silent_court = int(cfg["horizon_months_no_court"])
     elif cfg.get("horizon_months") is not None:
-        horizon = int(cfg["horizon_months"])
+        silent_court = int(cfg["horizon_months"])
     else:
-        horizon = 36
-    mature_until = (snapshot - pd.DateOffset(months=horizon)).normalize()
+        silent_court = 24
+    silent_pret = int(cfg.get("silent_horizon_months_pretension") or 6)
+    cooloff = int(cfg.get("cooloff_months_after_psr") or 24)
+    pret_until = (snapshot - pd.DateOffset(months=silent_pret)).normalize()
+    silent_until = (snapshot - pd.DateOffset(months=silent_court)).normalize()
+    cooloff_until = (snapshot - pd.DateOffset(months=cooloff)).normalize()
     victim = filters.get("victim") or {}
     return {
         "enabled": bool(cfg.get("enabled", True)),
         "t0_column": str(cfg.get("t0_column") or _T0_DEFAULT),
-        "horizon_months_no_court": horizon,
+        "silent_horizon_months_pretension": silent_pret,
+        "silent_horizon_months_fu_court": silent_court,
+        "silent_horizon_months": silent_court,
+        "cooloff_months_after_psr": cooloff,
+        "drop_psr_before_t0": bool(cfg.get("drop_psr_before_t0", True)),
+        "horizon_months_no_court": silent_court,
         "snapshot_date": str(snapshot.date()),
         "snapshot_source": source,
-        "mature_until": str(pd.Timestamp(mature_until).date()),
+        "mature_until": str(pd.Timestamp(silent_until).date()),
+        "silent_until": str(pd.Timestamp(silent_until).date()),
+        "silent_pretension_until": str(pd.Timestamp(pret_until).date()),
+        "cooloff_until": str(pd.Timestamp(cooloff_until).date()),
         "victim_date_from": victim.get("date_from"),
         "victim_date_to": victim.get("date_to"),
     }
@@ -419,17 +435,28 @@ def _display_report(report: dict[str, Any] | None, policy: dict[str, Any]) -> No
         return
     display(Markdown("### Отчёт maturity (последний прогон)"))
     keys = [
+        "enabled",
         "n_before",
         "n_after",
-        "n_kept_branch_a",
-        "n_kept_branch_b_only",
-        "n_dropped_horizon",
+        "n_kept_silent",
+        "n_kept_cooloff",
+        "n_dropped_still_maturing",
         "n_dropped_open_court",
+        "n_dropped_psr_before_t0",
         "n_dropped_t0_missing",
+        "n_with_psr_event",
+        "n_without_psr_event",
+        "silent_horizon_months_pretension",
+        "silent_horizon_months_fu_court",
+        "cooloff_months_after_psr",
+        "drop_psr_before_t0",
         "snapshot_date",
-        "mature_until",
-        "horizon_months_no_court",
+        "silent_until",
+        "silent_pretension_until",
+        "cooloff_until",
         "policy",
+        "lag_definition",
+        "pretensions_loaded",
     ]
     rows = {k: report.get(k) for k in keys}
     display(pd.Series(rows, name="report").to_frame())
@@ -538,11 +565,11 @@ def run_maturity_eda(
         "sev_sum": "{:,.0f}",
         "sev_mean_pos": "{:,.0f}",
     }
-    display(monthly.tail(24).style.format({k: v for k, v in _fmt.items() if k in monthly.columns}, na_rep="—"))
+    display(monthly.style.format({k: v for k, v in _fmt.items() if k in monthly.columns}, na_rep="—"))
     _plot_monthly_counts(
         monthly,
         mature_until=str(mature_until) if mature_until else None,
-        title="Инциденты по месяцу T0 (после maturity); красная линия = mature_until ветки B",
+        title="Инциденты по месяцу T0 (после maturity); красная линия = silent_until",
     )
 
     display(Markdown("### Когорты по году T0"))
@@ -557,13 +584,18 @@ def run_maturity_eda(
         display(gaps)
         print(f"Пустых месяцев: {len(gaps)}")
 
-    # Хвост после mature_until — только ветка A; полезно смотреть плотность и freq rate
+    # Хвост после silent_until: без ПСР сюда не попасть; только cooloff после события ПСР
     if mature_until and t0 in df.columns:
         cut = pd.Timestamp(mature_until)
         t0s = pd.to_datetime(df[t0], errors="coerce")
         recent = df.loc[t0s > cut]
         older = df.loc[t0s <= cut]
-        display(Markdown("### Хвост после mature_until (только ветка A могла выжить)"))
+        display(
+            Markdown(
+                "### Хвост после silent_until "
+                "(без ПСР сюда не попасть — только охлаждение после события)"
+            )
+        )
         print(
             f"T0 ≤ {cut.date()}: n={len(older):,} | "
             f"T0 > {cut.date()}: n={len(recent):,} "
@@ -576,7 +608,7 @@ def run_maturity_eda(
                 if len(older)
                 else float("nan")
             )
-            print(f"TARGET_FREQ=1 rate: older={o:.1%} | recent(A-only)={r:.1%}")
+            print(f"TARGET_FREQ=1 rate: older={o:.1%} | recent(cooloff)={r:.1%}")
 
     claims = load_claims_frame(root)
     claims_counts = None

@@ -40,10 +40,13 @@
   },
 
   "target_maturity": {
-    "_comment": "A: закрытый ПСР (суд/ФU/претензия с доплатой). B: T0+36м≤S без закрытого ПСР. Open court→drop. S=run_date или snapshot_date. lag p50..p99 в target_maturity_report.json.",
+    "_comment": "enabled=false отключает фильтр. Тишина (нет ПСР): претензии silent_horizon_months_pretension (6), ФУ/суд silent_horizon_months_fu_court (24) — keep когда оба истекли. Охлаждение: cooloff_months_after_psr (24) после last_event. drop_psr_before_t0: претензия/ФУ/суд раньше T0 → drop. Open court → drop.",
     "enabled": true,
     "t0_column": "PAYMENT_ORDER_DATE_TIME",
-    "horizon_months_no_court": 36,
+    "silent_horizon_months_pretension": 6,
+    "silent_horizon_months_fu_court": 24,
+    "cooloff_months_after_psr": 24,
+    "drop_psr_before_t0": true,
     "snapshot_date": null
   }
 }

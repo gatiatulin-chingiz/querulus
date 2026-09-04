@@ -339,8 +339,12 @@ def build_targets(
     *,
     save_checkpoint: bool = True,
     use_sql: bool = False,
+    maturity_enabled: bool | None = None,
 ):
-    """Добавить TARGET_2 (ПСР), TARGET_3_SEV, TARGET_FREQ и TARGET_SEV к victim-фрейму."""
+    """Добавить TARGET_2 (ПСР), TARGET_3_SEV, TARGET_FREQ и TARGET_SEV к victim-фрейму.
+
+    ``maturity_enabled``: None — как в dataset_filters; False/True — override.
+    """
     # Первичный убыток на инцидент: min LOSS_NUMBER
     df = select_primary_loss_per_incident(df)
 
@@ -471,10 +475,18 @@ def build_targets(
     from querulus.dataset.preprocess.maturity import (
         MATURITY_REPORT_NAME,
         apply_target_maturity,
+        try_load_pretensions,
+        with_maturity_enabled,
     )
 
     report_path = paths.processed_dir / MATURITY_REPORT_NAME if save_checkpoint else None
+    pretensions = try_load_pretensions(paths)
+    filters = with_maturity_enabled(None, maturity_enabled)
     df, _ = apply_target_maturity(
-        df, target_3_claims, report_path=report_path
+        df,
+        target_3_claims,
+        pretensions=pretensions,
+        filters=filters,
+        report_path=report_path,
     )
     return df

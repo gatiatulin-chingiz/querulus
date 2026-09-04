@@ -352,9 +352,10 @@ LEFT JOIN pretensions_by_incident
       <p>
         После сборки таргетов строки фильтруются по вызреванию
         (<code>configs/dataset_filters.json</code> → <code>target_maturity</code>):
-        горизонт <code>H</code> месяцев от <code>PAYMENT_ORDER_DATE_TIME</code> до снимка <code>S</code>,
-        плюс отсев исков с незакрытой последней инстанцией.
-        Отчёт: <code>data/processed/target_maturity_report.json</code> (лаги p50/p90/p95 — ориентир для <code>H</code>).
+        <strong>тишина</strong> без ПСР: претензии 6м + ФУ/суд 24м после T0;
+        <strong>охлаждение</strong> 24м после последнего события; ПСР раньше T0 и открытый суд → drop.
+        Отключение: <code>target_maturity.enabled: false</code>.
+        Отчёт: <code>data/processed/target_maturity_report.json</code>.
       </p>
     </section>
 

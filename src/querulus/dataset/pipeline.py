@@ -29,6 +29,7 @@ def run_pipeline(
     include_fe_features: bool = True,
     include_person_features: bool = False,
     resume_from_targets: bool = False,
+    maturity_enabled: bool | None = None,
 ) -> pd.DataFrame:
     """Собрать обучающий датасет.
 
@@ -40,6 +41,7 @@ def run_pipeline(
     resume_from_targets=True: пропустить victim/targets, загрузить df_after_targets.parquet.
     include_fe_features=False: без derived/incident ``FE_*``.
     include_person_features=False: без FE_PERSON_* (экономия ОЗУ, по умолчанию).
+    maturity_enabled: None — configs/dataset_filters.json; False/True — override.
     """
     setup_notebook_logging()
 
@@ -57,7 +59,9 @@ def run_pipeline(
                 save=False,
             )
             logger.info("Продолжение с df_after_targets.parquet, shape=%s", df.shape)
-            df = apply_target_maturity_from_paths(df, paths)
+            df = apply_target_maturity_from_paths(
+                df, paths, maturity_enabled=maturity_enabled
+            )
         else:
             df_victim = fetch_victim_frame(paths)
             df_loss_types = fetch_loss_object_types(
@@ -95,7 +99,12 @@ def run_pipeline(
                 df = df_victim
 
             df = build_targets(
-                paths, conn, df, save_checkpoint=save_checkpoint, use_sql=use_sql
+                paths,
+                conn,
+                df,
+                save_checkpoint=save_checkpoint,
+                use_sql=use_sql,
+                maturity_enabled=maturity_enabled,
             )
             df = checkpoint(
                 df,
