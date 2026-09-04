@@ -27,7 +27,6 @@ import numpy as np
 import pandas as pd
 
 from querulus.fin_effect.config import FinEffectConfig
-from querulus.training.severity_training import severity_predict
 
 SplitName = Literal["train", "test", "all"]
 logger = logging.getLogger("querulus.fin_effect")
@@ -791,6 +790,9 @@ def run_fin_effect_from_training(
         frequency_proba_from_training(training, predict_frame[freq_features]),
         index=effect_index,
     )
+    # Lazy: training.__init__ тянет outboxml_metrics → threshold_policy → calculator.
+    from querulus.training.severity_training import severity_predict
+
     sev_raw = severity_predict(
         training.severity_model,
         predict_frame[sev_features],
