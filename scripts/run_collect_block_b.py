@@ -13,7 +13,7 @@ from querulus.dataset.steps.targets import ensure_claims_targets
 from querulus.features.data_quality import apply_dataset_data_quality
 from querulus.features.integer_casts import cast_integer_like_columns
 from querulus.training import TrainLoopFlags, run_train_loop_new
-from querulus.training.build_outboxml_configs import ensure_legacy_inflation_column
+from querulus.fin_effect.threshold_policy import collect_val_threshold_path
 from querulus.training.config import TrainingConfig
 
 
@@ -23,7 +23,6 @@ def main() -> None:
         raise SystemExit(f"Нет {parquet}; сначала: python -m querulus.synthetic_dataset")
 
     df = pd.read_parquet(parquet)
-    df = ensure_legacy_inflation_column(df)
     df = ensure_claims_targets(df)
     df = cast_integer_like_columns(df)
     df, _ = apply_dataset_data_quality(
@@ -53,8 +52,6 @@ def main() -> None:
     print("[B] >>> train_loop_new START (HPO off, cal off)")
     result = run_train_loop_new(df, loop_cfg, flags)
     thr = result.training.val_threshold
-    from querulus.fin_effect.threshold_policy import collect_val_threshold_path
-
     out = collect_val_threshold_path(result.artifacts_dir)
     print(f"[B] >>> DONE val_threshold={thr}")
     print(f"[B] artifact: {out}")

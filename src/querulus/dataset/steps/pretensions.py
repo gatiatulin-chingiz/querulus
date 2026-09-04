@@ -11,55 +11,29 @@ import pandas as pd
 from sklearn.preprocessing import OneHotEncoder
 
 from querulus.dataset.constants import RENAME_DICT
-from querulus.dataset.io import checkpoint, load_sql_artifact
+from querulus.dataset.load.io import checkpoint
+from querulus.dataset.load.pretensions import (
+    fetch_pretension_fio_ids,
+    fetch_pretensions_base,
+    fetch_pretensions_penalty,
+)
 from querulus.dataset.paths import DataPaths
-from querulus.dataset.pretension_utils import dedupe_pretension_rows
+from querulus.dataset.preprocess.pretension import dedupe_pretension_rows
 from querulus.dataset.utils import convert_to_binary, hex_upper
 
 logger = logging.getLogger("querulus.dataset")
 
 
 def load_pretensions(paths: DataPaths, conn, *, use_sql: bool = False, save_checkpoint: bool = True):
-    df_pretensions_ = ("""
-    SELECT *
-      FROM [OISUU_report].[dbo].[oisuu81_t_Pretensions] AS P
-      LEFT JOIN [OISUU_report].[dbo].[oisuu81_t_IncidentToLoss] AS ITL ON ITL.LossID=P.LossID
-    """)
-    df_pretensions = load_sql_artifact(
-        paths,
-        conn,
-        paths.raw_dir,
-        "df_pretensions.parquet",
-        df_pretensions_,
-        use_sql=use_sql,
-        save_checkpoint=save_checkpoint,
+    df_pretensions = fetch_pretensions_base(
+        paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint
     )
 
     df_pretensions = df_pretensions.loc[:, ~df_pretensions.columns.duplicated()].copy()
     df_pretensions = dedupe_pretension_rows(df_pretensions)
 
-    # хадуп не работает, поэтому берем нужные id фио из sql
-    sql_pret_id = ( """
-    select 
-        pr.PretensionNumber PRETENSION_NUMBER
-        ,L.LossNumber LOSS_NUMBER
-        ,(L.PolicyholderPersonID) as POLICYHOLDER_PERSON_ID
-        ,(L.VictimPersonID) as VICTIM_PERSON_ID
-        ,(L.VIctimPolicyholderPersonID) as VICTIM_POLICYHOLDER_PERSON_ID
-        , L.VictimObjectOwnerPersonID as VICTIM_OBJECT_OWNER_PERSON_ID
-     from OISUU_REPORT.DBO.oisuu81_t_Pretensions pr
-     left join OISUU_REPORT.DBO.oisuu81_t_Losses L on l.LossID=pr.LossID
-
-    """)
-
-    pretension_fio_id = load_sql_artifact(
-        paths,
-        conn,
-        paths.raw_dir,
-        "pretension_fio_id.parquet",
-        sql_pret_id,
-        use_sql=use_sql,
-        save_checkpoint=save_checkpoint,
+    pretension_fio_id = fetch_pretension_fio_ids(
+        paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint
     )
 
     pretension_fio_id['POLICYHOLDER_PERSON_ID'] = pretension_fio_id['POLICYHOLDER_PERSON_ID'].apply(hex_upper)
@@ -77,134 +51,8 @@ def load_pretensions(paths: DataPaths, conn, *, use_sql: bool = False, save_chec
     # Добавим id в основной датасет по претензиям.
     df_pretensions = df_pretensions.merge(pretension_fio_id[['PRETENSION_NUMBER','VICTIM_POLICYHOLDER_PERSON_ID','VICTIM_OBJECT_OWNER_PERSON_ID']],how='left',on='PRETENSION_NUMBER')
 
-    query = \
-    """
-    -- ОТСЮДА БЕРУТСЯ ПРЕТЕНЗИИ С СУММОЙ ПО НЕУСТОЙКЕ
-    with tmp as (
-    	SELECT 
-    			itl.IncidentID
-    		 ,itl.IncidentNumber
-    		 ,itl.LossID
-    		 ,itl.LossNumber
-    		 ,p.[PretensionID]
-    		 ,p.[IsMarked]
-    		 ,p.PretensionDate
-    		 ,p.PretensionNumber
-    		 ,p.[IsOver]
-    		 ,p.[PretensionGetDate]
-    		 ,p.[PretensionType]
-    		 ,p.[ApplicantPersonID]
-    		 ,p.[PretensionStage]
-    		 ,p.[PretensionGetMethod]
-    		 ,p.[PretensionValue]
-    		 ,p.[PretensionCurrency]
-    		 ,p.[UTSValue]
-    		 ,p.[UTSCurrency]
-    		 ,p.[LossUnit]
-    		 ,p.[LossUnitZone]
-    		 ,p.[AnswerType]
-    		 ,p.[AnswerDate]
-    		 ,p.[SurchargeValue]
-    		 ,p.[SurchargeCurrency]
-    		 ,p.[UTSSurchargeValue]
-    		 ,p.[UTSSurchargeCurrency]
-    		 ,p.[Comment]
-    		 ,p.[HaveRequisitesOfApplicant]
-    		 ,p.[RequiredReviewSNEO]
-    		 ,p.[DateCancellationReviews]
-    		 ,p.[ExternalOrderSNEO]
-    		 ,p.[IsFullPretensionAmountsWithBreakdown]
-    		 ,p.[SendInRSADate]
-    		 ,p.[DateSentScannedCopies]
-    		 ,p.[PretensionTypeID]
-    		 ,p.[PretensionTypes]
-    		 ,p.[PretensionKinds]
-    		 ,p.[InsuranceTypes]
-    		 ,p.[InsuranceTypeGroups]
-    		 ,p.[Cession]
-    		 ,p.[LinkedLossID]
-    		 ,_Fld9244RRef
-    		 ,_Fld9243 as pretension_value_
-    		 ,SUM(_Fld9243) OVER(PARTITION BY IncidentNumber, PretensionNumber) as PRETENSION_VALUE_PENALTY
-    		 ,ROW_NUMBER() OVER(PARTITION BY IncidentNumber, PretensionNumber ORDER BY PretensionNumber) as rn
-    		 ,0 as SURCHARGE_VALUE_PENALTY
-    	 FROM [OISUU_report].[dbo].[oisuu81_t_IncidentToLoss] as itl
-    	 left join [OISUU_report].[dbo].[oisuu81_t_Pretensions] as p on p.LossID=itl.LossID
-    	 left join oisuu81.dbo._Document6169_VT9241 vt on vt._Document6169_IDRRef=p.PretensionID
-    	-- left join [oisuu81].[dbo].[_Document6169_VT9237] dcv on dcv._Document6169_IDRRef = p.PretensionID
-    	 WHERE _Fld9244RRef in (0xB6B5441EA172DD2611E8AC27427E4644, 0xB6B5441EA172DD2611E8AC282FFD5C5A)
-     ),
-     -- ОТСЮДА БЕРУТСЯ ТЕ ЖЕ ПРЕТЕНЗИИ, КОТОРЫЕ В ЗАПРОСЕ ВЫШЕ, НО ВЫТАСКИВАЮТСЯ СУММЫ ДОПЛАТ
-    penalty as (
-    	SELECT 
-    			itl.IncidentID
-    		 ,itl.IncidentNumber
-    		 ,itl.LossID
-    		 ,itl.LossNumber
-    		 ,p.[PretensionID]
-    		 ,p.[IsMarked]
-    		 ,p.PretensionDate
-    		 ,p.PretensionNumber
-    		 ,p.[IsOver]
-    		 ,p.[PretensionGetDate]
-    		 ,p.[PretensionType]
-    		 ,p.[ApplicantPersonID]
-    		 ,p.[PretensionStage]
-    		 ,p.[PretensionGetMethod]
-    		 ,p.[PretensionValue]
-    		 ,p.[PretensionCurrency]
-    		 ,p.[UTSValue]
-    		 ,p.[UTSCurrency]
-    		 ,p.[LossUnit]
-    		 ,p.[LossUnitZone]
-    		 ,p.[AnswerType]
-    		 ,p.[AnswerDate]
-    		 ,p.[SurchargeValue]
-    		 ,p.[SurchargeCurrency]
-    		 ,p.[UTSSurchargeValue]
-    		 ,p.[UTSSurchargeCurrency]
-    		 ,p.[Comment]
-    		 ,p.[HaveRequisitesOfApplicant]
-    		 ,p.[RequiredReviewSNEO]
-    		 ,p.[DateCancellationReviews]
-    		 ,p.[ExternalOrderSNEO]
-    		 ,p.[IsFullPretensionAmountsWithBreakdown]
-    		 ,p.[SendInRSADate]
-    		 ,p.[DateSentScannedCopies]
-    		 ,p.[PretensionTypeID]
-    		 ,p.[PretensionTypes]
-    		 ,p.[PretensionKinds]
-    		 ,p.[InsuranceTypes]
-    		 ,p.[InsuranceTypeGroups]
-    		 ,p.[Cession]
-    		 ,p.[LinkedLossID]
-    		 ,_Fld9244RRef
-    		 ,_Fld9243 as pretension_value_
-    		 ,SUM(_Fld9243) OVER(PARTITION BY IncidentNumber, PretensionNumber) as PRETENSION_VALUE_PENALTY
-    		 ,ROW_NUMBER() OVER(PARTITION BY IncidentNumber, PretensionNumber ORDER BY PretensionNumber) as rn
-    		 ,pai.Amount AS SURCHARGE_VALUE_PENALTY
-    	 FROM [OISUU_report].[dbo].[oisuu81_t_IncidentToLoss] as itl
-    	 left join [OISUU_report].[dbo].[oisuu81_t_Pretensions] as p on p.LossID=itl.LossID
-    	 left join oisuu81.dbo._Document6169_VT9241 vt on vt._Document6169_IDRRef=p.PretensionID
-    	 left join [OISUU_report].[dbo].[oisuu81_vLossPaimentsTable] as pai on pai.LossID=p.LinkedLossID
-    	 WHERE _Fld9244RRef in (0xB6B5441EA172DD2611E8AC27427E4644, 0xB6B5441EA172DD2611E8AC282FFD5C5A)
-    	 and BudgetLine = 'Неустойка/пеня'
-    )
-     SELECT *
-     FROM tmp as tmp
-     --left join tmp_1 as tmp_1 on tmp.PretensionNumber=tmp_1.PretensionNumber
-     WHERE rn = 1
-     union select * from penalty where rn = 1
-    """
-    df_pretensions_3 = load_sql_artifact(
-        paths,
-        conn,
-        paths.raw_dir,
-        "df_pretensions_3.parquet",
-        query,
-        use_sql=use_sql,
-        save_checkpoint=save_checkpoint,
-        sql_reader=pd.read_sql_query,
+    df_pretensions_3 = fetch_pretensions_penalty(
+        paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint
     )
 
     df_pretensions_3.columns = df_pretensions_3.columns.str.upper()

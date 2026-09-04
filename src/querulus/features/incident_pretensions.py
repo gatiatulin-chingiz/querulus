@@ -5,7 +5,7 @@ import pandas as pd
 
 from querulus.dataset.pretension_utils import dedupe_pretension_rows
 from querulus.features.config import FeatureConfig
-from querulus.features.derived import _series
+from querulus.features.derived import column_series
 
 INCIDENT_COLUMN = "INCIDENT_NUMBER"
 T0_COLUMN = "PAYMENT_ORDER_DATE_TIME"
@@ -56,8 +56,8 @@ def add_incident_pretension_features(
     pret["_incident"] = _incident_key(pret[incident_col])
     pret["_pret_date"] = pd.to_datetime(pret[date_col], errors="coerce")
 
-    t0 = pd.to_datetime(_series(out, config.t0_column), errors="coerce")
-    out["_incident"] = _incident_key(_series(out, INCIDENT_COLUMN))
+    t0 = pd.to_datetime(column_series(out, config.t0_column), errors="coerce")
+    out["_incident"] = _incident_key(column_series(out, INCIDENT_COLUMN))
     out["_t0"] = t0
 
     merged = out[["_incident", "_t0"]].merge(

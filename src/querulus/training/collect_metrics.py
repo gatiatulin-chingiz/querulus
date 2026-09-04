@@ -27,13 +27,17 @@ from sklearn.metrics import (
 TaskKind = Literal["classification", "regression"]
 
 
-def _gini_index(
+def gini_index(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     *,
     policy: str = "accurate",
 ) -> float:
-    """Gini (версия modeldiagnostics.src.gini.Gini, без внешней зависимости)."""
+    """Gini по кривой Лоренца (modeldiagnostics.Gini, без внешней зависимости).
+
+    Строки сортируются по ``y_pred`` (score); накапливается доля ``y_true``.
+    Для бинарной классификации ``y_pred`` — proba, порог τ не используется.
+    """
 
     def special_cumsum(v, w):
         return sum(np.cumsum([0] + list(v * w)[:-1]) * w + v * w * (w + 1) / 2)
@@ -79,6 +83,22 @@ def _to_finite_arrays(
         raise ValueError(f"Длины y_true={len(y)} и y_score={len(s)} не совпадают")
     mask = np.isfinite(y) & np.isfinite(s)
     return y[mask], s[mask]
+
+
+def classification_gini(
+    y_true: pd.Series | np.ndarray,
+    proba: np.ndarray,
+    *,
+    policy: str = "accurate",
+) -> float:
+    """Gini frequency-модели: Lorenz по вероятностям класса 1."""
+    y, p = _to_finite_arrays(y_true, proba)
+    if len(y) == 0:
+        return float("nan")
+    try:
+        return gini_index(y.astype(int), p, policy=policy)
+    except Exception:  # noqa: BLE001
+        return float("nan")
 
 
 def _finalize_metrics(raw: dict[str, float | int]) -> dict[str, float]:
@@ -127,7 +147,7 @@ def regression_metrics_bundle(
         raw["mpe"] = float("nan")
 
     try:
-        raw["gini"] = _gini_index(y, pred)
+        raw["gini"] = gini_index(y, pred)
     except Exception:  # noqa: BLE001
         raw["gini"] = float("nan")
 
@@ -162,10 +182,7 @@ def classification_metrics_at_threshold(
         raw["pr_auc"] = float(average_precision_score(y_int, p))
     except Exception:  # noqa: BLE001
         raw["pr_auc"] = float("nan")
-    try:
-        raw["gini"] = _gini_index(y_int, p)
-    except Exception:  # noqa: BLE001
-        raw["gini"] = float("nan")
+    raw["gini"] = classification_gini(y_int, p)
 
     if include_ece:
         from querulus.training.calibration import expected_calibration_error
@@ -231,10 +248,7 @@ def classification_metrics_threshold_free(
         raw["pr_auc"] = float(average_precision_score(y_int, p))
     except Exception:  # noqa: BLE001
         raw["pr_auc"] = float("nan")
-    try:
-        raw["gini"] = _gini_index(y_int, p)
-    except Exception:  # noqa: BLE001
-        raw["gini"] = float("nan")
+    raw["gini"] = classification_gini(y_int, p)
     return _finalize_metrics(raw)
 
 

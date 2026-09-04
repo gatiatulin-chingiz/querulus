@@ -9,9 +9,9 @@ import pandas as pd
 
 from querulus.dataset.constants import RENAME_DICT
 from querulus.dataset.steps.targets import (
-    _CLAIM_PERIOD_COL,
-    _TARGET_FREQ_CLAIMS_GROUP,
-    _pick_last_claim_instances,
+    CLAIM_PERIOD_COL,
+    TARGET_FREQ_CLAIMS_GROUP,
+    pick_last_claim_instances,
 )
 
 _T0_COL = "PAYMENT_ORDER_DATE_TIME"
@@ -63,7 +63,7 @@ def _court_end_date_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
             f"Доступные: {sorted(claims.columns[:20])}"
         )
 
-    last = _pick_last_claim_instances(claims)
+    last = pick_last_claim_instances(claims)
     last["_court_date"] = pd.to_datetime(last[court_col], errors="coerce")
     incident_col = "INCIDENT_NUMBER"
     if incident_col not in last.columns:
@@ -170,12 +170,12 @@ def run_npv_analysis(
     project_root : корень проекта querulus (для target_3_claims.parquet)
     rates : годовые доходности для сценариев
     """
-    from querulus.training.stack_eval import _stack_predictions
+    from querulus.training.stack_eval import stack_predictions
 
     claims = _load_claims(project_root)
     t_end_map = _court_end_date_by_incident(claims)
 
-    _, pred_freq, pred_sev = _stack_predictions(training, df, index)
+    _, pred_freq, pred_sev = stack_predictions(training, df, index)
     holdout = df.loc[index].copy()
 
     detail = _compute_npv_detail(holdout, pred_freq, pred_sev, t_end_map, rates)

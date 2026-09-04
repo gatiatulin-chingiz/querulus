@@ -23,3 +23,4 @@ email_pass = f"{os.getenv('EMAIL_PASSWORD')}"
 email_receivers = ['gatyatulin@vsk.ru']
 
 mlflow_tracking_uri = "https://mlflow.vsk.ru/"
+mlflow_experiment = os.getenv("MLFLOW_EXPERIMENT", "Querulus")

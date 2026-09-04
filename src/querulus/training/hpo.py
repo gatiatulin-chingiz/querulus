@@ -459,9 +459,9 @@ def _load_model_diagnostics_class() -> Any:
     global _MD_CLS
     if _MD_CLS is None:
         from querulus.training.config import TrainingConfig
-        from querulus.training.pipeline import _require_model_diagnostics
+        from querulus.training.pipeline import require_model_diagnostics
 
-        _MD_CLS = _require_model_diagnostics(TrainingConfig())
+        _MD_CLS = require_model_diagnostics(TrainingConfig())
     return _MD_CLS
 
 
@@ -495,7 +495,7 @@ def _fold_metric(
     optimize_metric: str,
 ) -> float:
     """Одна метрика (для Optuna objective) из набора ModelDiagnostics."""
-    bundle = _fold_metrics_bundle(y_true, y_pred, task_type=task_type)
+    bundle = fold_metrics_bundle(y_true, y_pred, task_type=task_type)
     key = "pr_auc" if optimize_metric == "average_precision" else optimize_metric
     if key not in bundle:
         raise ValueError(f"Неизвестная метрика для {task_type}: {optimize_metric}")
@@ -536,12 +536,9 @@ def _classification_metrics_at_threshold(
         metrics["ece"] = float(diagnostics._calculate_ece(y_true, proba))
     except Exception:  # noqa: BLE001
         metrics["ece"] = float("nan")
-    try:
-        from modeldiagnostics.src.gini import Gini
+    from querulus.training.collect_metrics import classification_gini
 
-        metrics["gini"] = float(Gini(y_true, proba))
-    except Exception:  # noqa: BLE001
-        metrics["gini"] = float("nan")
+    metrics["gini"] = classification_gini(y_true, proba)
 
     tp = int(((y_true == 1) & (pred_labels == 1)).sum())
     tn = int(((y_true == 0) & (pred_labels == 0)).sum())
@@ -574,7 +571,7 @@ def _classification_metrics_at_threshold(
     return metrics
 
 
-def _fold_metrics_bundle(
+def fold_metrics_bundle(
     y_true: pd.Series,
     y_pred: np.ndarray,
     *,
@@ -1024,10 +1021,10 @@ def run_hpo(
                     pred_va = np.asarray(model.predict(x_va), dtype=float)
                     pred_tr = np.asarray(model.predict(x_tr), dtype=float)
                 bundles.append(
-                    _fold_metrics_bundle(y_va, pred_va, task_type=task_type)
+                    fold_metrics_bundle(y_va, pred_va, task_type=task_type)
                 )
                 train_bundles.append(
-                    _fold_metrics_bundle(y_tr, pred_tr, task_type=task_type)
+                    fold_metrics_bundle(y_tr, pred_tr, task_type=task_type)
                 )
                 # Intermediate score for MedianPruner (после каждого CV-фолда).
                 if use_pruner:

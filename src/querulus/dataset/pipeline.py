@@ -6,15 +6,16 @@ import logging
 
 import pandas as pd
 
-from querulus.dataset.io import LazyOisuuConnection, checkpoint, setup_notebook_logging
-from querulus.dataset.maturity import apply_target_maturity_from_paths
+from querulus.dataset.load.io import LazyOisuuConnection, checkpoint, setup_notebook_logging
+from querulus.dataset.preprocess.enrich import enrich_dataset
+from querulus.dataset.preprocess.maturity import apply_target_maturity_from_paths
+from querulus.dataset.preprocess.targets import build_targets
+from querulus.dataset.preprocess.victim import prepare_victim
+from querulus.dataset.load.victim import fetch_loss_object_types, fetch_victim_frame
 from querulus.dataset.paths import DataPaths
 from querulus.dataset.steps.claims import load_claims
-from querulus.dataset.steps.enrich import enrich_dataset
 from querulus.dataset.steps.payments import load_claims_payments
 from querulus.dataset.steps.pretensions import load_pretensions
-from querulus.dataset.steps.targets import build_targets
-from querulus.dataset.steps.victim import load_victim
 from querulus.features.pipeline import run_features
 
 logger = logging.getLogger("querulus.dataset")
@@ -58,9 +59,11 @@ def run_pipeline(
             logger.info("Продолжение с df_after_targets.parquet, shape=%s", df.shape)
             df = apply_target_maturity_from_paths(df, paths)
         else:
-            df_victim = load_victim(
+            df_victim = fetch_victim_frame(paths)
+            df_loss_types = fetch_loss_object_types(
                 paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint
             )
+            df_victim = prepare_victim(df_victim, df_loss_types)
 
             if include_enrich:
                 df_claims_persons, df_claims, df_claims_ = load_claims(

@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Querulus — правила попадания убытка в обучающую выборку</title>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --card: #ffffff;
+      --text: #1a1d23;
+      --muted: #5c6573;
+      --accent: #1f6feb;
+      --ok: #1a7f37;
+      --warn: #9a6700;
+      --bad: #cf222e;
+      --border: #d8dee4;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+    }
+    main {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 3rem;
+    }
+    h1 {
+      font-size: 1.65rem;
+      margin: 0 0 0.5rem;
+      line-height: 1.25;
+    }
+    .subtitle {
+      color: var(--muted);
+      margin-bottom: 2rem;
+      font-size: 1.05rem;
+    }
+    section {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem 1.35rem;
+      margin-bottom: 1.25rem;
+    }
+    h2 {
+      font-size: 1.15rem;
+      margin: 0 0 0.75rem;
+    }
+    h3 {
+      font-size: 1rem;
+      margin: 1rem 0 0.5rem;
+    }
+    p { margin: 0.5rem 0; }
+    ul { margin: 0.4rem 0 0.6rem 1.2rem; }
+    li { margin: 0.35rem 0; }
+    .tag {
+      display: inline-block;
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+      vertical-align: middle;
+      margin-right: 0.35rem;
+    }
+    .tag-ok { background: #dafbe1; color: var(--ok); }
+    .tag-warn { background: #fff8c5; color: var(--warn); }
+    .tag-bad { background: #ffebe9; color: var(--bad); }
+    .example {
+      background: #f6f8fa;
+      border-left: 4px solid var(--accent);
+      padding: 0.75rem 1rem;
+      margin: 0.75rem 0;
+      border-radius: 0 6px 6px 0;
+      font-size: 0.95rem;
+    }
+    .example strong { display: block; margin-bottom: 0.25rem; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.92rem;
+      margin-top: 0.75rem;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.55rem 0.65rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #eef2f7; }
+    .flow {
+      font-family: ui-monospace, monospace;
+      font-size: 0.88rem;
+      background: #eef2f7;
+      padding: 1rem;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      line-height: 1.45;
+    }
+    footer {
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-top: 1.5rem;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Правила попадания убытка в обучающую выборку</h1>
+    <p class="subtitle">
+      Модель Querulus (ОСАГО, ущерб имуществу). Документ для бизнеса и аналитиков без технических деталей.
+      Актуально с сентября 2026.
+    </p>
+
+    <section>
+      <h2>Зачем это нужно</h2>
+      <p>
+        Модель учится предсказывать, будет ли после выплаты по убытку
+        <strong>претензионно-следовая работа (ПСР)</strong> — претензии, финансовый уполномоченный, суды.
+      </p>
+      <p>
+        Чтобы таргет был честным, в обучение попадают только те убытки, по которым
+        <strong>исход уже можно считать известным</strong> на дату выгрузки данных,
+        либо прошло достаточно времени без судебного процесса.
+      </p>
+      <p>
+        <strong>T0</strong> — дата поручения на выплату (<em>PAYMENT_ORDER_DATE_TIME</em>).
+        <strong>S</strong> — дата среза (день сборки датасета / выгрузки из учётных систем).
+      </p>
+    </section>
+
+    <section>
+      <h2>Что изменилось по сравнению с прошлым подходом</h2>
+      <ul>
+        <li>Убрали жёсткий отрез «не позже июня 2025» по дате выплаты.</li>
+        <li>Нижняя граница выборки: убытки с T0 <strong>не раньше 1 января 2022</strong>.</li>
+        <li>Свежие убытки с <strong>уже завершённым</strong> судом / ФU / доплатой по претензии — <strong>можно брать сразу</strong>.</li>
+        <li>Если суда ещё не было — ждём <strong>36 месяцев</strong> после T0.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Как принимается решение (по приоритету)</h2>
+      <div class="flow">1. Нет даты поручения на выплату (T0)     → не берём
+2. Есть незакрытый суд (открытое дело)     → не берём
+3. ПСР уже закрыт в данных (ветка A)       → берём
+4. ПСР не закрыт, но прошло 36 мес. (B)   → берём
+5. Иначе                                   → не берём (ещё рано)</div>
+    </section>
+
+    <section>
+      <h2><span class="tag tag-bad">Исключение</span> Незакрытый суд</h2>
+      <p>
+        Если по инциденту есть иск, у которого <strong>последняя инстанция ещё не принята</strong>
+        (решение «Не принято» или нет сумм взыскания), убыток <strong>не попадает</strong> в выборку —
+        даже если с момента выплаты прошло много времени.
+      </p>
+      <div class="example">
+        <strong>Пример</strong>
+        Выплата в марте 2023. Иск в суде, последняя инстанция «ожидает решения».
+        Сегодня сентябрь 2026 — <strong>не берём</strong>: исход по суду ещё неизвестен.
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="tag tag-ok">Ветка A</span> ПСР уже закрыт в данных</h2>
+      <p>Убыток попадает в выборку <strong>сразу</strong>, без ожидания 36 месяцев, если выполняется хотя бы одно:</p>
+      <ul>
+        <li><strong>Суд</strong> — по хотя бы одному иску есть принятая последняя инстанция;</li>
+        <li><strong>Финансовый уполномоченный (ФU)</strong> — процесс завершён принятой инстанцией;</li>
+        <li><strong>Претензия с доплатой</strong> — в выгрузке уже есть доплата / surcharge по претензии.</li>
+      </ul>
+
+      <div class="example">
+        <strong>Пример 1 — закрытый суд</strong>
+        Выплата 15.11.2025. В декабре 2025 суд вынес решение с взысканием.
+        Сборка датасета 02.09.2026 — <strong>берём</strong> (ветка A), хотя с T0 прошло меньше 36 месяцев.
+      </div>
+      <div class="example">
+        <strong>Пример 2 — только претензия</strong>
+        Выплата 01.06.2024. Судов не было. В мае 2025 клиент получил доплату по претензии — это видно в данных.
+        <strong>Берём</strong> (ветка A).
+      </div>
+      <div class="example">
+        <strong>Пример 3 — вторая претензия уже в выгрузке</strong>
+        Суд закрыт в 2024, <code>TARGET_FREQ = 0</code>. В 2025 пришла вторая претензия с выплатой — она уже есть в SQL-снимке.
+        Таргет пересчитывается как <strong>TARGET_FREQ = 1</strong>. Убыток в выборке с актуальным таргетом.
+      </div>
+      <div class="example">
+        <strong>Пример 4 — второй претензии ещё нет в данных</strong>
+        Суд закрыт в 2024, в снимке второй претензии нет → <code>TARGET_FREQ = 0</code>.
+        Мы <strong>не ждём</strong> будущую претензию: кейс считаем закрытым для модели на дату S.
+        Если позже претензия появится в следующей выгрузке — таргет обновится при пересборке.
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="tag tag-warn">Ветка B</span> Судов и закрытого ПСР пока нет — ждём 36 месяцев</h2>
+      <p>
+        Если нет ни закрытого суда/ФU, ни доплаты по претензии, убыток попадает в выборку только когда:
+      </p>
+      <p style="text-align:center; font-size:1.05rem; margin: 1rem 0;">
+        <strong>T0 + 36 месяцев ≤ дата среза (S)</strong>
+      </p>
+      <p>
+        Смысл: за три года без иска считаем, что «тихий» исход (нет ПСР) уже можно фиксировать для обучения.
+        Это также отсекает убытки, по которым суд <em>мог бы</em> ещё появиться, но мы его пока не видим.
+      </p>
+      <div class="example">
+        <strong>Пример — берём</strong>
+        Выплата 01.03.2023. Судов и претензий с доплатой нет. Сборка 02.09.2026 — прошло больше 36 месяцев.
+        <strong>Берём</strong> (ветка B), таргет обычно «ПСР не было».
+      </div>
+      <div class="example">
+        <strong>Пример — не берём</strong>
+        Выплата 01.01.2025. Судов нет. Сборка 02.09.2026 — прошло только ~20 месяцев.
+        <strong>Не берём</strong>: рано считать исход окончательным.
+      </div>
+    </section>
+
+    <section>
+      <h2>Сводная таблица</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Ситуация</th>
+            <th>В выборку?</th>
+            <th>Ветка</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Открытый суд (последняя инстанция не принята)</td>
+            <td>Нет</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>Закрытый суд / ФU / доплата по претензии в данных</td>
+            <td>Да</td>
+            <td>A</td>
+          </tr>
+          <tr>
+            <td>Нет ПСР в данных, прошло ≥ 36 мес. после T0</td>
+            <td>Да</td>
+            <td>B</td>
+          </tr>
+          <tr>
+            <td>Нет ПСР в данных, прошло &lt; 36 мес. после T0</td>
+            <td>Нет</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>T0 раньше 01.01.2022</td>
+            <td>Нет (не попадает в victim)</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Как читать технический отчёт</h2>
+      <p>После сборки пайплайна сохраняется файл <code>data/processed/target_maturity_report.json</code>:</p>
+      <ul>
+        <li><code>snapshot_date</code> — дата S (обычно день запуска);</li>
+        <li><code>n_kept_branch_a</code> — сколько убытков прошло по ветке A;</li>
+        <li><code>n_kept_branch_b_only</code> — только по ветке B (без закрытого ПСР);</li>
+        <li><code>n_dropped_open_court</code> — отсечено из‑за открытого суда;</li>
+        <li><code>n_dropped_horizon</code> — ещё не прошло 36 месяцев и нет закрытого ПСР;</li>
+        <li><code>lag_days_target_freq_1</code> — перцентили лага «выплата → последнее событие по иску» для случаев с ПСР (ориентир для горизонта).</li>
+      </ul>
+    </section>
+
+    <footer>
+      Querulus · политика вызревания таргета · конфиг: <code>configs/dataset_filters.json</code> → <code>target_maturity</code>
+    </footer>
+  </main>
+</body>
+</html>

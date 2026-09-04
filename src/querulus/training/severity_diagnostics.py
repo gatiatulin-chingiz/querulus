@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from querulus.training.config import TrainingConfig
-from querulus.training.pipeline import TrainingArtifacts, _require_catboost
+from querulus.training.pipeline import TrainingArtifacts, require_catboost
 
 
 def severity_error_by_quantile(
@@ -87,7 +87,7 @@ def compare_severity_log1p(
     if training.severity_split is None:
         raise ValueError("severity_split отсутствует в TrainingArtifacts")
     config = config or TrainingConfig()
-    CatBoostClassifier, CatBoostRegressor, Pool, *_ = _require_catboost()
+    CatBoostClassifier, CatBoostRegressor, Pool, *_ = require_catboost()
     del CatBoostClassifier  # не используется
 
     split = training.severity_split

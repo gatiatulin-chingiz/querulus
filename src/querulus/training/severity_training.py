@@ -75,11 +75,11 @@ def fit_severity_model(
     eval_index: pd.Index | None = None,
 ) -> object:
     """Обучить severity на сплите ``training`` (опционально подмножество индексов)."""
-    from querulus.training.pipeline import _require_catboost
+    from querulus.training.pipeline import require_catboost
 
     if training.severity_split is None:
         raise ValueError("severity_split отсутствует в TrainingArtifacts")
-    _, CatBoostRegressor, Pool, *_ = _require_catboost()
+    _, CatBoostRegressor, Pool, *_ = require_catboost()
 
     split = training.severity_split
     features = training.severity_features

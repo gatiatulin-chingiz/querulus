@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -61,41 +60,10 @@ def _patch_model_data_subset_load_subset() -> None:
 
 
 def ensure_legacy_inflation_column(df: pd.DataFrame) -> pd.DataFrame:
-    """Добавить алиас ``FE_VALUE_BEFORE_WITHOUT_REAL_2020`` для совместимости с FS-артефактами.
+    """Алиас ``*_REAL_2020`` ← текущий базис. Предпочтительно через ``save_df_final``."""
+    from querulus.features.inflation import ensure_legacy_real_column_aliases
 
-    Отбор severity в train_loop мог быть выполнен до смены базового года CPI;
-    без алиаса колонка из ``new_severity_latest.json`` отсутствует в df.
-    """
-    legacy = "FE_VALUE_BEFORE_WITHOUT_REAL_2020"
-    if legacy in df.columns:
-        return df
-    from querulus.features.inflation import real_feature_name
-
-    current = real_feature_name("VALUE_BEFORE_WITHOUT")
-    if current in df.columns:
-        out = df.copy()
-        out[legacy] = out[current]
-        return out
-    return df
-
-
-def dataframe_for_dsm(df: pd.DataFrame) -> pd.DataFrame:
-    """Подготовить df для OutBoxML: categorical/string → object.
-
-    OutBoxML ``prepare_categorical`` не допускает присвоение default вне
-    ``categories`` pandas.Categorical. DSM дополнительно пишет temp parquet,
-    поэтому каст дублируется в ``SafePrepareDataset`` перед prepare.
-    """
-    out = df.copy()
-    for name in out.columns:
-        series = out[name]
-        dtype = series.dtype
-        if isinstance(dtype, pd.CategoricalDtype) or pd.api.types.is_categorical_dtype(dtype):
-            out[name] = series.astype(object)
-        elif pd.api.types.is_string_dtype(dtype) and not pd.api.types.is_object_dtype(dtype):
-            # string[pyarrow] / StringDtype — тоже в plain object
-            out[name] = series.astype(object)
-    return out
+    return ensure_legacy_real_column_aliases(df)
 
 
 def prepare_datasets_from_config(
@@ -103,7 +71,7 @@ def prepare_datasets_from_config(
     *,
     check_prepared: bool = True,
 ) -> dict[str, Any]:
-    """PrepareDataset'ы с кастом category→object после temp-parquet DSM."""
+    """PrepareDataset'ы OutBoxML; патч индексов X/y при data_filter severity."""
     _patch_model_data_subset_load_subset()
     from outboxml.core.prepared_datasets import PrepareDataset
     from outboxml.core.pydantic_models import AllModelsConfig
@@ -112,19 +80,8 @@ def prepare_datasets_from_config(
     all_cfg = AllModelsConfig.model_validate(raw)
     group_name = f"{all_cfg.project}_{all_cfg.version}"
 
-    class SafePrepareDataset(PrepareDataset):
-        def prepare_dataset(self, data, train_ind, test_ind, target=None):
-            if isinstance(data, pd.DataFrame):
-                data = dataframe_for_dsm(data)
-            return super().prepare_dataset(
-                data=data,
-                train_ind=train_ind,
-                test_ind=test_ind,
-                target=target,
-            )
-
     return {
-        model.name: SafePrepareDataset(
+        model.name: PrepareDataset(
             model_config=model,
             check_prepared=check_prepared,
             group_name=group_name,
@@ -133,10 +90,11 @@ def prepare_datasets_from_config(
     }
 
 
-def default_model_version(*, business: str = "2", increment: str = "v1") -> str:
-    """Бизнес-версия + дата UTC + инкремент, без слова new."""
-    stamp = datetime.now(timezone.utc).strftime("%Y_%m_%d")
-    return f"{business}_{stamp}_{increment}"
+def default_model_version(**_kwargs: Any) -> str:
+    """SemVer модели (``2.0.0``). См. ``querulus.naming``."""
+    from querulus.naming import MODEL_VERSION
+
+    return MODEL_VERSION
 
 
 def _jsonable(value: Any) -> int | float | str | bool | None:
@@ -265,15 +223,26 @@ def _categorical_feature_spec(series: pd.Series, name: str) -> dict[str, Any]:
     }
 
 
-def _numeric_feature_spec(series: pd.Series, name: str) -> dict[str, Any]:
+def _numeric_feature_spec(
+    series: pd.Series,
+    name: str,
+    *,
+    clip: dict[str, float] | None = None,
+) -> dict[str, Any]:
     """default=_MEDIAN_: на fit DSM считает медиану по своему train (prod ≠ parity)."""
-    _ = series  # уровни NA не запекаем; clip/winsor — DQ-артефакт, не JSON
-    return {
+    _ = series
+    spec: dict[str, Any] = {
         "name": name,
         "default": "_MEDIAN_",
         "replace": {"_TYPE_": "_NUM_"},
         "encoding": "to_float",
     }
+    if clip is not None:
+        spec["clip"] = {
+            "min_value": float(clip["min_value"]),
+            "max_value": float(clip["max_value"]),
+        }
+    return spec
 
 
 def _is_categorical(
@@ -303,11 +272,13 @@ def build_features_block(
     categorical_names: list[str] | None = None,
     mvp_types: dict[str, list[str] | tuple[str, ...]] | None = None,
     fit_index: pd.Index | None = None,
+    clip_bounds: dict[str, dict[str, float]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """features[] + cat_features_catboost по train-срезу."""
     types = mvp_types or DEFAULT_MVP_INPUT_TYPES
     mvp_cats = set(types.get("CATEGORIAL") or ()) | set(types.get("BINARY") or ())
     json_cats = set(categorical_names or ())
+    clips = clip_bounds or {}
     frame = df.loc[fit_index] if fit_index is not None else df
     features: list[dict[str, Any]] = []
     cat_features: list[str] = []
@@ -320,7 +291,9 @@ def build_features_block(
             features.append(_categorical_feature_spec(series, name))
             cat_features.append(name)
         else:
-            features.append(_numeric_feature_spec(series, name))
+            features.append(
+                _numeric_feature_spec(series, name, clip=clips.get(name))
+            )
     return features, cat_features
 
 
@@ -377,6 +350,32 @@ def _data_config(
     }
 
 
+def build_model_entry(
+    *,
+    model_name: str,
+    column_target: str,
+    objective: str,
+    features: list[dict[str, Any]],
+    cat_features: list[str],
+    params_catboost: dict[str, Any],
+    data_filter_condition: str | None = None,
+) -> dict[str, Any]:
+    """Одна модель внутри ``models_configs``."""
+    model: dict[str, Any] = {
+        "name": model_name,
+        "column_target": column_target,
+        "objective": objective,
+        "wrapper": "catboost",
+        "params_catboost": params_catboost,
+        "cat_features_catboost": cat_features,
+        "relative_features": [],
+        "features": features,
+    }
+    if data_filter_condition:
+        model["data_filter_condition"] = data_filter_condition
+    return model
+
+
 def build_all_models_config(
     *,
     project: str,
@@ -395,23 +394,21 @@ def build_all_models_config(
     extra_columns: list[str] | None = None,
     data_filter_condition: str | None = None,
 ) -> dict[str, Any]:
+    """AllModelsConfig с одной моделью (legacy helper)."""
     extras = list(
         dict.fromkeys(
             [*(extra_columns or []), date_column, column_target]
         )
     )
-    model: dict[str, Any] = {
-        "name": model_name,
-        "column_target": column_target,
-        "objective": objective,
-        "wrapper": "catboost",
-        "params_catboost": params_catboost,
-        "cat_features_catboost": cat_features,
-        "relative_features": [],
-        "features": features,
-    }
-    if data_filter_condition:
-        model["data_filter_condition"] = data_filter_condition
+    model = build_model_entry(
+        model_name=model_name,
+        column_target=column_target,
+        objective=objective,
+        features=features,
+        cat_features=cat_features,
+        params_catboost=params_catboost,
+        data_filter_condition=data_filter_condition,
+    )
     return {
         "group_name": group_name,
         "project": project,
@@ -424,6 +421,63 @@ def build_all_models_config(
             extra_columns=extras,
         ),
         "models_configs": [model],
+    }
+
+
+def build_cf_rg_config(
+    *,
+    project: str,
+    version: str,
+    group_name: str,
+    parquet_path: str,
+    train_period: tuple[str, str],
+    test_period: tuple[str, str],
+    date_column: str,
+    cf_name: str,
+    rg_name: str,
+    freq_block: list[dict[str, Any]],
+    freq_cat_out: list[str],
+    sev_block: list[dict[str, Any]],
+    sev_cat_out: list[str],
+    cf_params: dict[str, Any],
+    rg_params: dict[str, Any],
+) -> dict[str, Any]:
+    """Один AllModelsConfig: frequency + severity."""
+    extras = list(
+        dict.fromkeys(
+            [date_column, "TARGET_FREQ", "TARGET_SEV"]
+        )
+    )
+    return {
+        "group_name": group_name,
+        "project": project,
+        "version": version,
+        "data_config": _data_config(
+            parquet_path=parquet_path,
+            train_period=train_period,
+            test_period=test_period,
+            date_column=date_column,
+            extra_columns=extras,
+        ),
+        "models_configs": [
+            build_model_entry(
+                model_name=cf_name,
+                column_target="TARGET_FREQ",
+                objective="binary",
+                features=freq_block,
+                cat_features=freq_cat_out,
+                params_catboost=cf_params,
+            ),
+            build_model_entry(
+                model_name=rg_name,
+                column_target="TARGET_SEV",
+                objective="regression",
+                features=sev_block,
+                cat_features=sev_cat_out,
+                params_catboost=rg_params,
+                data_filter_condition="TARGET_SEV > 0",
+            ),
+        ],
     }
 
 
@@ -599,18 +653,40 @@ def write_outboxml_configs(
     artifacts_dir: Path | str | None = None,
     configs_dir: Path | str | None = None,
     hpo_path: Path | str | None = None,
+    dq_report_path: Path | str | None = None,
     date_column: str = "PAYMENT_ORDER_DATE_TIME",
     train_period: tuple[str, str] | None = None,
     test_period: tuple[str, str] | None = None,
     group_name: str = "UU",
 ) -> dict[str, Any]:
-    """Пишет config_cf_{version}.json и config_rg_{version}.json (parity-окна)."""
+    """Пишет ``config_parity.json`` / ``config_prod.json`` (CF+RG в каждом).
+
+    Вызывать из collect после ``save_df_final``; example читает через ``load_outboxml_configs``.
+    Имена моделей стабильные: ``querulus_cf`` / ``querulus_rg``.
+    Numeric ``feature.clip`` — из ``data_quality_report.json`` (log1p-IQR → low_raw/high_raw).
+    """
+    from querulus.features.data_quality import clip_bounds_for_outboxml
+    from querulus.naming import (
+        MODEL_CF_NAME,
+        MODEL_NAME,
+        MODEL_RG_NAME,
+        configs_dir_for_version,
+    )
+
     version = version or default_model_version()
     artifacts_dir = Path(artifacts_dir) if artifacts_dir else DEFAULT_ARTIFACTS_DIR
-    configs_dir = Path(configs_dir) if configs_dir else DEFAULT_CONFIGS_DIR
-    parquet_path = parquet_path or str(
-        (PROJECT_ROOT / "data" / "processed" / "df_final_3.parquet").as_posix()
+    configs_dir = (
+        Path(configs_dir) if configs_dir is not None else configs_dir_for_version(version)
     )
+    parquet_path = parquet_path or str(
+        (PROJECT_ROOT / "data" / "processed" / "querulus_train_dataset.parquet").as_posix()
+    )
+    report_path = (
+        Path(dq_report_path)
+        if dq_report_path is not None
+        else PROJECT_ROOT / "data" / "processed" / "data_quality_report.json"
+    )
+    clip_bounds = clip_bounds_for_outboxml(report_path=report_path)
     periods = compute_period_windows(
         df,
         date_column=date_column,
@@ -623,75 +699,125 @@ def write_outboxml_configs(
     fit_index = periods["splits"].train.union(periods["splits"].val)
 
     freq_block, freq_cat_out = build_features_block(
-        df, freq_feats, categorical_names=freq_cats, fit_index=fit_index
+        df,
+        freq_feats,
+        categorical_names=freq_cats,
+        fit_index=fit_index,
+        clip_bounds=clip_bounds,
     )
     sev_block, sev_cat_out = build_features_block(
-        df, sev_feats, categorical_names=sev_cats, fit_index=fit_index
+        df,
+        sev_feats,
+        categorical_names=sev_cats,
+        fit_index=fit_index,
+        clip_bounds=clip_bounds,
     )
-    cf_name = f"querulus_cf_{version}"
-    rg_name = f"querulus_rg_{version}"
-    cf_cfg = build_all_models_config(
-        project=cf_name,
+    cf_name = MODEL_CF_NAME
+    rg_name = MODEL_RG_NAME
+    cf_params = catboost_params_from_hpo(
+        hpo.get("frequency") if isinstance(hpo.get("frequency"), dict) else hpo,
+        classification=True,
+    )
+    rg_params = catboost_params_from_hpo(
+        hpo.get("severity") if isinstance(hpo.get("severity"), dict) else {},
+        classification=False,
+    )
+    parity_cfg = build_cf_rg_config(
+        project=MODEL_NAME,
         version="1",
         group_name=group_name,
         parquet_path=parquet_path,
         train_period=periods["parity_train_period"],
         test_period=periods["parity_test_period"],
         date_column=date_column,
-        model_name=cf_name,
-        column_target="TARGET_FREQ",
-        objective="binary",
-        features=freq_block,
-        cat_features=freq_cat_out,
-        params_catboost=catboost_params_from_hpo(
-            hpo.get("frequency") if isinstance(hpo.get("frequency"), dict) else hpo,
-            classification=True,
-        ),
+        cf_name=cf_name,
+        rg_name=rg_name,
+        freq_block=freq_block,
+        freq_cat_out=freq_cat_out,
+        sev_block=sev_block,
+        sev_cat_out=sev_cat_out,
+        cf_params=cf_params,
+        rg_params=rg_params,
     )
-    rg_cfg = build_all_models_config(
-        project=rg_name,
-        version="1",
-        group_name=group_name,
-        parquet_path=parquet_path,
-        train_period=periods["parity_train_period"],
-        test_period=periods["parity_test_period"],
-        date_column=date_column,
-        model_name=rg_name,
-        column_target="TARGET_SEV",
-        objective="regression",
-        features=sev_block,
-        cat_features=sev_cat_out,
-        params_catboost=catboost_params_from_hpo(
-            hpo.get("severity") if isinstance(hpo.get("severity"), dict) else {},
-            classification=False,
-        ),
-        data_filter_condition="TARGET_SEV > 0",
-    )
-    cf_path = write_json(configs_dir / f"config_cf_{version}.json", cf_cfg)
-    rg_path = write_json(configs_dir / f"config_rg_{version}.json", rg_cfg)
-    rg_prod = with_periods(
-        rg_cfg,
+    prod_cfg = with_periods(
+        parity_cfg,
         train_period=periods["prod_train_period"],
         test_period=periods["prod_test_period"],
     )
-    cf_prod = with_periods(
-        cf_cfg,
-        train_period=periods["prod_train_period"],
-        test_period=periods["prod_test_period"],
-    )
-    cf_prod_path = write_json(configs_dir / f"config_cf_{version}_prod.json", cf_prod)
-    rg_prod_path = write_json(configs_dir / f"config_rg_{version}_prod.json", rg_prod)
+    parity_path = write_json(configs_dir / "config_parity.json", parity_cfg)
+    prod_path = write_json(configs_dir / "config_prod.json", prod_cfg)
     return {
         "version": version,
-        "cf_path": cf_path,
-        "rg_path": rg_path,
-        "cf_prod_path": cf_prod_path,
-        "rg_prod_path": rg_prod_path,
+        "parity_path": parity_path,
+        "prod_path": prod_path,
+        # aliases for older call sites
+        "cf_path": parity_path,
+        "rg_path": parity_path,
+        "cf_prod_path": prod_path,
+        "rg_prod_path": prod_path,
         "cf_name": cf_name,
         "rg_name": rg_name,
         "periods": periods,
         "n_frequency_features": len(freq_feats),
         "n_severity_features": len(sev_feats),
+        "n_clip_bounds": len(clip_bounds),
+        "dq_report_path": str(report_path) if report_path.is_file() else None,
+        "configs_dir": str(configs_dir),
+    }
+
+
+_OUTBOXML_CONFIG_FILES: tuple[str, ...] = (
+    "config_parity.json",
+    "config_prod.json",
+)
+
+
+def load_outboxml_configs(
+    df: pd.DataFrame,
+    *,
+    version: str | None = None,
+    configs_dir: Path | str | None = None,
+    date_column: str = "PAYMENT_ORDER_DATE_TIME",
+    train_period: tuple[str, str] | None = None,
+    test_period: tuple[str, str] | None = None,
+) -> dict[str, Any]:
+    """Загрузить ``config_parity.json`` / ``config_prod.json`` из collect.
+
+    Окна сплитов пересчитываются из ``df`` (индексы нужны для fin-effect).
+    """
+    from querulus.naming import MODEL_CF_NAME, MODEL_RG_NAME, configs_dir_for_version
+
+    version = version or default_model_version()
+    configs_dir = (
+        Path(configs_dir) if configs_dir is not None else configs_dir_for_version(version)
+    )
+    paths = {name: configs_dir / name for name in _OUTBOXML_CONFIG_FILES}
+    missing = [name for name, path in paths.items() if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"Нет OutBoxML-конфигов в {configs_dir}: {', '.join(missing)}. "
+            "Сначала запустите collect (ячейка export → write_outboxml_configs)."
+        )
+    periods = compute_period_windows(
+        df,
+        date_column=date_column,
+        train_period=train_period,
+        test_period=test_period,
+    )
+    parity_path = paths["config_parity.json"]
+    prod_path = paths["config_prod.json"]
+    return {
+        "version": version,
+        "parity_path": parity_path,
+        "prod_path": prod_path,
+        "cf_path": parity_path,
+        "rg_path": parity_path,
+        "cf_prod_path": prod_path,
+        "rg_prod_path": prod_path,
+        "cf_name": MODEL_CF_NAME,
+        "rg_name": MODEL_RG_NAME,
+        "periods": periods,
+        "configs_dir": str(configs_dir),
     }
 
 

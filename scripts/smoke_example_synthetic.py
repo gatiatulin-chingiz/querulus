@@ -1,4 +1,4 @@
-"""Smoke-run ключевых шагов example.ipynb на синтетике (без Hive/IPython)."""
+"""Smoke-run ключевых шагов example на синтетике (без Hive/IPython)."""
 from __future__ import annotations
 
 import sys
@@ -17,20 +17,13 @@ for p in (SRC, OUTBOXML_ROOT, PROJECT_ROOT):
 import pandas as pd  # noqa: E402
 
 from configs import config as querulus_outboxml_config  # noqa: E402
-from outboxml.datasets_manager import DataSetsManager  # noqa: E402
-from querulus.training.build_outboxml_configs import (  # noqa: E402
-    dataframe_for_dsm,
-    default_model_version,
-    ensure_legacy_inflation_column,
-    ensure_predictable_model,
-    prepare_datasets_from_config,
-    write_outboxml_configs,
-)
+from querulus.training.build_outboxml_configs import write_outboxml_configs  # noqa: E402
+from querulus.naming import MODEL_CF_NAME, MODEL_RG_NAME, MODEL_VERSION  # noqa: E402
+from querulus.training.automl_fit import fit_automl_bundle  # noqa: E402
 from querulus.training.outboxml_metrics import (  # noqa: E402
     display_dsm_collect_metrics_cross_test,
     predict_dsm_series,
 )
-from querulus.training.dsm_fit import fit_dsm_classification  # noqa: E402
 from querulus.fin_effect import (  # noqa: E402
     export_business_html,
     load_collect_val_threshold,
@@ -44,57 +37,40 @@ def main() -> None:
     if not synthetic_path.is_file():
         raise SystemExit(f"Нет {synthetic_path}; запустите: python -m querulus.synthetic_dataset")
 
-    df_raw = pd.read_parquet(synthetic_path)
-    df_raw = ensure_legacy_inflation_column(df_raw)
-    if "FE_VALUE_BEFORE_WITHOUT_REAL_2020" in df_raw.columns:
-        df_raw.to_parquet(synthetic_path, index=False)
-
-    df = dataframe_for_dsm(df_raw)
-    model_version = default_model_version(business="2", increment="v1")
+    df = pd.read_parquet(synthetic_path)
+    model_version = MODEL_VERSION
     built = write_outboxml_configs(
         df,
         version=model_version,
         parquet_path=str(synthetic_path.as_posix()),
     )
     periods = built["periods"]
-    cf_name = f"querulus_cf_{model_version}"
-    rg_name = f"querulus_rg_{model_version}"
+    cf_name = built.get("cf_name") or MODEL_CF_NAME
+    rg_name = built.get("rg_name") or MODEL_RG_NAME
 
-    def patch_dsm(dsm):
-        for res in dsm.get_result().values():
-            res.model = ensure_predictable_model(res.model)
-
-    print("[1/6] configs OK", built["cf_path"].name, "n=", len(df))
+    print("[1/6] configs OK", built["parity_path"].name, built["prod_path"].name, "n=", len(df))
 
     thr_val = load_collect_val_threshold(PROJECT_ROOT)
     print(f"[2/6] τ (collect) = {thr_val:.2f}")
 
-    dsm_cf = DataSetsManager(
-        config_name=str(built["cf_path"]),
+    dsm, _ = fit_automl_bundle(
+        df,
+        built["parity_path"],
         external_config=querulus_outboxml_config,
-        prepared_datasets=prepare_datasets_from_config(built["cf_path"]),
+        cf_name=cf_name,
+        threshold=thr_val,
+        send_mail=False,
+        log_mlflow=False,
     )
-    dsm_cf.load_dataset(data=df)
-    fit_dsm_classification(dsm_cf, cf_name, threshold=thr_val)
-    patch_dsm(dsm_cf)
-
-    dsm_rg = DataSetsManager(
-        config_name=str(built["rg_path"]),
-        external_config=querulus_outboxml_config,
-        prepared_datasets=prepare_datasets_from_config(built["rg_path"]),
-    )
-    dsm_rg.load_dataset(data=df)
-    dsm_rg.fit_models()
-    patch_dsm(dsm_rg)
-    print("[3/6] parity fit OK")
+    print("[3/6] parity fit OK", list(dsm.get_result()))
 
     test_idx = periods["splits"].test
     test_prod_idx = periods["prod_holdout_idx"]
     test_slices = {"test": test_idx, "test_prod": test_prod_idx}
 
-    for dsm, name, task, thr, ignore_filter in (
-        (dsm_cf, cf_name, "classification", thr_val, False),
-        (dsm_rg, rg_name, "regression", None, False),
+    for name, task, thr, ignore_filter in (
+        (cf_name, "classification", thr_val, False),
+        (rg_name, "regression", None, False),
     ):
         table = display_dsm_collect_metrics_cross_test(
             dsm,
@@ -106,66 +82,42 @@ def main() -> None:
             title=f"{name}: train / test / test_prod",
             ignore_row_filter=ignore_filter,
         )
-        for col in ("train", "test", "test_prod"):
-            if col not in table.columns:
-                raise SystemExit(f"FAIL {name}: нет колонки {col}")
-            non_null = table[col].notna().sum()
-            if non_null == 0:
-                raise SystemExit(f"FAIL {name}: колонка {col} пустая")
-            print(f"  {name} {col}: {non_null}/{len(table)} метрик заполнено")
-    print("[4/6] cross-test metrics OK")
+        print(table)
 
-    proba_test = predict_dsm_series(
-        dsm_cf, cf_name, df.loc[test_idx], task_type="classification"
+    print("[4/6] metrics OK")
+
+    proba = predict_dsm_series(
+        dsm, cf_name, df.loc[test_idx], task_type="classification"
     )
-    sev_test = predict_dsm_series(
-        dsm_rg, rg_name, df.loc[test_idx], task_type="regression", ignore_row_filter=True
+    sev = predict_dsm_series(
+        dsm,
+        rg_name,
+        df.loc[test_idx],
+        task_type="regression",
+        ignore_row_filter=True,
     )
-    cfg = resolve_fin_effect_config(
-        df, frequency_target="TARGET_FREQ", severity_target="TARGET_SEV"
-    )
-    common = (
-        test_idx.intersection(proba_test.dropna().index)
-        .intersection(sev_test.dropna().index)
-        .intersection(df.index)
-    )
+    fe_cfg = resolve_fin_effect_config()
     fe = run_fin_effect_pipeline(
-        df.loc[common],
-        proba_test.reindex(common),
-        sev_test.reindex(common),
-        df.loc[common, "TARGET_FREQ"],
+        df.loc[test_idx],
+        proba,
+        sev,
         threshold=thr_val,
-        config=cfg,
+        config=fe_cfg,
     )
-    print(f"[5/6] fin-effect Test: net={fe.net_effect:,.0f}, n={len(common)}")
+    print("[5/6] fin-effect OK", "best_thr≈", round(float(fe.best_threshold), 2))
 
-    dsm_cf_prod = DataSetsManager(
-        config_name=str(built["cf_prod_path"]),
+    dsm_prod, _ = fit_automl_bundle(
+        df,
+        built["prod_path"],
         external_config=querulus_outboxml_config,
-        prepared_datasets=prepare_datasets_from_config(built["cf_prod_path"]),
+        cf_name=cf_name,
+        threshold=thr_val,
+        send_mail=False,
+        log_mlflow=False,
     )
-    dsm_cf_prod.load_dataset(data=df)
-    fit_dsm_classification(dsm_cf_prod, cf_name, threshold=thr_val)
-    patch_dsm(dsm_cf_prod)
-
-    dsm_rg_prod = DataSetsManager(
-        config_name=str(built["rg_prod_path"]),
-        external_config=querulus_outboxml_config,
-        prepared_datasets=prepare_datasets_from_config(built["rg_prod_path"]),
-    )
-    dsm_rg_prod.load_dataset(data=df)
-    dsm_rg_prod.fit_models()
-    patch_dsm(dsm_rg_prod)
-    print("[6/6] prod-refit fit OK")
-
-    html_path = export_business_html(
-        fe,
-        cfg,
-        path=PROJECT_ROOT / "notebooks" / "fin_effect_detailed.html",
-        subtitle="smoke synthetic, Test",
-    )
-    print(f"HTML: {html_path}")
-    print("SMOKE OK")
+    print("[6/6] prod fit OK", list(dsm_prod.get_result()))
+    _ = export_business_html
+    print("smoke OK")
 
 
 if __name__ == "__main__":

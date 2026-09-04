@@ -29,6 +29,8 @@ REDUNDANT_RAW_ARTIFACTS: tuple[str, ...] = (
 STALE_PROCESSED_ARTIFACTS: tuple[str, ...] = (
     "df_after_targets.parquet",
     "df_final_3.parquet",
+    "querulus_train_dataset.parquet",
+    "querulus_train_dataset_latest.json",
     "target_maturity_report.json",
 )
 

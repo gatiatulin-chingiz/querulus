@@ -111,13 +111,13 @@ def _fin_on_index(
 ) -> FinEffectResult:
     """Фин. эффект на произвольном индексе строк (один порог)."""
     from querulus.fin_effect.calculator import (
-        _feature_rows_for_predict,
-        _frequency_proba_from_training,
+        feature_rows_for_predict,
+        frequency_proba_from_training,
     )
 
     frame = df.loc[idx]
-    predict_frame = _feature_rows_for_predict(training, idx, frame)
-    freq_proba = _frequency_proba_from_training(
+    predict_frame = feature_rows_for_predict(training, idx, frame)
+    freq_proba = frequency_proba_from_training(
         training, predict_frame[training.frequency_features]
     )
     y_true = frame[fin_config.frequency_target_column]
@@ -143,14 +143,14 @@ def run_fin_effect_with_severity_predictions(
     frequency_target_column: str | None = None,
 ) -> FinEffectResult:
     """Фин. эффект с подменой severity-предикта (freq — из ``training``)."""
-    from querulus.fin_effect.calculator import _frequency_proba_from_training
-    from querulus.fin_effect.calculator import _feature_rows_for_predict
+    from querulus.fin_effect.calculator import frequency_proba_from_training
+    from querulus.fin_effect.calculator import feature_rows_for_predict
 
     config = config or FinEffectConfig()
     effect_index, y_true_freq = _effect_index_and_freq(training, split)
     effect_frame = df.loc[effect_index]
-    predict_frame = _feature_rows_for_predict(training, effect_index, effect_frame)
-    freq_proba = _frequency_proba_from_training(
+    predict_frame = feature_rows_for_predict(training, effect_index, effect_frame)
+    freq_proba = frequency_proba_from_training(
         training, predict_frame[training.frequency_features]
     )
     if frequency_target_column:
@@ -216,9 +216,9 @@ def compare_severity_fin_effect_variants(
     from querulus.fin_effect.threshold_policy import resolve_val_threshold
 
     use_threshold = resolve_val_threshold(training, explicit=threshold)
-    from querulus.fin_effect.calculator import _feature_rows_for_predict
+    from querulus.fin_effect.calculator import feature_rows_for_predict
 
-    predict_frame = _feature_rows_for_predict(training, effect_index, df.loc[effect_index])
+    predict_frame = feature_rows_for_predict(training, effect_index, df.loc[effect_index])
     features = predict_frame[training.severity_features]
     cat = training.severity_categorical_features
     y_true_sev = pd.to_numeric(
@@ -323,7 +323,7 @@ def compare_value_before_segment_strategies(
         raise ValueError("severity_split отсутствует")
 
     effect_index, _ = _effect_index_and_freq(training, split)
-    from querulus.fin_effect.calculator import _feature_rows_for_predict
+    from querulus.fin_effect.calculator import feature_rows_for_predict
 
     train_sev_idx = training.severity_split.x_train.index
     test_sev_idx = training.severity_split.x_test.index
@@ -343,7 +343,7 @@ def compare_value_before_segment_strategies(
     seg_idx = effect_index[effect_small_mask.to_numpy()]
     segment_n = int(len(seg_idx))
 
-    predict_frame = _feature_rows_for_predict(training, seg_idx, df.loc[seg_idx])
+    predict_frame = feature_rows_for_predict(training, seg_idx, df.loc[seg_idx])
     feats = predict_frame[training.severity_features]
     cat = training.severity_categorical_features
 

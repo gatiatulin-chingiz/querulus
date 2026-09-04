@@ -98,6 +98,38 @@ def real_feature_name(column: str, base_year: int = INFLATION_BASE_YEAR) -> str:
     return f"{stem}{suffix}"
 
 
+# Старый базис в FS-артефактах / OutBoxML JSON до смены CPI.
+LEGACY_INFLATION_ALIAS_YEAR: int = 2020
+
+
+def ensure_legacy_real_column_aliases(
+    df: pd.DataFrame,
+    *,
+    current_year: int = INFLATION_BASE_YEAR,
+    legacy_year: int = LEGACY_INFLATION_ALIAS_YEAR,
+) -> pd.DataFrame:
+    """Скопировать ``*_REAL_{current}`` → ``*_REAL_{legacy}``, если алиаса ещё нет.
+
+    Collect пишет итоговый parquet с алиасами; DSM/example не досоздают колонки.
+    """
+    if current_year == legacy_year:
+        return df
+    suffix_cur = f"_REAL_{current_year}"
+    suffix_leg = f"_REAL_{legacy_year}"
+    out: pd.DataFrame | None = None
+    for col in df.columns:
+        name = str(col)
+        if not name.endswith(suffix_cur):
+            continue
+        legacy = f"{name[: -len(suffix_cur)]}{suffix_leg}"
+        if legacy in df.columns:
+            continue
+        if out is None:
+            out = df.copy()
+        out[legacy] = out[name]
+    return df if out is None else out
+
+
 def add_real_monetary_columns(
     df: pd.DataFrame,
     event_dates: pd.Series,

@@ -2,7 +2,7 @@
   "_comment": "Единые фильтры пайплайна querulus.dataset. Редактируйте здесь, не в коде шагов.",
 
   "victim": {
-    "_comment": "Фильтр строк victim parquet. Окно выборки — по дате поручения на выплату (не LOSS_DATE_TIME); инфляционный базис денежных FE — 2020.",
+    "_comment": "Фильтр victim: нижняя граница T0 (PAYMENT_ORDER_DATE_TIME). Верхняя граница по дате убрана — отбор по вызреванию (target_maturity).",
     "refund_forms": [
       "Ремонт",
       "Денежная",
@@ -10,8 +10,7 @@
       "Ремонт. Смена СТОА"
     ],
     "date_column": "PAYMENT_ORDER_DATE_TIME",
-    "date_from": "2020-01-01",
-    "date_to": "2025-06-30",
+    "date_from": "2022-01-01",
     "loss_processes": [
       "Прямое ОСАГО (с 1 марта 2009)",
       "Традиционное ОСАГО"
@@ -41,10 +40,10 @@
   },
 
   "target_maturity": {
-    "_comment": "В датасет: PAYMENT_ORDER_DATE_TIME + horizon_months ≤ S и без незакрытого суда (последняя инстанция иска void). S = snapshot_date или max дат в target_3_claims. Один H на freq и sev. lag p90 в target_maturity_report.json — ориентир для H.",
+    "_comment": "A: закрытый ПСР (суд/ФU/претензия с доплатой). B: T0+36м≤S без закрытого ПСР. Open court→drop. S=run_date или snapshot_date. lag p50..p99 в target_maturity_report.json.",
     "enabled": true,
     "t0_column": "PAYMENT_ORDER_DATE_TIME",
-    "horizon_months": 24,
+    "horizon_months_no_court": 36,
     "snapshot_date": null
   }
 }

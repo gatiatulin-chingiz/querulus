@@ -164,9 +164,16 @@ def write_synthetic_final_dataset(
     seed: int = 42,
 ) -> Path:
     """Записать parquet; каталог создаётся при необходимости."""
+    from querulus.dataset.dtypes import cast_object_columns
+    from querulus.features.inflation import ensure_legacy_real_column_aliases
+
     out = Path(path) if path is not None else DEFAULT_OUTPUT
     out.parent.mkdir(parents=True, exist_ok=True)
-    df = build_synthetic_final_dataset(n_rows=n_rows, seed=seed)
+    df = cast_object_columns(
+        ensure_legacy_real_column_aliases(
+            build_synthetic_final_dataset(n_rows=n_rows, seed=seed)
+        )
+    )
     df.to_parquet(out, index=False)
     return out
 

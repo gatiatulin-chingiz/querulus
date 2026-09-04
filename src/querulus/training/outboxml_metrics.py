@@ -1,10 +1,8 @@
 """Метрики DSM в стиле collect без правок OutBoxML и без modeldiagnostics.
 
-OutBoxML ``BaseMetrics`` для classification считает F1/precision/recall/gini
-только при ``cut_off = 0.5``. Для frequency используется τ из collect
-(``load_collect_val_threshold``); подмена порога при ``fit_models`` —
-``querulus.training.dsm_fit.outboxml_classification_cutoff`` /
-``fit_dsm_classification``.
+Встроенные classification-метрики ядра OutBoxML (F1 @ 0.5) не используем.
+Для frequency порог τ берётся из collect (``load_collect_val_threshold``) и
+передаётся в ``enrich_dsm_model_metrics`` / ``fit_dsm_classification``.
 
 Здесь — полный набор метрик как в train_loop/collect; результат пишется
 в ``result.metrics[*]['full']`` (см. ``enrich_dsm_model_metrics``).
@@ -180,7 +178,7 @@ def _model_cat_feature_names(
 
 def _frame_for_catboost_predict(X: pd.DataFrame, estimator: Any) -> pd.DataFrame:
     """Подготовка кадра под CatBoost predict."""
-    from querulus.training.pipeline import _stringify_categorical_columns
+    from querulus.training.pipeline import stringify_categorical_columns
 
     feature_names = _model_feature_names(X, estimator)
     out = X.loc[:, feature_names].copy()
@@ -199,7 +197,7 @@ def _frame_for_catboost_predict(X: pd.DataFrame, estimator: Any) -> pd.DataFrame
             out[column] = pd.to_numeric(series, errors="coerce")
 
     if cat_names:
-        out = _stringify_categorical_columns(out, cat_names)
+        out = stringify_categorical_columns(out, cat_names)
     return out
 
 

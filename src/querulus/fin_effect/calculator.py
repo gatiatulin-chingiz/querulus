@@ -663,7 +663,7 @@ def recompute_fin_effect_model(
     )
 
 
-def _feature_rows_for_predict(
+def feature_rows_for_predict(
     training: object,
     effect_index: pd.Index,
     effect_frame: pd.DataFrame,
@@ -672,16 +672,16 @@ def _feature_rows_for_predict(
     feature_frame = getattr(training, "feature_frame", None)
     if feature_frame is not None:
         return feature_frame.loc[effect_index]
-    from querulus.training.pipeline import _stringify_categorical_columns
+    from querulus.training.pipeline import stringify_categorical_columns
 
     cat_features = getattr(training, "severity_categorical_features", []) + getattr(
         training, "frequency_categorical_features", []
     )
     cat_features = list(dict.fromkeys(cat_features))
-    return _stringify_categorical_columns(effect_frame, cat_features)
+    return stringify_categorical_columns(effect_frame, cat_features)
 
 
-def _frequency_proba_from_training(training: object, features: pd.DataFrame) -> np.ndarray:
+def frequency_proba_from_training(training: object, features: pd.DataFrame) -> np.ndarray:
     """Вероятность frequency с учётом калибратора, если он есть."""
     calibrator = getattr(training, "frequency_calibrator", None)
     if calibrator is not None:
@@ -785,10 +785,10 @@ def run_fin_effect_from_training(
             y_true_freq = pd.concat([frequency_split.y_train, frequency_split.y_test])
 
     effect_frame = df.loc[effect_index]
-    predict_frame = _feature_rows_for_predict(training, effect_index, effect_frame)
+    predict_frame = feature_rows_for_predict(training, effect_index, effect_frame)
 
     freq_proba = pd.Series(
-        _frequency_proba_from_training(training, predict_frame[freq_features]),
+        frequency_proba_from_training(training, predict_frame[freq_features]),
         index=effect_index,
     )
     sev_raw = severity_predict(

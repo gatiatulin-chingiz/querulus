@@ -50,7 +50,7 @@ def _predict_features(
     """Строки признаков как при обучении (feature_frame / stringify cat)."""
     if training.feature_frame is not None:
         return training.feature_frame.loc[index]
-    from querulus.training.pipeline import _stringify_categorical_columns
+    from querulus.training.pipeline import stringify_categorical_columns
 
     cats = list(
         dict.fromkeys(
@@ -60,7 +60,7 @@ def _predict_features(
             ]
         )
     )
-    return _stringify_categorical_columns(df.loc[index], cats)
+    return stringify_categorical_columns(df.loc[index], cats)
 
 
 def _holdout_index(
@@ -92,7 +92,7 @@ def _classification_threshold(
     )
 
 
-def _stack_predictions(
+def stack_predictions(
     training: TrainingArtifacts,
     df: pd.DataFrame,
     index: pd.Index,
@@ -130,16 +130,10 @@ def _stack_predictions(
 
 
 def _gini(y_true: np.ndarray, proba: np.ndarray) -> float:
-    """Gini из ModelDiagnostics, иначе 2·ROC-AUC − 1."""
-    try:
-        from modeldiagnostics.src.gini import Gini
+    """Gini frequency: Lorenz по proba (``collect_metrics.classification_gini``)."""
+    from querulus.training.collect_metrics import classification_gini
 
-        return float(Gini(y_true, proba))
-    except Exception:  # noqa: BLE001
-        try:
-            return float(2.0 * roc_auc_score(y_true, proba) - 1.0)
-        except ValueError:
-            return float("nan")
+    return classification_gini(y_true, proba)
 
 
 def _freq_metrics_row(
@@ -391,14 +385,14 @@ def _retrain_freq_on_target(
     Окно обучения — ``frequency_split.x_train`` той же модели (без подглядывания в eval,
     если eval пересекается с train — строки eval из train исключаются из fit).
     """
-    from querulus.training.pipeline import _make_pool, _require_catboost
+    from querulus.training.pipeline import make_pool, require_catboost
 
     if training.frequency_split is None:
         raise ValueError("Для retrain нужен frequency_split у legacy")
     if target_column not in df.columns:
         raise KeyError(f"Нет колонки {target_column}")
 
-    CatBoostClassifier, *_ = _require_catboost()
+    CatBoostClassifier, *_ = require_catboost()
     feats = list(training.frequency_features)
     cats = [c for c in training.frequency_categorical_features if c in feats]
     train_idx = training.frequency_split.x_train.index.difference(eval_index)
@@ -419,19 +413,19 @@ def _retrain_freq_on_target(
         else:
             x_va = training.frequency_split.x_test.loc[test_idx, feats]
         y_va = df.loc[test_idx, target_column].fillna(0).astype(int)
-        eval_set = _make_pool(
+        eval_set = make_pool(
             x_va, y_va, cat_features=cats, feature_names=feats
         )
 
     model = CatBoostClassifier(**_catboost_params_from_model(training.frequency_model))
-    train_pool = _make_pool(x_tr, y_tr, cat_features=cats, feature_names=feats)
+    train_pool = make_pool(x_tr, y_tr, cat_features=cats, feature_names=feats)
     fit_kwargs: dict[str, object] = {"plot": False}
     if eval_set is not None:
         fit_kwargs["eval_set"] = eval_set
     model.fit(train_pool, **fit_kwargs)
 
     x_ev = _predict_features(training, df, eval_index)[feats]
-    eval_pool = _make_pool(x_ev, None, cat_features=cats, feature_names=feats)
+    eval_pool = make_pool(x_ev, None, cat_features=cats, feature_names=feats)
     proba = pd.Series(
         np.asarray(model.predict_proba(eval_pool)[:, 1], dtype=float),
         index=eval_index,
@@ -460,7 +454,7 @@ def score_stack_on_index(
     for col in (freq_target, sev_target, psr_col):
         if col not in holdout.columns:
             raise KeyError(f"Для оценки нужна колонка {col}")
-    proba, pred_freq, pred_sev = _stack_predictions(
+    proba, pred_freq, pred_sev = stack_predictions(
         training,
         df,
         index,
@@ -556,7 +550,7 @@ def evaluate_legacy_vs_new(
         part = df.loc[eval_index]
         for stack in stacks:
             y_col = _STACKS[0][1] if stack == "legacy" else _STACKS[1][1]
-            proba, pred_freq, _ = _stack_predictions(
+            proba, pred_freq, _ = stack_predictions(
                 trainings[stack],
                 df,
                 eval_index,
@@ -589,7 +583,7 @@ def evaluate_legacy_vs_new(
 
     preds: dict[str, tuple[pd.Series, pd.Series, pd.Series]] = {}
     for stack, y_col in _STACKS:
-        proba, pred_freq, pred_sev = _stack_predictions(
+        proba, pred_freq, pred_sev = stack_predictions(
             trainings[stack],
             df,
             index,

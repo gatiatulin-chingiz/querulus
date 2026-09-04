@@ -14,8 +14,8 @@ import pandas as pd
 from sklearn.preprocessing import OneHotEncoder
 
 from querulus.dataset.constants import RENAME_DICT
-from querulus.dataset.filters import claims_sql_predicate
-from querulus.dataset.io import checkpoint, load_sql_artifact
+from querulus.dataset.load.claims import fetch_claims_incoming, fetch_claims_persons
+from querulus.dataset.load.io import checkpoint
 from querulus.dataset.paths import DataPaths
 from querulus.dataset.utils import convert_to_binary
 
@@ -23,133 +23,12 @@ logger = logging.getLogger("querulus.dataset")
 
 
 def load_claims(paths: DataPaths, conn, *, use_sql: bool = False, save_checkpoint: bool = True):
-    query = \
-    """
-    SELECT 
-        Лицо,
-        CAST ( Представитель as int ) Представитель,
-        CAST ( Цессионарий as int ) Цессионарий,
-        ПолноеФИОЛица,
-        ТипЛица,
-        ПолЛица,
-        НомерИск,
-        ОбращениеКФУОтЗаявителяПоступилоПосредством
-    FROM [OISUU_report].[Datamart].[oisuu81_t_Истцы]
-    WHERE ПометкаУдаленияИск=0x00
-    """
-    df_claims_persons = load_sql_artifact(
-        paths,
-        conn,
-        paths.raw_dir,
-        "df_claims_persons.parquet",
-        query,
-        use_sql=use_sql,
-        save_checkpoint=save_checkpoint,
-        sql_reader=pd.read_sql_query,
+    df_claims_persons = fetch_claims_persons(
+        paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint
     )
 
-    claims_where = claims_sql_predicate(icnl_alias="icnl", loss_alias="l")
-    query = f"""
-    WITH doc as (
-        SELECT [_Document5472_IDRRef]
-              ,[_KeyField]
-              ,[_LineNo14756]
-              ,[_Fld14757]
-              ,[_Fld14758]
-              ,[_Fld14759]
-              ,[_Fld14760]
-              ,[_Fld14761]
-              ,[_Fld14762RRef]
-              ,[_Fld14763]
-              ,ROW_NUMBER() OVER (PARTITION BY [_Document5472_IDRRef] ORDER BY [_LineNo14756] DESC) as rn
-          FROM [oisuu81].[dbo].[_Document5472_VT14755]
-    ),
-    cessia as (
-        SELECT 
-                НомерИск
-                ,max([Представитель]) as [Представитель]
-                ,max([Цессионарий]) as [Цессионарий]
-          FROM [OISUU_report].[Datamart].[oisuu81_t_Истцы]
-          group by НомерИск
-    )
-    SELECT itl.[LossID]
-          ,itl.[LossNumber]
-          ,itl.[IncidentID]
-          ,itl.[IncidentNumber]
-          ,icnl.[IncomingClaimID]
-          ,icnl.[InstByOisuu]
-          ,icnl.[IncomingClaimNumber]
-          ,icnl.[ClaimedValuePeriod]
-          ,icnl.[ClaimedMainDebt]
-          ,icnl.[ClaimedPlaintiffExamination]
-          ,icnl.[ClaimedCourtExamination]
-          ,icnl.[ClaimedRepresentativeExpenses]
-          ,icnl.[ClaimedPercentForUses]
-          ,icnl.[ClaimedPenaltyFee]
-          ,icnl.[ClaimedFine]
-          ,icnl.[ClaimedMoralDamage]
-          ,icnl.[ClaimedOtherExpenses]
-          ,icnl.[ClaimedStateDuty]
-          ,icnl.[ClaimedLossCommodyValue]
-          ,icnl.[ClaimedWearout]
-          ,icnl.[ClaimedValueWithoutSD]
-          ,icnl.[ClaimedValueWithSD]
-          ,icnl.[ClaimedAmountLoss]
-          ,icnl.[ClaimedCourtExaminationBeforeResolve]
-          ,icnl.[RecoveredValuePeriod]
-          ,icnl.[RecoveredMainDebt]
-          ,icnl.[RecoveredPlaintiffExamination]
-          ,icnl.[RecoveredCourtExamination]
-          ,icnl.[RecoveredRepresentativeExpenses]
-          ,icnl.[RecoveredPercentForUses]
-          ,icnl.[RecoveredPenaltyFee]
-          ,icnl.[RecoveredFine]
-          ,icnl.[RecoveredMoralDamage]
-          ,icnl.[RecoveredOtherExpenses]
-          ,icnl.[RecoveredStateDuty]
-          ,icnl.[RecoveredLossCommodyValue]
-          ,icnl.[RecoveredWearout]
-          ,icnl.[RecoveredValueWithoutSD]
-          ,icnl.[RecoveredValueWithSD]
-          ,icnl.[RecoveredAmountLoss]
-          ,icnl.[RecoveredCourtExaminationBeforeResolve]
-          ,icnl.[Instance]
-          ,icnl.[instID]
-          ,icnl.[Court]
-          ,icnl.[Judge]
-          ,icnl.[Applicant]
-          ,icnl.[ExpertOrg]
-          ,icnl.[Decision]
-          ,icnl.[IncomingClaimGetDate]
-          ,icnl.[CourtWorkOverDate]
-          ,icnl.[ClaimItem]
-          ,icnl.[ClaimOrigin]
-          ,icnl.[CourtWorkUnit]
-          ,icnl.[EmployeeName]
-          ,icnl.[FLSimpleOrder]
-          ,icnl.[LinkLossNumber]
-          ,docs.[_Fld14757] as [Payment_fee_fu]
-          ,cs.[Представитель]
-          ,cs.[Цессионарий]
-    FROM [OISUU_report].[Datamart].[oisuu81_t_IncomingClaimNewLogicByInst] as icnl
-    LEFT JOIN cessia as cs on cs.НомерИск=icnl.IncomingClaimNumber
-    LEFT JOIN [OISUU_report].[dbo].[oisuu81_t_IncidentToLoss] as itl on itl.LossNumber=icnl.LinkLossNumber
-    LEFT JOIN [OISUU_report].[dbo].[oisuu81_t_Losses] as l on l.LossNumber=itl.LossNumber
-    LEFT JOIN doc as docs on docs.[_Document5472_IDRRef]=icnl.[IncomingClaimID]
-    WHERE (docs.rn = 1 or docs.rn is null)
-        AND {claims_where}
-    """
-
-
-    df_claims = load_sql_artifact(
-        paths,
-        conn,
-        paths.raw_dir,
-        "df_claims_incoming.parquet",
-        query,
-        use_sql=use_sql,
-        save_checkpoint=save_checkpoint,
-        sql_reader=pd.read_sql_query,
+    df_claims = fetch_claims_incoming(
+        paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint
     )
 
     df_claims.columns = df_claims.columns.str.upper()

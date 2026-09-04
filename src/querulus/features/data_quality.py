@@ -360,6 +360,9 @@ def build_service_dq_bounds(
 
     Берём low_raw/high_raw из отчёта сборки parquet — тем же забором резали
     ``df_final_3``, на котором учится модель 2.
+
+    Предпочтительно те же границы писать в OutBoxML ``feature.clip``
+    (``clip_bounds_for_outboxml``); этот JSON — запасной контракт без prepare.
     """
     payload = report.to_dict() if isinstance(report, DataQualityReport) else dict(report)
     winsor_bounds: dict[str, dict[str, float]] = {}
@@ -387,11 +390,55 @@ def build_service_dq_bounds(
         "hard_clip_nonnegative_columns": money_cols,
         "winsorize_bounds": winsor_bounds,
         "service_contract": (
-            "Before prepare_dataset / DSM: (1) clip listed monetary cols to >=0; "
+            "Prefer OutBoxML feature.clip from the same report. "
+            "Fallback: (1) clip listed monetary cols to >=0; "
             "(2) clip each winsorize_bounds col to [low_raw, high_raw]. "
-            "Do not recompute IQR per request. Same fences as df_final_3 build."
+            "Do not recompute IQR per request."
         ),
     }
+
+
+def clip_bounds_for_outboxml(
+    report: dict[str, Any] | DataQualityReport | None = None,
+    *,
+    report_path: Path | str | None = None,
+) -> dict[str, dict[str, float]]:
+    """``column → {min_value, max_value}`` для OutBoxML ``feature.clip``.
+
+    Границы = ``low_raw``/``high_raw`` winsorize log1p-IQR из
+    ``data_quality_report.json`` (уже на сырой шкале).
+    Для ``*_REAL_{base}`` дублируем clip на ``*_REAL_2020`` (legacy FS).
+    """
+    from querulus.features.inflation import (
+        INFLATION_BASE_YEAR,
+        LEGACY_INFLATION_ALIAS_YEAR,
+    )
+
+    if report is None:
+        if report_path is None:
+            raise ValueError("Нужен report или report_path")
+        path = Path(report_path)
+        if not path.is_file():
+            return {}
+        report = json.loads(path.read_text(encoding="utf-8"))
+    payload = report.to_dict() if isinstance(report, DataQualityReport) else dict(report)
+    clips: dict[str, dict[str, float]] = {}
+    for row in payload.get("winsorize_log1p_iqr") or []:
+        column = row.get("column")
+        if not column:
+            continue
+        fence = {
+            "min_value": float(row["low_raw"]),
+            "max_value": float(row["high_raw"]),
+        }
+        name = str(column)
+        clips[name] = fence
+        suffix_cur = f"_REAL_{INFLATION_BASE_YEAR}"
+        suffix_leg = f"_REAL_{LEGACY_INFLATION_ALIAS_YEAR}"
+        if name.endswith(suffix_cur) and INFLATION_BASE_YEAR != LEGACY_INFLATION_ALIAS_YEAR:
+            legacy = f"{name[: -len(suffix_cur)]}{suffix_leg}"
+            clips.setdefault(legacy, fence)
+    return clips
 
 
 def write_service_dq_bounds(

@@ -11,31 +11,19 @@ import logging
 import pandas as pd
 
 from querulus.dataset.constants import RENAME_DICT
-from querulus.dataset.io import checkpoint, load_sql_artifact
+from querulus.dataset.load.io import checkpoint
+from querulus.dataset.load.payments import fetch_payments
 from querulus.dataset.paths import DataPaths
 
 logger = logging.getLogger("querulus.dataset")
 
 
 def load_claims_payments(paths: DataPaths, conn, df_claims: pd.DataFrame, *, use_sql: bool = False, save_checkpoint: bool = True):
-    df_payments_q = ("""
-        SELECT
-            ITL.IncidentNumber,
-            p.PaymentDateTime,
-            p.PaymentValue
-        FROM [OISUU_report].[dbo].[oisuu81_t_IncidentToLoss] as ITL
-        LEFT JOIN [OISUU_report].[dbo].oisuu81_t_payments AS p on p.LOSSID = ITL.LOSSID
-    """)
-
-    df_payments = load_sql_artifact(
+    df_payments = fetch_payments(
         paths,
         conn,
-        paths.raw_dir,
-        "df_payments.parquet",
-        df_payments_q,
         use_sql=use_sql,
         save_checkpoint=save_checkpoint,
-        columns=["IncidentNumber", "PaymentDateTime", "PaymentValue"],
     )
 
     df_payments = df_payments.loc[:, ~df_payments.columns.duplicated()].copy()

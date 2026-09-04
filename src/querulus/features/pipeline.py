@@ -73,7 +73,7 @@ def run_features(
         gc.collect()
 
         from querulus.features.incident_pretensions import add_incident_pretension_features
-        from querulus.features.person.loaders import load_pretensions_base
+        from querulus.features.load.person import load_pretensions_base
 
         pret_base = load_pretensions_base(
             paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint
@@ -158,6 +158,6 @@ def run_features(
         df,
         paths,
         paths.processed_dir,
-        "df_final_3.parquet",
+        "querulus_train_dataset.parquet",
         save=save_checkpoint,
     )

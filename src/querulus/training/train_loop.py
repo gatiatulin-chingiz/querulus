@@ -36,7 +36,8 @@ from querulus.training.pipeline import (
 )
 from querulus.training.severity_training import fit_severity_model
 from querulus.training.severity_variant import resolve_severity_variant
-from querulus.training.severity_zoo import _segment_indices
+from querulus.fin_effect.threshold_policy import save_collect_val_threshold
+from querulus.training.severity_zoo import segment_indices
 from querulus.training.splits import (
     DateSplitParts,
     default_inner_periods_from_train,
@@ -911,7 +912,7 @@ def run_train_loop_new(
                 f"thr={flags.severity_value_threshold:g}"
             ),
         )
-        train_idx = _segment_indices(
+        train_idx = segment_indices(
             df,
             training.severity_split.x_train.index,
             flags.severity_value_column,
@@ -923,7 +924,7 @@ def run_train_loop_new(
             if training.severity_split.has_val
             else training.severity_split.x_test
         )
-        eval_idx = _segment_indices(
+        eval_idx = segment_indices(
             df,
             sev_eval_frame.index,
             flags.severity_value_column,
@@ -1000,8 +1001,6 @@ def run_train_loop_new(
     print(f"[B] artifacts → {out_dir}")
     # Единый τ frequency для example / prod / метрик (источник — collect, не DSM).
     if training.val_threshold is not None:
-        from querulus.fin_effect.threshold_policy import save_collect_val_threshold
-
         save_collect_val_threshold(
             training.val_threshold,
             artifacts_dir=out_dir,

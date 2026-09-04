@@ -7,7 +7,7 @@ import pandas as pd
 from querulus.features.config import FeatureConfig, FeatureThresholds
 
 
-def _series(df: pd.DataFrame, column: str) -> pd.Series:
+def column_series(df: pd.DataFrame, column: str) -> pd.Series:
     """Колонка или NA-series, если колонки нет."""
     if column in df.columns:
         return df[column]
@@ -177,37 +177,37 @@ def _pick_column(df: pd.DataFrame, *names: str) -> pd.Series:
 
 def _add_timeline_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
     """Блок A: timeline. As-of история — t0_column (PAYMENT_ORDER_DATE_TIME)."""
-    t0 = _series(df, config.t0_column)
+    t0 = column_series(df, config.t0_column)
     th = config.thresholds
 
     # Лаг от даты убытка до поручения на выплату.
     df["FE_DAYS_LOSS_TO_PAYMENT_ORDER"] = _days_between(
-        _series(df, "PAYMENT_ORDER_DATE_TIME"),
-        _series(df, "LOSS_DATE_TIME"),
+        column_series(df, "PAYMENT_ORDER_DATE_TIME"),
+        column_series(df, "LOSS_DATE_TIME"),
     )
     df["FE_DAYS_EVENT_TO_LOSS"] = _days_between(
-        _series(df, "LOSS_DATE_TIME"),
-        _series(df, "EVENT_DATE"),
+        column_series(df, "LOSS_DATE_TIME"),
+        column_series(df, "EVENT_DATE"),
     )
     df["FE_DAYS_TO_PH_CONTRACT_END"] = _days_between(
-        _series(df, "POLICYHOLDER_CONTRACT_END_DATE"),
-        _series(df, "EVENT_DATE"),
+        column_series(df, "POLICYHOLDER_CONTRACT_END_DATE"),
+        column_series(df, "EVENT_DATE"),
     )
     df["FE_DAYS_TO_VICTIM_CONTRACT_END"] = _days_between(
-        _series(df, "VICTIM_CONTRACT_END_DATE"),
-        _series(df, "EVENT_DATE"),
+        column_series(df, "VICTIM_CONTRACT_END_DATE"),
+        column_series(df, "EVENT_DATE"),
     )
 
-    event_day = pd.to_numeric(_series(df, "EVENT_DAY"), errors="coerce")
-    event_date = _to_datetime(_series(df, "EVENT_DATE"))
+    event_day = pd.to_numeric(column_series(df, "EVENT_DAY"), errors="coerce")
+    event_date = _to_datetime(column_series(df, "EVENT_DATE"))
     weekend_by_day = event_day.isin([5, 6])
     weekend_by_date = event_date.dt.dayofweek >= 5
     df["FE_IS_WEEKEND_EVENT"] = (weekend_by_day | weekend_by_date).astype("Int64")
 
-    df["FE_SEASON_EVENT"] = _season(_series(df, "EVENT_MONTH"))
-    df["FE_HOUR_BUCKET_EVENT"] = _hour_bucket(_series(df, "EVENT_HOUR"))
+    df["FE_SEASON_EVENT"] = _season(column_series(df, "EVENT_MONTH"))
+    df["FE_HOUR_BUCKET_EVENT"] = _hour_bucket(column_series(df, "EVENT_HOUR"))
 
-    apply_delay = pd.to_numeric(_series(df, "APPLY_DELAY"), errors="coerce")
+    apply_delay = pd.to_numeric(column_series(df, "APPLY_DELAY"), errors="coerce")
     df["FE_HIGH_APPLY_DELAY"] = (apply_delay > th.apply_delay_high).astype("Int64")
     return df
 
@@ -215,10 +215,10 @@ def _add_timeline_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFr
 def _add_accident_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
     """Блок B: ДТП."""
     th = config.thresholds
-    df["FE_PARTICIPANTS_BIN"] = _participants_bin(_series(df, "PARTICIPANTS_COUNT"))
+    df["FE_PARTICIPANTS_BIN"] = _participants_bin(column_series(df, "PARTICIPANTS_COUNT"))
 
-    not_notify = _as_flag(_series(df, "NOT_NOTIFICATION"))
-    apply_delay = pd.to_numeric(_series(df, "APPLY_DELAY"), errors="coerce")
+    not_notify = _as_flag(column_series(df, "NOT_NOTIFICATION"))
+    apply_delay = pd.to_numeric(column_series(df, "APPLY_DELAY"), errors="coerce")
     df["FE_DELAY_AND_NO_NOTIFY"] = (
         (not_notify == 1) & (apply_delay > th.apply_delay_notify)
     ).astype("Int64")
@@ -230,22 +230,22 @@ def _add_victim_vehicle_features(df: pd.DataFrame, config: FeatureConfig) -> pd.
     th = config.thresholds
     age_bins = config.vehicle_age_bins
 
-    df["FE_VICTIM_AGE_BIN"] = _vehicle_age_bin(_series(df, "VICTIM_VEHICLE_AGE"), age_bins)
+    df["FE_VICTIM_AGE_BIN"] = _vehicle_age_bin(column_series(df, "VICTIM_VEHICLE_AGE"), age_bins)
     df["FE_VICTIM_POWER_PER_TON"] = _safe_div(
-        _series(df, "VICTIM_CAPACITY_ENGINE"),
-        _series(df, "VICTIM_MAX_WEIGHT"),
+        column_series(df, "VICTIM_CAPACITY_ENGINE"),
+        column_series(df, "VICTIM_MAX_WEIGHT"),
     )
-    weight = pd.to_numeric(_series(df, "VICTIM_MAX_WEIGHT"), errors="coerce")
+    weight = pd.to_numeric(column_series(df, "VICTIM_MAX_WEIGHT"), errors="coerce")
     df["FE_VICTIM_HEAVY"] = (weight > th.vehicle_weight_heavy).astype("Int64")
-    df["FE_VICTIM_DOORS_BIN"] = _doors_bin(_series(df, "VICTIM_NUM_DOORS"))
-    df["FE_VICTIM_SEATS_BIN"] = _seats_bin(_series(df, "VICTIM_NUM_PLACE"))
+    df["FE_VICTIM_DOORS_BIN"] = _doors_bin(column_series(df, "VICTIM_NUM_DOORS"))
+    df["FE_VICTIM_SEATS_BIN"] = _seats_bin(column_series(df, "VICTIM_NUM_PLACE"))
 
-    japan = _as_flag(_series(df, "VICTIM_VEHICLE_IS_JAPAN"))
-    made_rf = _as_flag(_series(df, "VICTIM_VEHICLE_MADE_IN_RF"))
+    japan = _as_flag(column_series(df, "VICTIM_VEHICLE_IS_JAPAN"))
+    made_rf = _as_flag(column_series(df, "VICTIM_VEHICLE_MADE_IN_RF"))
     df["FE_VICTIM_JAPAN_RF"] = ((japan == 1) & (made_rf == 1)).astype("Int64")
 
-    df["FE_VICTIM_ENGINE_BUCKET"] = _series(df, "VICTIM_TYPE_ENGINE").astype("string")
-    df["FE_VICTIM_BODY_BUCKET"] = _series(df, "VICTIM_TYPE_BODY").astype("string")
+    df["FE_VICTIM_ENGINE_BUCKET"] = column_series(df, "VICTIM_TYPE_ENGINE").astype("string")
+    df["FE_VICTIM_BODY_BUCKET"] = column_series(df, "VICTIM_TYPE_BODY").astype("string")
     return df
 
 
@@ -254,74 +254,74 @@ def _add_guilty_vehicle_features(df: pd.DataFrame, config: FeatureConfig) -> pd.
     th = config.thresholds
     age_bins = config.vehicle_age_bins
 
-    df["FE_GUILTY_AGE_BIN"] = _vehicle_age_bin(_series(df, "GUILTY_VEHICLE_AGE"), age_bins)
+    df["FE_GUILTY_AGE_BIN"] = _vehicle_age_bin(column_series(df, "GUILTY_VEHICLE_AGE"), age_bins)
     # ×10000: raw л.с./кг слишком мал для модели; шкала ближе к л.с./10 т
     df["FE_GUILTY_POWER_PER_TON"] = _safe_div(
-        _series(df, "GUILTY_CAPACITY_ENGINE"),
-        _series(df, "GUILTY_MAX_WEIGHT"),
+        column_series(df, "GUILTY_CAPACITY_ENGINE"),
+        column_series(df, "GUILTY_MAX_WEIGHT"),
     ) * 10000
-    weight = pd.to_numeric(_series(df, "GUILTY_MAX_WEIGHT"), errors="coerce")
+    weight = pd.to_numeric(column_series(df, "GUILTY_MAX_WEIGHT"), errors="coerce")
     df["FE_GUILTY_HEAVY"] = (weight > th.vehicle_weight_heavy).astype("Int64")
-    df["FE_GUILTY_ENGINE_BUCKET"] = _series(df, "GUILTY_TYPE_ENGINE").astype("string")
+    df["FE_GUILTY_ENGINE_BUCKET"] = column_series(df, "GUILTY_TYPE_ENGINE").astype("string")
     return df
 
 
 def _add_victim_guilty_diff_features(df: pd.DataFrame) -> pd.DataFrame:
     """Блок E: victim vs guilty."""
-    victim_power = pd.to_numeric(_series(df, "VICTIM_CAPACITY_ENGINE"), errors="coerce")
-    guilty_power = pd.to_numeric(_series(df, "GUILTY_CAPACITY_ENGINE"), errors="coerce")
-    victim_weight = pd.to_numeric(_series(df, "VICTIM_MAX_WEIGHT"), errors="coerce")
-    guilty_weight = pd.to_numeric(_series(df, "GUILTY_MAX_WEIGHT"), errors="coerce")
+    victim_power = pd.to_numeric(column_series(df, "VICTIM_CAPACITY_ENGINE"), errors="coerce")
+    guilty_power = pd.to_numeric(column_series(df, "GUILTY_CAPACITY_ENGINE"), errors="coerce")
+    victim_weight = pd.to_numeric(column_series(df, "VICTIM_MAX_WEIGHT"), errors="coerce")
+    guilty_weight = pd.to_numeric(column_series(df, "GUILTY_MAX_WEIGHT"), errors="coerce")
 
     df["FE_DIFF_VEHICLE_POWER"] = victim_power - guilty_power
     df["FE_RATIO_VEHICLE_POWER"] = _safe_div(victim_power, guilty_power)
     df["FE_DIFF_VEHICLE_WEIGHT"] = victim_weight - guilty_weight
 
     df["FE_SAME_VEHICLE_CATEGORY"] = _equals(
-        _series(df, "VICTIM_VEHICLE_CATEGORY"),
-        _series(df, "GUILTY_VEHICLE_CATEGORY"),
+        column_series(df, "VICTIM_VEHICLE_CATEGORY"),
+        column_series(df, "GUILTY_VEHICLE_CATEGORY"),
     )
     df["FE_SAME_VEHICLE_COUNTRY"] = _equals(
         _pick_column(df, "VICTIM_VEHICLE_COUNTRY", "VIC_TS_COUNTRY"),
         _pick_column(df, "GUILTY_VEHICLE_COUNTRY", "GUIL_TS_COUNTRY"),
     )
     df["FE_SAME_VEHICLE_BRAND"] = _equals(
-        _series(df, "VICTIM_VEHICLE_BRAND"),
-        _series(df, "GUILTY_VEHICLE_BRAND"),
+        column_series(df, "VICTIM_VEHICLE_BRAND"),
+        column_series(df, "GUILTY_VEHICLE_BRAND"),
     )
     df["FE_SAME_VEHICLE_BODY"] = _equals(
-        _series(df, "VICTIM_TYPE_BODY"),
-        _series(df, "GUILTY_TYPE_BODY"),
+        column_series(df, "VICTIM_TYPE_BODY"),
+        column_series(df, "GUILTY_TYPE_BODY"),
     )
     df["FE_SAME_VEHICLE_DRIVE"] = _equals(
-        _series(df, "VICTIM_TYPE_PRIVOD"),
-        _series(df, "GUILTY_TYPE_PRIVOD"),
+        column_series(df, "VICTIM_TYPE_PRIVOD"),
+        column_series(df, "GUILTY_TYPE_PRIVOD"),
     )
 
-    japan_v = _as_flag(_series(df, "VICTIM_VEHICLE_IS_JAPAN"))
-    japan_g = _as_flag(_series(df, "GUILTY_VEHICLE_IS_JAPAN"))
+    japan_v = _as_flag(column_series(df, "VICTIM_VEHICLE_IS_JAPAN"))
+    japan_g = _as_flag(column_series(df, "GUILTY_VEHICLE_IS_JAPAN"))
     df["FE_JAPAN_MISMATCH"] = (japan_v != japan_g).astype("Int64")
 
-    ev_v = _as_flag(_series(df, "VIC_IS_EV_REG"))
-    ev_g = _as_flag(_series(df, "GUIL_IS_EV_REG"))
+    ev_v = _as_flag(column_series(df, "VIC_IS_EV_REG"))
+    ev_g = _as_flag(column_series(df, "GUIL_IS_EV_REG"))
     df["FE_EV_MISMATCH"] = (ev_v != ev_g).astype("Int64")
 
     df["FE_SAME_TS_REGION"] = _equals(
-        _series(df, "VICTIM_TS_REGION"),
-        _series(df, "GUILTY_TS_REGION"),
+        column_series(df, "VICTIM_TS_REGION"),
+        column_series(df, "GUILTY_TS_REGION"),
     )
     df["FE_SAME_POLICY_ISSUER_GROUP"] = _equals(
-        _series(df, "VICTIM_POLICY_ISSUER_GROUP"),
-        _series(df, "GUILTY_POLICY_ISSUER_GROUP"),
+        column_series(df, "VICTIM_POLICY_ISSUER_GROUP"),
+        column_series(df, "GUILTY_POLICY_ISSUER_GROUP"),
     )
     return df
 
 
 def _add_geo_features(df: pd.DataFrame) -> pd.DataFrame:
     """Блок F: гео."""
-    region = _series(df, "REGION")
-    region_event = _series(df, "REGION_EVENT")
-    region_corrected = _series(df, "REGION_CORRECTED")
+    region = column_series(df, "REGION")
+    region_event = column_series(df, "REGION_EVENT")
+    region_corrected = column_series(df, "REGION_CORRECTED")
 
     df["FE_SAME_REGION_EVENT"] = _equals(region, region_event)
     corrected_filled = region_corrected.notna() & (region_corrected.astype(str).str.strip() != "")
@@ -329,8 +329,8 @@ def _add_geo_features(df: pd.DataFrame) -> pd.DataFrame:
         corrected_filled & (region_corrected != region)
     ).astype("Int64")
 
-    accepted = _series(df, "ACCEPTED_UNIT")
-    loss_unit = _series(df, "LOSS_UNIT")
+    accepted = column_series(df, "ACCEPTED_UNIT")
+    loss_unit = column_series(df, "LOSS_UNIT")
     both_filled = accepted.notna() & loss_unit.notna()
     df["FE_SAME_ACCEPTED_LOSS_UNIT"] = _equals(accepted, loss_unit).where(both_filled)
     return df
@@ -340,13 +340,13 @@ def _add_policy_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
     """Блок G: полис."""
     th = config.thresholds
 
-    df["FE_KBM_BIN"] = _kbm_bin(_series(df, "RSAPolicyKBM"), th)
+    df["FE_KBM_BIN"] = _kbm_bin(column_series(df, "RSAPolicyKBM"), th)
 
-    taxi = _as_flag(_series(df, "USED_AS_TAXI"))
-    carsharing = _as_flag(_series(df, "USED_AS_CARSH"))
+    taxi = _as_flag(column_series(df, "USED_AS_TAXI"))
+    carsharing = _as_flag(column_series(df, "USED_AS_CARSH"))
     df["FE_COMMERCIAL_USE"] = ((taxi == 1) | (carsharing == 1)).astype("Int64")
 
-    franchise = pd.to_numeric(_series(df, "FRANCHISE_VALUE"), errors="coerce")
+    franchise = pd.to_numeric(column_series(df, "FRANCHISE_VALUE"), errors="coerce")
     df["FE_HAS_FRANCHISE"] = (franchise > 0).astype("Int64")
 
     from querulus.features.inflation import (
@@ -357,16 +357,16 @@ def _add_policy_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
 
     # Премия в руб. base_year; номинал PREMIUM_SUM_ALL → TO_DROP.
     base_year = getattr(config, "inflation_base_year", INFLATION_BASE_YEAR)
-    premium_sum = pd.to_numeric(_series(df, "PREMIUM_SUM_ALL"), errors="coerce")
-    premium_count = pd.to_numeric(_series(df, "PREMIUM_COUNT_ALL"), errors="coerce")
+    premium_sum = pd.to_numeric(column_series(df, "PREMIUM_SUM_ALL"), errors="coerce")
+    premium_count = pd.to_numeric(column_series(df, "PREMIUM_COUNT_ALL"), errors="coerce")
     premium_real = deflate_to_base_year(
-        premium_sum, _series(df, config.t0_column), base_year=base_year
+        premium_sum, column_series(df, config.t0_column), base_year=base_year
     )
     df[real_feature_name("PREMIUM_SUM_ALL", base_year)] = premium_real
     df["FE_PREMIUM_PER_POLICY"] = _safe_div(premium_real, premium_count)
 
     df["FE_INSURANCE_AMOUNT_BIN"] = _amount_bins(
-        _series(df, "INSURANCE_AMOUNT"),
+        column_series(df, "INSURANCE_AMOUNT"),
         th.insurance_amount_bins,
     )
     return df
@@ -374,9 +374,9 @@ def _add_policy_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
 
 def _add_process_features(df: pd.DataFrame) -> pd.DataFrame:
     """Блок H: refund / minimization."""
-    refund_detailed = _series(df, "REFUND_FORM_DETAILED").astype("string")
-    refund_order = _series(df, "REFUND_FORM_BY_PAYMENT_ORDER").astype("string")
-    refund = _series(df, "REFUND_FORM").astype("string")
+    refund_detailed = column_series(df, "REFUND_FORM_DETAILED").astype("string")
+    refund_order = column_series(df, "REFUND_FORM_BY_PAYMENT_ORDER").astype("string")
+    refund = column_series(df, "REFUND_FORM").astype("string")
 
     both_refund = refund_detailed.notna() & refund_order.notna()
     df["FE_REFUND_FORM_MATCH"] = (refund_detailed == refund_order).where(both_refund).astype("Int64")
@@ -391,11 +391,11 @@ def _add_process_features(df: pd.DataFrame) -> pd.DataFrame:
         "Ремонт", case=False, na=False
     ).astype("Int64")
 
-    rec = pd.to_numeric(_series(df, "MINIMIZATION_REC"), errors="coerce")
-    fact = pd.to_numeric(_series(df, "MINIMIZATION_FACT"), errors="coerce")
+    rec = pd.to_numeric(column_series(df, "MINIMIZATION_REC"), errors="coerce")
+    fact = pd.to_numeric(column_series(df, "MINIMIZATION_FACT"), errors="coerce")
     df["FE_MINIMIZATION_GAP"] = rec - fact
 
-    minim_kind = _series(df, "MINIMIZATION_KIND")
+    minim_kind = column_series(df, "MINIMIZATION_KIND")
     df["FE_HAS_MINIMIZATION"] = minim_kind.notna().astype("Int64")
     return df
 
@@ -413,19 +413,19 @@ def _add_repair_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
     t0 = config.t0_column
 
     df["FE_SHARE_WORK_TIER"] = _tier_from_bins(
-        _series(df, "SHARE_WORK"),
+        column_series(df, "SHARE_WORK"),
         th.share_work_bins,
         ("low", "mid", "high"),
     )
 
-    value_without = pd.to_numeric(_series(df, "VALUE_BEFORE_WITHOUT"), errors="coerce")
-    value_with = pd.to_numeric(_series(df, "VALUE_BEFORE_WITH"), errors="coerce")
+    value_without = pd.to_numeric(column_series(df, "VALUE_BEFORE_WITHOUT"), errors="coerce")
+    value_with = pd.to_numeric(column_series(df, "VALUE_BEFORE_WITH"), errors="coerce")
     # Реальные рубли базисного года — против инфляционного PSI на номинале.
     value_without_real = deflate_to_base_year(
-        value_without, _series(df, t0), base_year=base_year
+        value_without, column_series(df, t0), base_year=base_year
     )
     value_with_real = deflate_to_base_year(
-        value_with, _series(df, t0), base_year=base_year
+        value_with, column_series(df, t0), base_year=base_year
     )
     df[real_feature_name("VALUE_BEFORE_WITHOUT", base_year)] = value_without_real
     df[real_feature_name("VALUE_BEFORE_WITH", base_year)] = value_with_real
@@ -488,15 +488,15 @@ def _add_loss_history_features(df: pd.DataFrame, config: FeatureConfig) -> pd.Da
     """Блок J: история убытков (past only)."""
     th = config.thresholds
 
-    victim_count = _series(df, "VICTIM_LOSS_COUNT")
-    guilty_count = _series(df, "GUILTY_LOSS_COUNT")
+    victim_count = column_series(df, "VICTIM_LOSS_COUNT")
+    guilty_count = column_series(df, "GUILTY_LOSS_COUNT")
 
     df["FE_VICTIM_LOSS_COUNT_BIN"] = _count_bin(victim_count)
     df["FE_VICTIM_REPEAT"] = (
         pd.to_numeric(victim_count, errors="coerce").fillna(0) > 0
     ).astype("Int64")
     df["FE_VICTIM_LOSS_SUM_BIN"] = _amount_bins(
-        _series(df, "VICTIM_LOSS_SUM"),
+        column_series(df, "VICTIM_LOSS_SUM"),
         th.victim_loss_sum_bins,
     )
 

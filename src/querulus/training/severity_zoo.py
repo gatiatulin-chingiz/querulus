@@ -126,7 +126,7 @@ def _quantile_table_for_preds(
     return table
 
 
-def _segment_indices(
+def segment_indices(
     df: pd.DataFrame,
     index: pd.Index,
     value_column: str,
@@ -164,7 +164,7 @@ def run_severity_zoo_compare(
     from querulus.fin_effect.threshold_policy import resolve_val_threshold
 
     use_threshold = resolve_val_threshold(training, explicit=threshold)
-    from querulus.fin_effect.calculator import _feature_rows_for_predict
+    from querulus.fin_effect.calculator import feature_rows_for_predict
 
     sev_target = fin_config.severity_target_column
     cat = training.severity_categorical_features
@@ -199,13 +199,13 @@ def run_severity_zoo_compare(
     penalty_parts: list[pd.DataFrame] = []
 
     for name, transform, weight_mode, side, preset in specs:
-        train_idx = _segment_indices(
+        train_idx = segment_indices(
             df, sev_train_idx, value_column, value_threshold, side
         )
-        eval_idx = _segment_indices(
+        eval_idx = segment_indices(
             df, sev_test_idx, value_column, value_threshold, side
         )
-        effect_eval_idx = _segment_indices(
+        effect_eval_idx = segment_indices(
             df, effect_index, value_column, value_threshold, side
         )
 
@@ -226,7 +226,7 @@ def run_severity_zoo_compare(
         if len(eval_idx) == 0:
             continue
 
-        pred_frame = _feature_rows_for_predict(training, eval_idx, df.loc[eval_idx])
+        pred_frame = feature_rows_for_predict(training, eval_idx, df.loc[eval_idx])
         y_pred = severity_predict(model, pred_frame[features], cat, transform=transform)
         y_true = pd.to_numeric(df.loc[eval_idx, sev_target], errors="coerce").fillna(0.0)
         y_true_arr = y_true.to_numpy(dtype=float)
@@ -236,7 +236,7 @@ def run_severity_zoo_compare(
         if len(effect_eval_idx) == 0:
             fe_result = None
         else:
-            fe_frame = _feature_rows_for_predict(
+            fe_frame = feature_rows_for_predict(
                 training, effect_eval_idx, df.loc[effect_eval_idx]
             )
             fe_sev = severity_predict(
