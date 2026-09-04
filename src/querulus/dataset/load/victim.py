@@ -1,7 +1,8 @@
 """Fetch victim parquet и loss object types."""
 from __future__ import annotations
 
-from querulus.dataset.load.io import load_sql_artifact, read_parquet_path
+from querulus.dataset.load.io import read_parquet_path
+from querulus.dataset.load.sql import load_named_sql_artifact, loss_object_types_params
 from querulus.dataset.paths import DataPaths
 
 
