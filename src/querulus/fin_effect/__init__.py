@@ -1,4 +1,7 @@
-"""Расчёт и визуализация финансового эффекта querulus."""
+"""Расчёт и визуализация финансового эффекта querulus.
+
+Тяжёлые подмодули (plots, segment_eval) — ленивые, без циклов с training.
+"""
 from __future__ import annotations
 
 import importlib
@@ -68,14 +71,6 @@ from querulus.fin_effect.resolve import (
 )
 from querulus.fin_effect.business_report import export_business_html
 from querulus.fin_effect.export import export_analytics_excel
-from querulus.fin_effect.segment_eval import (
-    SegmentFinEffectCompare,
-    SeverityVariantsCompare,
-    compare_severity_fin_effect_variants,
-    compare_value_before_segment_strategies,
-    fin_effect_penalty_table,
-    run_fin_effect_with_severity_predictions,
-)
 from querulus.fin_effect.summary import (
     color_excel_table,
     compare_formula_summaries,
@@ -83,22 +78,51 @@ from querulus.fin_effect.summary import (
     export_summary_excel,
 )
 
-_PLOT_EXPORTS = {
-    "export_plot_html",
-    "plot_confusion_matrix",
-    "plot_cost_confusion_heatmaps",
-    "plot_positive_cases_by_month",
-    "plot_precision_recall_vs_threshold",
-    "plot_severity_fact_vs_pred_binned",
-    "plot_target_monthly_share",
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "export_plot_html": (".plots", "export_plot_html"),
+    "plot_confusion_matrix": (".plots", "plot_confusion_matrix"),
+    "plot_cost_confusion_heatmaps": (".plots", "plot_cost_confusion_heatmaps"),
+    "plot_positive_cases_by_month": (".plots", "plot_positive_cases_by_month"),
+    "plot_precision_recall_vs_threshold": (
+        ".plots",
+        "plot_precision_recall_vs_threshold",
+    ),
+    "plot_severity_fact_vs_pred_binned": (
+        ".plots",
+        "plot_severity_fact_vs_pred_binned",
+    ),
+    "plot_target_monthly_share": (".plots", "plot_target_monthly_share"),
+    "SegmentFinEffectCompare": (".segment_eval", "SegmentFinEffectCompare"),
+    "SeverityVariantsCompare": (".segment_eval", "SeverityVariantsCompare"),
+    "compare_severity_fin_effect_variants": (
+        ".segment_eval",
+        "compare_severity_fin_effect_variants",
+    ),
+    "compare_value_before_segment_strategies": (
+        ".segment_eval",
+        "compare_value_before_segment_strategies",
+    ),
+    "fin_effect_penalty_table": (".segment_eval", "fin_effect_penalty_table"),
+    "run_fin_effect_with_severity_predictions": (
+        ".segment_eval",
+        "run_fin_effect_with_severity_predictions",
+    ),
 }
 
 
 def __getattr__(name: str) -> Any:
-    if name in _PLOT_EXPORTS:
-        plots = importlib.import_module("querulus.fin_effect.plots")
-        return getattr(plots, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    try:
+        module_name, attr = _LAZY_EXPORTS[name]
+    except KeyError as exc:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from exc
+    module = importlib.import_module(module_name, __name__)
+    value = getattr(module, attr)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))
 
 
 __all__ = [
