@@ -22,6 +22,9 @@ logger = logging.getLogger("querulus.dataset")
 
 _T0_DEFAULT = "PAYMENT_ORDER_DATE_TIME"
 _CLAIMS_ARTIFACT = "target_3_claims.parquet"
+_PRETENSIONS_ARTIFACT = "df_pretensions.parquet"
+_PAYMENTS_ARTIFACT = "df_payments.parquet"
+_LAG_PERCENTILES: tuple[int, ...] = (50, 60, 70, 80, 90, 95, 99)
 
 
 def _processed_dir(project_root: Path | None = None) -> Path:
@@ -144,6 +147,239 @@ def load_claims_frame(project_root: Path | None = None) -> pd.DataFrame | None:
     if not path.is_file():
         return None
     return pd.read_parquet(path)
+
+
+def load_pretensions_frame(project_root: Path | None = None) -> pd.DataFrame | None:
+    path = _raw_dir(project_root) / _PRETENSIONS_ARTIFACT
+    if not path.is_file():
+        return None
+    return pd.read_parquet(path)
+
+
+def load_payments_frame(project_root: Path | None = None) -> pd.DataFrame | None:
+    path = _raw_dir(project_root) / _PAYMENTS_ARTIFACT
+    if not path.is_file():
+        return None
+    return pd.read_parquet(path)
+
+
+def _normalize_incident_col(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out.columns = [str(c).upper() for c in out.columns]
+    if "INCIDENTNUMBER" in out.columns and "INCIDENT_NUMBER" not in out.columns:
+        out["INCIDENT_NUMBER"] = out["INCIDENTNUMBER"]
+    return out
+
+
+def _incident_key(series: pd.Series) -> pd.Series:
+    num = pd.to_numeric(series, errors="coerce")
+    out = series.astype(str).str.strip()
+    int_like = num.notna() & ((num % 1) == 0)
+    out = out.copy()
+    out.loc[int_like] = num.loc[int_like].astype("int64").astype(str)
+    return out
+
+
+def first_payment_by_incident(payments: pd.DataFrame) -> pd.Series:
+    """Минимум даты выплаты по инциденту."""
+    work = _normalize_incident_col(payments)
+    date_col = next(
+        (
+            c
+            for c in (
+                "PAYMENT_DATETIME",
+                "PAYMENTDATETIME",
+                "PAYMENT_DATE_TIME",
+                "PAYMENTDATETIME",
+            )
+            if c in work.columns
+        ),
+        None,
+    )
+    if date_col is None:
+        for c in work.columns:
+            if "PAYMENT" in c and "DATE" in c:
+                date_col = c
+                break
+    if "INCIDENT_NUMBER" not in work.columns or date_col is None:
+        raise KeyError("В payments нужны INCIDENT_NUMBER и дата выплаты")
+    work["_pay"] = pd.to_datetime(work[date_col], errors="coerce")
+    work["_inc"] = _incident_key(work["INCIDENT_NUMBER"])
+    return work.groupby("_inc", sort=False)["_pay"].min().rename("first_payment_datetime")
+
+
+def pretension_lag_frame(
+    df: pd.DataFrame,
+    pretensions: pd.DataFrame,
+    *,
+    payments: pd.DataFrame | None = None,
+    t0_column: str = _T0_DEFAULT,
+) -> pd.DataFrame:
+    """Лаг (дни): дата претензии − база; база = первая выплата, иначе T0.
+
+    Одна строка на претензию инцидента из ``df``.
+    """
+    if "INCIDENT_NUMBER" not in df.columns:
+        raise KeyError("В df нет INCIDENT_NUMBER")
+    if t0_column not in df.columns:
+        raise KeyError(f"В df нет T0: {t0_column}")
+
+    base = df[["INCIDENT_NUMBER", t0_column]].copy()
+    base["_inc"] = _incident_key(base["INCIDENT_NUMBER"])
+    base["_t0"] = pd.to_datetime(base[t0_column], errors="coerce")
+    base = base.drop_duplicates("_inc", keep="first")
+
+    if payments is not None and len(payments):
+        try:
+            first_pay = first_payment_by_incident(payments)
+            base = base.merge(first_pay, how="left", left_on="_inc", right_index=True)
+        except KeyError as exc:
+            logger.warning("payments без нужных колонок: %s", exc)
+            base["first_payment_datetime"] = pd.NaT
+    else:
+        base["first_payment_datetime"] = pd.NaT
+
+    base["_base"] = base["first_payment_datetime"].fillna(base["_t0"])
+    base["base_source"] = np.where(
+        base["first_payment_datetime"].notna(), "payment", "t0"
+    )
+
+    pret = _normalize_incident_col(pretensions)
+    get_col = next(
+        (
+            c
+            for c in (
+                "PRETENSION_GET_DATE",
+                "PRETENSIONGETDATE",
+                "PRETENSION_DATE",
+                "PRETENSIONDATE",
+            )
+            if c in pret.columns
+        ),
+        None,
+    )
+    if "INCIDENT_NUMBER" not in pret.columns or get_col is None:
+        raise KeyError("В pretensions нужны INCIDENT_NUMBER и PRETENSION_GET_DATE")
+    pret["_inc"] = _incident_key(pret["INCIDENT_NUMBER"])
+    pret["_pret_date"] = pd.to_datetime(pret[get_col], errors="coerce")
+    pret = pret.loc[pret["_pret_date"].notna(), ["_inc", "_pret_date"]].copy()
+
+    keep = set(base["_inc"])
+    pret = pret.loc[pret["_inc"].isin(keep)]
+    merged = pret.merge(
+        base[["_inc", "_base", "_t0", "first_payment_datetime", "base_source"]],
+        on="_inc",
+        how="inner",
+    )
+    merged["lag_days"] = (merged["_pret_date"] - merged["_base"]).dt.days
+    # первая претензия на инцидент
+    first = (
+        merged.sort_values(["_inc", "_pret_date"])
+        .drop_duplicates("_inc", keep="first")
+        .copy()
+    )
+    first["which"] = "first_pretension"
+    merged = merged.copy()
+    merged["which"] = "all_pretensions"
+    return pd.concat([first, merged], ignore_index=True)
+
+
+def lag_percentile_table(lag_days: pd.Series) -> pd.Series:
+    clean = pd.to_numeric(lag_days, errors="coerce").dropna()
+    clean = clean[clean >= 0]
+    out: dict[str, float | int] = {"n": int(len(clean))}
+    if clean.empty:
+        for p in _LAG_PERCENTILES:
+            out[f"p{p}"] = float("nan")
+        out["mean"] = float("nan")
+        return pd.Series(out, name="lag_days")
+    for p in _LAG_PERCENTILES:
+        out[f"p{p}"] = float(clean.quantile(p / 100.0))
+    out["mean"] = float(clean.mean())
+    out["share_within_90d"] = float((clean <= 90).mean())
+    out["share_within_180d"] = float((clean <= 180).mean())
+    out["share_within_365d"] = float((clean <= 365).mean())
+    return pd.Series(out, name="lag_days")
+
+
+def _plot_pretension_lags(lags: pd.DataFrame) -> None:
+    first = lags.loc[lags["which"] == "first_pretension", "lag_days"]
+    first = pd.to_numeric(first, errors="coerce").dropna()
+    first_pos = first[first >= 0]
+    fig, axes = plt.subplots(1, 2, figsize=(12, 3.8))
+    ax0, ax1 = axes
+    if first_pos.empty:
+        ax0.set_title("Нет неотрицательных лагов (первая претензия)")
+    else:
+        clip = first_pos.clip(upper=max(730, float(first_pos.quantile(0.99))))
+        ax0.hist(clip, bins=40, color="#4C78A8", alpha=0.85, edgecolor="white")
+        ax0.set_title("Лаг до первой претензии (дни, clip≈p99)")
+        ax0.set_xlabel("дни после выплаты / T0")
+        ax0.set_ylabel("претензии (инциденты)")
+    if first_pos.empty:
+        ax1.set_title("CDF недоступен")
+    else:
+        xs = np.sort(first_pos.to_numpy())
+        ys = np.arange(1, len(xs) + 1) / len(xs)
+        ax1.plot(xs, ys * 100, color="#F58518")
+        ax1.set_xlim(0, min(730, float(xs.max()) if len(xs) else 730))
+        ax1.set_xlabel("дни")
+        ax1.set_ylabel("доля, %")
+        ax1.set_title("CDF: первая претензия после выплаты/T0")
+        ax1.axvline(90, color="#E45756", ls="--", lw=1, label="90д")
+        ax1.axvline(180, color="#54A24B", ls="--", lw=1, label="180д")
+        ax1.axvline(365, color="#B279A2", ls="--", lw=1, label="365д")
+        ax1.legend(loc="lower right", fontsize=8)
+    fig.tight_layout()
+    plt.show()
+
+
+def display_pretension_lag_eda(
+    df: pd.DataFrame,
+    *,
+    project_root: Path | None = None,
+    t0_column: str = _T0_DEFAULT,
+) -> pd.DataFrame | None:
+    """Аналитика лага претензий относительно выплаты (fallback T0)."""
+    root = Path(project_root) if project_root is not None else PROJECT_ROOT
+    pret = load_pretensions_frame(root)
+    if pret is None:
+        print(
+            f"Нет {_PRETENSIONS_ARTIFACT} — пропуск лага претензий "
+            "(нужен raw parquet; при pipeline с enrich/USE_SQL он появляется)."
+        )
+        return None
+    payments = load_payments_frame(root)
+    try:
+        lags = pretension_lag_frame(
+            df, pret, payments=payments, t0_column=t0_column
+        )
+    except KeyError as exc:
+        print(f"Лаг претензий недоступен: {exc}")
+        return None
+
+    display(Markdown("### Лаг претензий после выплаты (если нет выплаты → T0)"))
+    n_pay = int((lags["base_source"] == "payment").sum())
+    n_t0 = int((lags["base_source"] == "t0").sum())
+    print(
+        f"База даты: payment={n_pay:,} строк претензий, t0-fallback={n_t0:,}"
+        + ("" if payments is not None else f" (нет {_PAYMENTS_ARTIFACT} — всё через T0)")
+    )
+    neg = int((pd.to_numeric(lags["lag_days"], errors="coerce") < 0).sum())
+    if neg:
+        print(f"Отрицательный лаг (претензия раньше базы): {neg:,} — в перцентили не входят")
+
+    for label, which in (
+        ("Первая претензия на инцидент", "first_pretension"),
+        ("Все претензии", "all_pretensions"),
+    ):
+        part = lags.loc[lags["which"] == which, "lag_days"]
+        display(Markdown(f"#### {label}"))
+        stats = lag_percentile_table(part)
+        display(stats.to_frame())
+
+    _plot_pretension_lags(lags)
+    return lags
 
 
 def claims_per_incident_table(
@@ -281,7 +517,8 @@ def run_maturity_eda(
     - инциденты и долю TARGET_FREQ=1 по месяцам T0;
     - годовые когорты;
     - месяцы-дыры (0 инцидентов);
-    - распределение числа исков на инцидент (если есть claims parquet).
+    - распределение числа исков на инцидент (если есть claims parquet);
+    - лаг претензий после выплаты (fallback T0).
     """
     root = Path(project_root) if project_root is not None else PROJECT_ROOT
     policy = maturity_policy_summary(root)
@@ -387,6 +624,8 @@ def run_maturity_eda(
             fig.tight_layout()
             plt.show()
 
+    pretension_lags = display_pretension_lag_eda(df, project_root=root, t0_column=t0)
+
     return {
         "policy": policy,
         "report": report,
@@ -394,4 +633,5 @@ def run_maturity_eda(
         "yearly": yearly,
         "gap_months": gaps,
         "claims_per_incident": claims_counts,
+        "pretension_lags": pretension_lags,
     }
