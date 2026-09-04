@@ -56,10 +56,9 @@ mlruns/
 results/
 **/prod_models/
 
-# Локальные дампы / черновики
-errors.txt
+# Локальные дампы / черновики / текстовые заметки
+*.txt
 _cells_dump/
-chat-*.txt
 
 # Архивы и временные файлы
 *.zip
@@ -69,7 +68,6 @@ chat-*.txt
 
 # FE-документация (локально, не в git)
 features_engineering/discriptions/
-features_engineering/features_list.txt
 
 # SQL-справочник колонок (локально, не в git)
 src/querulus/dataset/sql/
