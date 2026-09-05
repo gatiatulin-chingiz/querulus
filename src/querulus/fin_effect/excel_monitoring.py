@@ -164,11 +164,12 @@ def resolve_paid_column(
         if resolved is not None:
             return resolved
         raise KeyError(f"PAID_COL не найден: {paid_col}")
-    for key in ("recommended", "payment", "od_to_pay", "to_pay", "od_paid"):
+    # Explore на боевой выгрузке: СуммаПлатежа ≈ СуммаКВыплате; recommended на I не бьётся.
+    for key in ("payment", "to_pay", "od_to_pay", "od_paid", "recommended"):
         col = resolve_column(df, key)
         if col is not None:
             return col
-    raise KeyError("Не найдена колонка paid (рекомендованная / платёж / ОД)")
+    raise KeyError("Не найдена колонка paid (платёж / к выплате / ОД / рекомендованная)")
 
 
 def estimate_monitoring_effect(
