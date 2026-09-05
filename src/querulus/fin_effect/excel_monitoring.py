@@ -87,6 +87,7 @@ def save_retro_priors(priors: RetroPriors, path: str | Path) -> Path:
 def compute_retro_priors(
     df: pd.DataFrame,
     *,
+    precision: float | None = None,
     threshold: float = 0.5,
     proba_col: str = "preds_cf",
     freq_col: str = "TARGET_FREQ",
@@ -98,17 +99,25 @@ def compute_retro_priors(
     fu_fee: float = FU_FEE_DEFAULT,
     court_fee: float = COURT_FEE_DEFAULT,
 ) -> RetroPriors:
-    """Посчитать priors на зрелом ретро-кадре с таргетами и proba."""
+    """Посчитать priors на зрелом ретро-кадре с таргетами.
+
+    ``precision``: если задан (0..1) — берётся как есть; иначе из preds_cf vs
+    TARGET_FREQ (нет preds → 0.5). ``k`` и доли путей всегда с датасета.
+    """
     work = df.copy()
     y = _to_numeric(work[freq_col]).fillna(0).astype(int)
-    if proba_col in work.columns:
+    if precision is not None:
+        precision_val = float(precision)
+        if not 0.0 <= precision_val <= 1.0:
+            raise ValueError(f"precision должен быть в [0, 1], получено {precision_val}")
+    elif proba_col in work.columns:
         proba = _to_numeric(work[proba_col])
         pred = (proba >= threshold).astype(int)
         tp = int(((pred == 1) & (y == 1)).sum())
         fp = int(((pred == 1) & (y == 0)).sum())
-        precision = float(tp / (tp + fp)) if (tp + fp) else 0.0
+        precision_val = float(tp / (tp + fp)) if (tp + fp) else 0.0
     else:
-        precision = 0.5
+        precision_val = 0.5
 
     pos = y == 1
     amount = _to_numeric(work[amount_col]).fillna(0.0) if amount_col in work.columns else pd.Series(0.0, index=work.index)
@@ -142,7 +151,7 @@ def compute_retro_priors(
             p_pret, p_fu, p_court = p_pret / total, p_fu / total, p_court / total
 
     return RetroPriors(
-        precision=precision,
+        precision=precision_val,
         k=k,
         p_pret=p_pret,
         p_fu=p_fu,
