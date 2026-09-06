@@ -36,12 +36,19 @@ class RetroPriors:
     p_court: float
     fu_fee: float = FU_FEE_DEFAULT
     court_fee: float = COURT_FEE_DEFAULT
+    lookback_years: float | None = None
+    date_column: str | None = None
+    window_start: str | None = None
+    window_end: str | None = None
+    n_rows: int = 0
+    n_pos: int = 0
+    psr_share: float = 0.0
 
     def expected_fee(self) -> float:
         """Средний пакет взносов: ФУ 100k или суд 15k (без двойного 100k)."""
         return self.p_fu * self.fu_fee + self.p_court * self.court_fee
 
-    def to_dict(self) -> dict[str, float]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -78,6 +85,17 @@ def load_retro_priors(path: str | Path) -> RetroPriors:
         p_court=float(data["p_court"]),
         fu_fee=float(data.get("fu_fee", FU_FEE_DEFAULT)),
         court_fee=float(data.get("court_fee", COURT_FEE_DEFAULT)),
+        lookback_years=(
+            float(data["lookback_years"])
+            if data.get("lookback_years") is not None
+            else None
+        ),
+        date_column=data.get("date_column"),
+        window_start=data.get("window_start"),
+        window_end=data.get("window_end"),
+        n_rows=int(data.get("n_rows", 0)),
+        n_pos=int(data.get("n_pos", 0)),
+        psr_share=float(data.get("psr_share", 0.0)),
     )
 
 
@@ -89,6 +107,76 @@ def save_retro_priors(priors: RetroPriors, path: str | Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+RETRO_DATE_CANDIDATES = (
+    "PAYMENT_ORDER_DATE_TIME",
+    "INCOMING_CLAIM_GET_DATE",
+    "INCOMING_CLAIM_GET_DATE_1",
+    "LOSS_DATE",
+    "ДатаСобытия",
+    "ДатаЗаявления",
+)
+
+
+def resolve_retro_date_column(
+    df: pd.DataFrame,
+    date_col: str | None = None,
+) -> str | None:
+    """Колонка даты для окна ретро (T0 выплаты / заявление)."""
+    if date_col and date_col in df.columns:
+        return date_col
+    for name in RETRO_DATE_CANDIDATES:
+        if name in df.columns:
+            return name
+    return None
+
+
+def filter_retro_lookback(
+    df: pd.DataFrame,
+    *,
+    lookback_years: float = 2.0,
+    date_col: str | None = None,
+    as_of: pd.Timestamp | str | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Оставить строки за последние ``lookback_years`` лет по дате T0.
+
+    Конец окна — ``as_of`` или max(дата) в кадре.
+    Если даты нет — возвращает весь кадр и ``applied=False``.
+    """
+    resolved = resolve_retro_date_column(df, date_col)
+    meta: dict[str, Any] = {
+        "lookback_years": float(lookback_years),
+        "date_column": resolved,
+        "window_start": None,
+        "window_end": None,
+        "applied": False,
+        "n_before": int(len(df)),
+        "n_after": int(len(df)),
+    }
+    if resolved is None or lookback_years <= 0:
+        return df, meta
+
+    dates = pd.to_datetime(df[resolved], errors="coerce")
+    if as_of is None:
+        end = dates.max()
+    else:
+        end = pd.Timestamp(as_of)
+    if pd.isna(end):
+        return df, meta
+
+    start = end - pd.DateOffset(years=lookback_years)
+    mask = dates.notna() & (dates >= start) & (dates <= end)
+    out = df.loc[mask].copy()
+    meta.update(
+        {
+            "window_start": start.strftime("%Y-%m-%d"),
+            "window_end": pd.Timestamp(end).strftime("%Y-%m-%d"),
+            "applied": True,
+            "n_after": int(len(out)),
+        }
+    )
+    return out, meta
 
 
 def compute_retro_priors(
@@ -105,13 +193,23 @@ def compute_retro_priors(
     court_col: str = "Суммы_взыскано_по_иску",
     fu_fee: float = FU_FEE_DEFAULT,
     court_fee: float = COURT_FEE_DEFAULT,
+    lookback_years: float = 2.0,
+    date_col: str | None = None,
+    as_of: pd.Timestamp | str | None = None,
 ) -> RetroPriors:
     """Посчитать priors на зрелом ретро-кадре с таргетами.
 
-    ``precision``: если задан (0..1) — берётся как есть; иначе из preds_cf vs
-    TARGET_FREQ (нет preds → 0.5). ``k`` и доли путей всегда с датасета.
+    По умолчанию ``k``, ``psr_share`` и доли путей (p_pret/p_fu/p_court)
+    считаются на **последних 2 годах** по ``PAYMENT_ORDER_DATE_TIME`` (или
+    другой найденной дате). ``precision``: если задан (0..1) — как есть;
+    иначе из preds_cf vs TARGET_FREQ (нет preds → 0.5).
     """
-    work = df.copy()
+    work, window = filter_retro_lookback(
+        df,
+        lookback_years=lookback_years,
+        date_col=date_col,
+        as_of=as_of,
+    )
     y = _to_numeric(work[freq_col]).fillna(0).astype(int)
     if precision is not None:
         precision_val = float(precision)
@@ -127,6 +225,10 @@ def compute_retro_priors(
         precision_val = 0.5
 
     pos = y == 1
+    n_rows = int(len(work))
+    n_pos = int(pos.sum())
+    psr_share = float(n_pos / n_rows) if n_rows else 0.0
+
     amount = _to_numeric(work[amount_col]).fillna(0.0) if amount_col in work.columns else pd.Series(0.0, index=work.index)
     od = _to_numeric(work[od_col]).fillna(0.0) if od_col in work.columns else pd.Series(0.0, index=work.index)
     od_pos = pos & (od > 0)
@@ -140,7 +242,6 @@ def compute_retro_priors(
         else pd.Series(0.0, index=work.index)
     )
 
-    n_pos = int(pos.sum())
     if n_pos == 0:
         p_pret, p_fu, p_court = 1.0, 0.0, 0.0
     else:
@@ -165,6 +266,13 @@ def compute_retro_priors(
         p_court=p_court,
         fu_fee=fu_fee,
         court_fee=court_fee,
+        lookback_years=float(lookback_years) if lookback_years else None,
+        date_column=window.get("date_column"),
+        window_start=window.get("window_start"),
+        window_end=window.get("window_end"),
+        n_rows=n_rows,
+        n_pos=n_pos,
+        psr_share=psr_share,
     )
 
 
@@ -591,6 +699,13 @@ def default_demo_priors() -> RetroPriors:
         p_court=0.25,
         fu_fee=FU_FEE_DEFAULT,
         court_fee=COURT_FEE_DEFAULT,
+        lookback_years=2.0,
+        date_column="PAYMENT_ORDER_DATE_TIME",
+        window_start=None,
+        window_end=None,
+        n_rows=0,
+        n_pos=0,
+        psr_share=0.0,
     )
 
 
@@ -783,6 +898,7 @@ __all__ = [
     "COURT_FEE_DEFAULT",
     "FU_FEE_DEFAULT",
     "MonitoringEffectResult",
+    "RETRO_DATE_CANDIDATES",
     "RetroPriors",
     "agreement_mask",
     "build_synthetic_claims_excel",
@@ -791,6 +907,7 @@ __all__ = [
     "default_demo_priors",
     "estimate_monitoring_effect",
     "extrapolate_to_year",
+    "filter_retro_lookback",
     "format_money",
     "format_sensitivity_table",
     "format_summary_dict",
@@ -802,6 +919,7 @@ __all__ = [
     "model_used_mask",
     "pretension_mask",
     "resolve_paid_column",
+    "resolve_retro_date_column",
     "save_retro_priors",
     "sensitivity_table",
     "write_synthetic_claims_excel",
