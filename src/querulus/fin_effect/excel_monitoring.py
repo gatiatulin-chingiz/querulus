@@ -1,7 +1,7 @@
 """Оценка финэффекта по Excel-выгрузке (фаза 2 мониторинга).
 
-Без факта ПСР: expected_psr = precision × Σ_I (paid×k + e_fee),
-e_fee = p_fu×fu_fee + p_court×(fu_fee+court_fee).
+Без факта ПСР: expected_psr = precision × Σ_I (ОД×k + e_fee),
+cost = Σ_I СуммаПлатежа, e_fee = p_fu×fu_fee + p_court×court_fee.
 """
 from __future__ import annotations
 
@@ -38,8 +38,8 @@ class RetroPriors:
     court_fee: float = COURT_FEE_DEFAULT
 
     def expected_fee(self) -> float:
-        """Средний пакет взносов на одну «успешную» интервенцию (путь суд несёт оба)."""
-        return self.p_fu * self.fu_fee + self.p_court * (self.fu_fee + self.court_fee)
+        """Средний пакет взносов: ФУ 100k или суд 15k (без двойного 100k)."""
+        return self.p_fu * self.fu_fee + self.p_court * self.court_fee
 
     def to_dict(self) -> dict[str, float]:
         return asdict(self)
@@ -51,13 +51,20 @@ class MonitoringEffectResult:
 
     frame: pd.DataFrame
     n_intervention: int
+    sum_od: float
     sum_paid: float
     expected_psr: float
     cost: float
     net: float
     e_fee: float
     priors: RetroPriors
-    paid_column: str
+    od_column: str
+    cost_column: str
+
+    @property
+    def paid_column(self) -> str:
+        """Обратная совместимость: колонка ОД для ×k."""
+        return self.od_column
 
 
 def load_retro_priors(path: str | Path) -> RetroPriors:
@@ -208,6 +215,21 @@ def model_used_mask(df: pd.DataFrame) -> pd.Series:
     raise KeyError("Нет колонки вызова модели / РезультатПроверки / выплаты по модели")
 
 
+def model_positive_mask(df: pd.DataFrame) -> pd.Series:
+    """Модель сказала платить и выплата по модели: без фильтра соглашения.
+
+    РезультатПроверки=1 ∧ Выплата по модели=1.
+    Нужен для долей соглашений (иначе agreement_share всегда 100%).
+    """
+    parts: list[pd.Series] = []
+    for key in ("result_check", "model_payout"):
+        col = resolve_column(df, key)
+        if col is None:
+            return pd.Series(False, index=df.index)
+        parts.append(_to_numeric(df[col]).fillna(0).eq(1))
+    return parts[0] & parts[1]
+
+
 def agreement_mask(df: pd.DataFrame) -> pd.Series:
     """Соглашение: флаг или ФормаВозмещения содержит «соглашен»."""
     flag = resolve_column(df, "agreement")
@@ -236,13 +258,18 @@ def pretension_mask(df: pd.DataFrame) -> pd.Series:
 
 
 def compare_agreement_pretension_by_model(df: pd.DataFrame) -> pd.DataFrame:
-    """Доли соглашений и претензий: модель использовали vs нет + lift."""
-    used = model_used_mask(df)
+    """Доли соглашений и претензий: с моделью vs без.
+
+    Сегмент ``with_model`` = РезультатПроверки=1 ∧ Выплата по модели=1
+    (без «Заключено соглашение» — иначе доля соглашений всегда 100%).
+    Финэффект по-прежнему на полном I (с соглашением).
+    """
+    used = model_positive_mask(df)
     agr = agreement_mask(df)
     pret = pretension_mask(df)
 
     rows: list[dict[str, Any]] = []
-    for label, mask in (("model_used", used), ("model_not_used", ~used)):
+    for label, mask in (("with_model", used), ("without_model", ~used)):
         n = int(mask.sum())
         rows.append(
             {
@@ -253,18 +280,18 @@ def compare_agreement_pretension_by_model(df: pd.DataFrame) -> pd.DataFrame:
             }
         )
     table = pd.DataFrame(rows)
-    used_row = table.loc[table["segment"] == "model_used"].iloc[0]
-    ctrl_row = table.loc[table["segment"] == "model_not_used"].iloc[0]
+    used_row = table.loc[table["segment"] == "with_model"].iloc[0]
+    ctrl_row = table.loc[table["segment"] == "without_model"].iloc[0]
     lift = pd.DataFrame(
         [
             {
-                "segment": "lift_pp (used - not_used)",
+                "segment": "lift_pp (with - without)",
                 "n": np.nan,
                 "agreement_share": used_row["agreement_share"] - ctrl_row["agreement_share"],
                 "pretension_share": used_row["pretension_share"] - ctrl_row["pretension_share"],
             },
             {
-                "segment": "lift_rel (used / not_used - 1)",
+                "segment": "lift_rel (with / without - 1)",
                 "n": np.nan,
                 "agreement_share": (
                     used_row["agreement_share"] / ctrl_row["agreement_share"] - 1.0
@@ -397,6 +424,7 @@ def extrapolate_to_year(
 def format_summary_dict(summary: dict[str, Any]) -> dict[str, Any]:
     """Копия summary с денежными полями без e-нотации."""
     money_keys = {
+        "sum_od",
         "sum_paid",
         "e_fee",
         "expected_psr",
@@ -433,41 +461,68 @@ def estimate_monitoring_effect(
     df: pd.DataFrame,
     priors: RetroPriors,
     *,
+    od_col: str | None = None,
+    cost_col: str | None = None,
     paid_col: str | None = None,
 ) -> MonitoringEffectResult:
-    """Оценка net на выгрузке по формуле плана."""
-    paid_name = resolve_paid_column(df, paid_col)
+    """Оценка net на выгрузке.
+
+    expected_psr = precision × Σ_I (ОД_к_выплате × k + e_fee)
+    cost         = Σ_I СуммаПлатежа
+    net          = expected_psr − cost
+
+    ``paid_col`` — устаревший алиас для ``od_col``.
+    """
+    if od_col is None:
+        od_col = paid_col
+    if od_col is None:
+        od_col = "СуммаОсновногоДолгаКВыплате"
+    if cost_col is None:
+        cost_col = "СуммаПлатежа"
+
+    od_name = resolve_paid_column(df, od_col)
+    try:
+        cost_name = resolve_paid_column(df, cost_col)
+    except KeyError:
+        # если нет СуммаПлатежа — fallback на алиас payment
+        cost_name = resolve_column(df, "payment") or od_name
+
     mask = intervention_mask(df)
-    paid = _to_numeric(df[paid_name]).fillna(0.0)
-    paid_i = paid.where(mask, 0.0)
+    od = _to_numeric(df[od_name]).fillna(0.0)
+    cost_s = _to_numeric(df[cost_name]).fillna(0.0)
+    od_i = od.where(mask, 0.0)
+    cost_i = cost_s.where(mask, 0.0)
     e_fee = priors.expected_fee()
-    sum_paid = float(paid_i.sum())
+    sum_od = float(od_i.sum())
+    sum_paid = float(cost_i.sum())
     n_i = int(mask.sum())
-    # expected_psr = precision * Σ_I (paid * k + e_fee)
-    expected_psr = float(priors.precision * ((paid_i * priors.k).sum() + n_i * e_fee))
+    expected_psr = float(priors.precision * ((od_i * priors.k).sum() + n_i * e_fee))
     cost = sum_paid
     net = expected_psr - cost
 
     frame = df.copy()
     frame["_intervention"] = mask.astype(int)
-    frame["_paid"] = paid
-    frame["_paid_i"] = paid_i
+    frame["_od"] = od
+    frame["_od_i"] = od_i
+    frame["_cost_i"] = cost_i
     frame["_expected_psr_row"] = np.where(
         mask,
-        priors.precision * (paid_i * priors.k + e_fee),
+        priors.precision * (od_i * priors.k + e_fee),
         0.0,
     )
 
     return MonitoringEffectResult(
         frame=frame,
         n_intervention=n_i,
+        sum_od=sum_od,
         sum_paid=sum_paid,
         expected_psr=expected_psr,
         cost=cost,
         net=net,
         e_fee=e_fee,
         priors=priors,
-        paid_column=paid_name,
+        od_column=od_name,
+        cost_column=cost_name,
     )
 
 
@@ -475,12 +530,18 @@ def sensitivity_table(
     df: pd.DataFrame,
     priors: RetroPriors,
     *,
+    od_col: str | None = None,
+    cost_col: str | None = None,
     paid_col: str | None = None,
     rel_delta: float = 0.2,
 ) -> pd.DataFrame:
     """Чувствительность net к ±rel_delta по k и precision."""
+    if od_col is None:
+        od_col = paid_col
     rows: list[dict[str, Any]] = []
-    base = estimate_monitoring_effect(df, priors, paid_col=paid_col)
+    base = estimate_monitoring_effect(
+        df, priors, od_col=od_col, cost_col=cost_col
+    )
     rows.append(
         {
             "scenario": "base",
@@ -505,7 +566,9 @@ def sensitivity_table(
             fu_fee=priors.fu_fee,
             court_fee=priors.court_fee,
         )
-        res = estimate_monitoring_effect(df, adj, paid_col=paid_col)
+        res = estimate_monitoring_effect(
+            df, adj, od_col=od_col, cost_col=cost_col
+        )
         rows.append(
             {
                 "scenario": name,
@@ -561,25 +624,22 @@ def build_synthetic_claims_excel(
     )
     apply = event + pd.to_timedelta(rng.integers(1, 15, size=n_rows), unit="D")
 
-    # Интервенции
-    n_i = max(1, int(round(n_rows * intervention_rate)))
-    i_idx = rng.choice(n_rows, size=n_i, replace=False)
-    is_i = np.zeros(n_rows, dtype=bool)
-    is_i[i_idx] = True
-
-    # Модель сказала платить шире, чем полное I
+    # Модель сказала платить + выплата по модели (шире, чем полное I)
+    n_model = max(2, int(round(n_rows * intervention_rate * 1.8)))
+    model_idx = rng.choice(n_rows, size=min(n_model, n_rows), replace=False)
     result = np.zeros(n_rows, dtype=int)
-    result[is_i] = 1
-    extra_model = rng.choice(
-        np.where(~is_i)[0],
-        size=min(n_i, int((~is_i).sum())),
-        replace=False,
-    )
-    result[extra_model] = 1
-    agreement = np.zeros(n_rows, dtype=int)
     model_pay = np.zeros(n_rows, dtype=int)
-    agreement[is_i] = 1
-    model_pay[is_i] = 1
+    result[model_idx] = 1
+    model_pay[model_idx] = 1
+
+    # Среди «с моделью» соглашаются не все — иначе agreement_share всегда 100%
+    agree_rate = 0.55
+    agreement = np.zeros(n_rows, dtype=int)
+    with_model = (result == 1) & (model_pay == 1)
+    agreement[with_model] = (rng.random(int(with_model.sum())) < agree_rate).astype(int)
+
+    is_i = with_model & (agreement == 1)
+    n_i = int(is_i.sum())
 
     # Модель вызвана шире, чем полное I
     model_call = np.zeros(n_rows, dtype=int)
@@ -587,16 +647,17 @@ def build_synthetic_claims_excel(
     # ещё кусок «вызвали, но не доплатили»
     extra_call = rng.choice(
         np.where(model_call == 0)[0],
-        size=min(n_i * 2, int((model_call == 0).sum())),
+        size=min(max(n_i, 1) * 2, int((model_call == 0).sum())),
         replace=False,
     )
     model_call[extra_call] = 1
 
     # Претензии чуть чаще при вызове модели (демо lift)
     pret = (rng.random(n_rows) < np.where(model_call == 1, 0.08, 0.03)).astype(int)
-    # соглашения чаще при вызове модели
-    agreement_extra = (model_call == 1) & (rng.random(n_rows) < 0.35)
+    # соглашения чаще при вызове модели (вне положительного решения)
+    agreement_extra = (model_call == 1) & ~with_model & (rng.random(n_rows) < 0.20)
     agreement = np.where(agreement | agreement_extra, 1, agreement)
+    is_i = (result == 1) & (model_pay == 1) & (agreement == 1)
 
     recommended = np.zeros(n_rows, dtype=float)
     recommended[result == 1] = rng.uniform(15_000, 120_000, size=int((result == 1).sum()))
@@ -737,6 +798,7 @@ __all__ = [
     "intervention_mask",
     "load_excel",
     "load_retro_priors",
+    "model_positive_mask",
     "model_used_mask",
     "pretension_mask",
     "resolve_paid_column",
