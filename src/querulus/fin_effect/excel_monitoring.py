@@ -173,12 +173,260 @@ def resolve_paid_column(
         if resolved is not None:
             return resolved
         raise KeyError(f"PAID_COL не найден: {paid_col}")
-    # Explore на боевой выгрузке: СуммаПлатежа ≈ СуммаКВыплате; recommended на I не бьётся.
-    for key in ("payment", "to_pay", "od_to_pay", "od_paid", "recommended"):
+    # Explore: для k нужен прокси ОД → СуммаОсновногоДолгаКВыплате.
+    for key in ("od_to_pay", "od_paid", "payment", "to_pay", "recommended"):
         col = resolve_column(df, key)
         if col is not None:
             return col
-    raise KeyError("Не найдена колонка paid (платёж / к выплате / ОД / рекомендованная)")
+    raise KeyError("Не найдена колонка paid (ОД к выплате / платёж / рекомендованная)")
+
+
+def format_money(x: float) -> str:
+    """Число без научной нотации, с пробелами тысяч."""
+    return f"{float(x):,.2f}".replace(",", " ")
+
+
+def _as_bool01(series: pd.Series) -> pd.Series:
+    num = _to_numeric(series)
+    # NA / -999 (explore fill) → 0
+    num = num.where(~num.isin([-999, -100]), np.nan)
+    return (num.fillna(0) > 0).astype(int)
+
+
+def model_used_mask(df: pd.DataFrame) -> pd.Series:
+    """Сегмент «модель использовали»: вызов модели или есть РезультатПроверки."""
+    call = resolve_column(df, "model_call")
+    if call is not None:
+        return _as_bool01(df[call]).astype(bool)
+    result = resolve_column(df, "result_check")
+    if result is not None:
+        num = _to_numeric(df[result])
+        return num.notna() & ~num.isin([-999])
+    payout = resolve_column(df, "model_payout")
+    if payout is not None:
+        return _as_bool01(df[payout]).astype(bool)
+    raise KeyError("Нет колонки вызова модели / РезультатПроверки / выплаты по модели")
+
+
+def agreement_mask(df: pd.DataFrame) -> pd.Series:
+    """Соглашение: флаг или ФормаВозмещения содержит «соглашен»."""
+    flag = resolve_column(df, "agreement")
+    form = resolve_column(df, "refund_form")
+    out = pd.Series(False, index=df.index)
+    if flag is not None:
+        out = out | _as_bool01(df[flag]).astype(bool)
+    if form is not None:
+        text = df[form].fillna("").astype(str).str.casefold()
+        out = out | text.str.contains("соглашен", na=False)
+    return out
+
+
+def pretension_mask(df: pd.DataFrame) -> pd.Series:
+    """Претензия: флаг / кол-во > 0."""
+    col = resolve_column(df, "pretension")
+    if col is None:
+        # запасные имена с explore
+        for name in ("Претензия", "КолВоПретензий", "Кол-во претензий"):
+            if name in df.columns:
+                col = name
+                break
+    if col is None:
+        return pd.Series(False, index=df.index)
+    return _as_bool01(df[col]).astype(bool)
+
+
+def compare_agreement_pretension_by_model(df: pd.DataFrame) -> pd.DataFrame:
+    """Доли соглашений и претензий: модель использовали vs нет + lift."""
+    used = model_used_mask(df)
+    agr = agreement_mask(df)
+    pret = pretension_mask(df)
+
+    rows: list[dict[str, Any]] = []
+    for label, mask in (("model_used", used), ("model_not_used", ~used)):
+        n = int(mask.sum())
+        rows.append(
+            {
+                "segment": label,
+                "n": n,
+                "agreement_share": float(agr[mask].mean()) if n else np.nan,
+                "pretension_share": float(pret[mask].mean()) if n else np.nan,
+            }
+        )
+    table = pd.DataFrame(rows)
+    used_row = table.loc[table["segment"] == "model_used"].iloc[0]
+    ctrl_row = table.loc[table["segment"] == "model_not_used"].iloc[0]
+    lift = pd.DataFrame(
+        [
+            {
+                "segment": "lift_pp (used - not_used)",
+                "n": np.nan,
+                "agreement_share": used_row["agreement_share"] - ctrl_row["agreement_share"],
+                "pretension_share": used_row["pretension_share"] - ctrl_row["pretension_share"],
+            },
+            {
+                "segment": "lift_rel (used / not_used - 1)",
+                "n": np.nan,
+                "agreement_share": (
+                    used_row["agreement_share"] / ctrl_row["agreement_share"] - 1.0
+                    if ctrl_row["agreement_share"] and ctrl_row["agreement_share"] > 0
+                    else np.nan
+                ),
+                "pretension_share": (
+                    used_row["pretension_share"] / ctrl_row["pretension_share"] - 1.0
+                    if ctrl_row["pretension_share"] and ctrl_row["pretension_share"] > 0
+                    else np.nan
+                ),
+            },
+        ]
+    )
+    return pd.concat([table, lift], ignore_index=True)
+
+
+def resolve_effect_date_series(df: pd.DataFrame) -> pd.Series:
+    """Дата для окна экстраполяции (заявление / событие / вызов модели)."""
+    col = resolve_column(df, "application_date")
+    if col is None:
+        col = resolve_column(df, "model_call_date")
+    if col is None:
+        for name in (
+            "ДатаЗаявления",
+            "ДатаСобытия",
+            "Дата вызова модели сутяжности",
+        ):
+            if name in df.columns:
+                col = name
+                break
+    if col is None:
+        raise KeyError("Нет даты для экстраполяции (ДатаЗаявления / вызов модели)")
+    return pd.to_datetime(df[col], errors="coerce")
+
+
+def resolve_model_call_date_series(df: pd.DataFrame) -> pd.Series | None:
+    """Колонка даты вызова модели, если есть."""
+    col = resolve_column(df, "model_call_date")
+    if col is None:
+        for name in (
+            "Дата вызова модели сутяжности",
+            "Дата_выхода_модели_ступенчатая",
+            "Дата вызова модуля суррогативности",
+        ):
+            if name in df.columns:
+                col = name
+                break
+    if col is None:
+        return None
+    return pd.to_datetime(df[col], errors="coerce")
+
+
+def infer_model_start(df: pd.DataFrame) -> pd.Timestamp:
+    """Начало работы модели = min даты вызова модели (где модель использовали).
+
+    Fallback: min даты вызова по всем непустым; иначе min ДатаЗаявления в окне.
+    """
+    call_dates = resolve_model_call_date_series(df)
+    if call_dates is not None:
+        try:
+            used = model_used_mask(df)
+            among_used = call_dates[used].dropna()
+            if not among_used.empty:
+                return pd.Timestamp(among_used.min())
+        except KeyError:
+            pass
+        all_calls = call_dates.dropna()
+        if not all_calls.empty:
+            return pd.Timestamp(all_calls.min())
+    # fallback — начало окна выгрузки
+    dates = resolve_effect_date_series(df).dropna()
+    if dates.empty:
+        raise ValueError("Не удалось вывести MODEL_START из дат Excel")
+    return pd.Timestamp(dates.min())
+
+
+def extrapolate_to_year(
+    effect: MonitoringEffectResult,
+    df: pd.DataFrame,
+    *,
+    model_start: str | pd.Timestamp | None = None,
+    as_of: str | pd.Timestamp | None = None,
+    year_days: float = 365.0,
+) -> dict[str, Any]:
+    """Экстраполяция net/cost/expected_psr на year_days с начала работы модели.
+
+    ``model_start=None`` → ``infer_model_start(df)`` из дат Excel.
+    Скорость: net / дней в окне Excel (по датам строк).
+    """
+    dates = resolve_effect_date_series(df)
+    valid = dates.dropna()
+    if valid.empty:
+        raise ValueError("Нет валидных дат в Excel для экстраполяции")
+    sample_start = valid.min()
+    sample_end = valid.max()
+    sample_days = max(1.0, float((sample_end - sample_start).days) + 1.0)
+
+    if model_start is None:
+        start = infer_model_start(df)
+        model_start_source = "excel"
+    else:
+        start = pd.Timestamp(model_start)
+        model_start_source = "manual"
+    end = pd.Timestamp(as_of) if as_of is not None else sample_end
+    elapsed_days = max(1.0, float((end - start).days) + 1.0)
+
+    daily_net = effect.net / sample_days
+    daily_cost = effect.cost / sample_days
+    daily_psr = effect.expected_psr / sample_days
+
+    return {
+        "sample_start": sample_start.date().isoformat(),
+        "sample_end": sample_end.date().isoformat(),
+        "sample_days": round(sample_days, 1),
+        "model_start": start.date().isoformat(),
+        "model_start_source": model_start_source,
+        "as_of": end.date().isoformat(),
+        "elapsed_days_since_model_start": round(elapsed_days, 1),
+        "net_sample": round(effect.net, 2),
+        "net_per_day": round(daily_net, 2),
+        "net_since_model_start": round(daily_net * elapsed_days, 2),
+        "net_annual_365": round(daily_net * year_days, 2),
+        "cost_annual_365": round(daily_cost * year_days, 2),
+        "expected_psr_annual_365": round(daily_psr * year_days, 2),
+        "scale_sample_to_365": round(year_days / sample_days, 4),
+    }
+
+
+def format_summary_dict(summary: dict[str, Any]) -> dict[str, Any]:
+    """Копия summary с денежными полями без e-нотации."""
+    money_keys = {
+        "sum_paid",
+        "e_fee",
+        "expected_psr",
+        "cost",
+        "net",
+        "net_sample",
+        "net_per_day",
+        "net_since_model_start",
+        "net_annual_365",
+        "cost_annual_365",
+        "expected_psr_annual_365",
+    }
+    out: dict[str, Any] = {}
+    for k, v in summary.items():
+        if k in money_keys and isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[k] = format_money(v)
+        else:
+            out[k] = v
+    return out
+
+
+def format_sensitivity_table(sens: pd.DataFrame) -> pd.DataFrame:
+    """Чувствительность с обычными числами (не 1.2e+06)."""
+    out = sens.copy()
+    for col in ("net", "expected_psr", "k", "precision"):
+        if col in out.columns:
+            out[col] = out[col].map(
+                lambda x: round(float(x), 2) if pd.notna(x) else x
+            )
+    return out
 
 
 def estimate_monitoring_effect(
@@ -328,11 +576,27 @@ def build_synthetic_claims_excel(
         replace=False,
     )
     result[extra_model] = 1
-    # часть с result=1 но без соглашения
     agreement = np.zeros(n_rows, dtype=int)
     model_pay = np.zeros(n_rows, dtype=int)
     agreement[is_i] = 1
     model_pay[is_i] = 1
+
+    # Модель вызвана шире, чем полное I
+    model_call = np.zeros(n_rows, dtype=int)
+    model_call[result == 1] = 1
+    # ещё кусок «вызвали, но не доплатили»
+    extra_call = rng.choice(
+        np.where(model_call == 0)[0],
+        size=min(n_i * 2, int((model_call == 0).sum())),
+        replace=False,
+    )
+    model_call[extra_call] = 1
+
+    # Претензии чуть чаще при вызове модели (демо lift)
+    pret = (rng.random(n_rows) < np.where(model_call == 1, 0.08, 0.03)).astype(int)
+    # соглашения чаще при вызове модели
+    agreement_extra = (model_call == 1) & (rng.random(n_rows) < 0.35)
+    agreement = np.where(agreement | agreement_extra, 1, agreement)
 
     recommended = np.zeros(n_rows, dtype=float)
     recommended[result == 1] = rng.uniform(15_000, 120_000, size=int((result == 1).sum()))
@@ -388,6 +652,11 @@ def build_synthetic_claims_excel(
             "Филиал": filial,
             "ДатаЗаявления": apply,
             "ДатаСобытия": event,
+            "Дата вызова модели сутяжности": np.where(
+                model_call == 1,
+                apply - pd.to_timedelta(rng.integers(0, 5, size=n_rows), unit="D"),
+                pd.NaT,
+            ),
             "Продукт": products,
             "Тип заявителя": applicants,
             "ВозрастЗаявителя": rng.integers(18, 75, size=n_rows),
@@ -403,8 +672,10 @@ def build_synthetic_claims_excel(
             ),
             "ФормаВозмещения": forms,
             "РезультатПроверки": result,
+            "ВызовМодельСутяжность": model_call,
             "Заключено соглашение": agreement,
             "Выплата по модели в Инциденте": model_pay,
+            "Претензия": pret,
             "Сумма рекомендованная к доплате по модулю": recommended,
             "СуммаОсновногоДолгаЗаявлено": od_claimed,
             "СуммаОсновногоДолгаКВыплате": od_to_pay,
@@ -452,13 +723,22 @@ __all__ = [
     "FU_FEE_DEFAULT",
     "MonitoringEffectResult",
     "RetroPriors",
+    "agreement_mask",
     "build_synthetic_claims_excel",
+    "compare_agreement_pretension_by_model",
     "compute_retro_priors",
     "default_demo_priors",
     "estimate_monitoring_effect",
+    "extrapolate_to_year",
+    "format_money",
+    "format_sensitivity_table",
+    "format_summary_dict",
+    "infer_model_start",
     "intervention_mask",
     "load_excel",
     "load_retro_priors",
+    "model_used_mask",
+    "pretension_mask",
     "resolve_paid_column",
     "save_retro_priors",
     "sensitivity_table",
