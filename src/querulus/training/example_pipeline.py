@@ -320,9 +320,9 @@ def fit_prod_models(
     parity: ExampleDsmBundle | None = None,
     use_automl: bool = True,
     send_mail: bool = False,
-    log_mlflow: bool = True,
+    log_mlflow: bool = False,
 ) -> ExampleDsmBundle:
-    """Prod-refit: CF+RG из ``config_prod.json`` (AutoMLManager + MLflow по умолчанию)."""
+    """Prod-refit: CF+RG из ``config_prod.json`` (AutoMLManager; MLflow опционально)."""
     base = parity or ExampleDsmBundle(dsm_cf=None, dsm_rg=None)
     if use_automl:
         dsm_prod, _ = fit_automl_bundle(

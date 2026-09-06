@@ -121,7 +121,11 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': [],
              'GUILTY_OBJECT_POWER',
              'MINIMIZATION_KIND',
              'MULTIDRIVE',
-             'INSURANCE_TYPE_NAME'],
+             'INSURANCE_TYPE_NAME',
+             'MINIMIZATION_REC',
+             'VEHICLE_CONDITION',
+             'VICTIM_LOSS_SUM',
+             'FE_MINIMIZATION_GAP'],
  'BINARY': ['VICTIM_VEHICLE_IS_JAPAN']}
 
 DEFAULT_OTHER_COLS: tuple[str, ...] = (

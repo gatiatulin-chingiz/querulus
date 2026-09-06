@@ -968,14 +968,34 @@ def run_hpo(
             _mlflow.autolog(disable=True)
         except Exception:  # noqa: BLE001
             pass
-        resolved_experiment_id = _connect_mlflow_experiment(_mlflow, experiment_name)
-        mlflow = _mlflow
-        logger.info(
-            "MLflow tracking URI=%s experiment=%s id=%s (child trials via MlflowClient)",
-            _mlflow.get_tracking_uri(),
-            experiment_name,
-            resolved_experiment_id,
-        )
+        try:
+            resolved_experiment_id = _connect_mlflow_experiment(_mlflow, experiment_name)
+            mlflow = _mlflow
+            logger.info(
+                "MLflow tracking URI=%s experiment=%s id=%s (child trials via MlflowClient)",
+                _mlflow.get_tracking_uri(),
+                experiment_name,
+                resolved_experiment_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — SSO/сеть: HPO без tracking
+            msg = str(exc)
+            if (
+                _is_mlflow_auth_error(exc)
+                or _looks_like_login_html(msg)
+                or "Keycloak" in msg
+                or "страницу логина" in msg
+            ):
+                logger.warning(
+                    "MLflow недоступен (%s). HPO продолжит без tracking. "
+                    "Для записи задайте KEYCLOAK_USERNAME/PASSWORD или "
+                    "MLFLOW_TRACKING_TOKEN, либо USE_MLFLOW=False / RUN_HPO=False "
+                    "(если уже есть hpo_best_params_new.json).",
+                    type(exc).__name__,
+                )
+                mlflow = None
+                resolved_experiment_id = None
+            else:
+                raise
 
     def objective(trial: optuna.Trial) -> float:
         params = _suggest_catboost_params(
