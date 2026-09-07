@@ -173,8 +173,10 @@ def build_monitoring_html(
         """
 
     code_block = escape(
-        """# ретро-приоры за последние 2 года
-priors = compute_retro_priors(retro, precision=PRECISION, lookback_years=2.0)
+        """# ретро-приоры: 2 года до 2025-06-30
+priors = compute_retro_priors(
+    retro, precision=PRECISION, lookback_years=2.0, as_of="2025-06-30"
+)
 
 # финэффект на Excel
 effect = estimate_monitoring_effect(df, priors,
@@ -282,8 +284,8 @@ net  = expected_psr − cost</div>
   <h2>4. Период ретро для долей и k</h2>
   <div class="card">
     <p>Раньше priors брались со <b>всего</b> parquet. Сейчас по умолчанию —
-    <b>последние 2 года</b> по дате T0 выплаты (<code>PAYMENT_ORDER_DATE_TIME</code>
-    или запасная дата).</p>
+    окно <b>2 года до 2025-06-30</b> (~2023-06-30 … 2025-06-30) по дате T0
+    (<code>PAYMENT_ORDER_DATE_TIME</code> или запасная дата).</p>
     <table>
       <thead><tr><th>Параметр</th><th>Значение</th></tr></thead>
       <tbody>

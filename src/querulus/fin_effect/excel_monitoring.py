@@ -25,6 +25,8 @@ from querulus.fin_effect.excel_explore import (
 
 FU_FEE_DEFAULT = 100_000.0
 COURT_FEE_DEFAULT = 15_000.0
+# Конец окна ретро для k / p_fu / p_court / psr_share (2 года назад от этой даты).
+RETRO_AS_OF_DEFAULT = "2025-06-30"
 
 
 @dataclass(frozen=True)
@@ -139,12 +141,12 @@ def filter_retro_lookback(
     *,
     lookback_years: float = 2.0,
     date_col: str | None = None,
-    as_of: pd.Timestamp | str | None = None,
+    as_of: pd.Timestamp | str | None = RETRO_AS_OF_DEFAULT,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Оставить строки за последние ``lookback_years`` лет по дате T0.
 
-    Конец окна — ``as_of`` или max(дата) в кадре.
-    Если даты нет — возвращает весь кадр и ``applied=False``.
+    Конец окна — ``as_of`` (по умолчанию ``2025-06-30``) или max(дата),
+    если ``as_of`` явно None и дат нет валидных.
     """
     resolved = resolve_retro_date_column(df, date_col)
     meta: dict[str, Any] = {
@@ -197,14 +199,14 @@ def compute_retro_priors(
     court_fee: float = COURT_FEE_DEFAULT,
     lookback_years: float = 2.0,
     date_col: str | None = None,
-    as_of: pd.Timestamp | str | None = None,
+    as_of: pd.Timestamp | str | None = RETRO_AS_OF_DEFAULT,
 ) -> RetroPriors:
     """Посчитать priors на зрелом ретро-кадре с таргетами.
 
     По умолчанию ``k``, ``psr_share`` и доли путей (p_pret/p_fu/p_court)
-    считаются на **последних 2 годах** по ``PAYMENT_ORDER_DATE_TIME`` (или
-    другой найденной дате). ``precision``: если задан (0..1) — как есть;
-    иначе из preds_cf vs TARGET_FREQ (нет preds → 0.5).
+    считаются на окне **2 года до 2025-06-30** по ``PAYMENT_ORDER_DATE_TIME``
+    (т.е. примерно 2023-06-30 … 2025-06-30). ``precision``: если задан —
+    как есть; иначе из preds_cf vs TARGET_FREQ (нет preds → 0.5).
     """
     work, window = filter_retro_lookback(
         df,
@@ -931,6 +933,7 @@ __all__ = [
     "COURT_FEE_DEFAULT",
     "FU_FEE_DEFAULT",
     "MonitoringEffectResult",
+    "RETRO_AS_OF_DEFAULT",
     "RETRO_DATE_CANDIDATES",
     "RetroPriors",
     "agreement_mask",
