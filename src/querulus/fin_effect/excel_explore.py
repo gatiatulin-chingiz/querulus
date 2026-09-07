@@ -17,6 +17,13 @@ DEFAULT_TOLERANCE = 1.0
 # Алиасы заголовков со скринов (имена плывут: «к доплате» / «к выплате», «в инциденте»).
 COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "incident": ("НомерИнцидента", "INCIDENT_NUMBER", "Номер инцидента"),
+    "filial": ("Филиал", "ФилиалУбытка", "Branch"),
+    "loss_status": ("УбытокСтатус", "Убыток статус", "СтатусУбытка"),
+    "auto_object": (
+        "ТипОбъектаАвтотранспорт",
+        "Тип объекта автотранспорт",
+        "Автотранспорт",
+    ),
     "result_check": ("РезультатПроверки", "Результат проверки"),
     "agreement": (
         "Заключено соглашение",
@@ -73,11 +80,22 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "ВызовМодель",
     ),
     "pretension": (
-        "Претензия",
+        "ЕстьПретензияВИнциденте",
         "ЕстьПретензия",
         "Есть претензия",
+        "Претензия",
         "КолВоПретензий",
         "Кол-во претензий",
+    ),
+    "fu_flag": (
+        "Обращение к ФУ",
+        "ОбращениеКФУ",
+        "Обращение к фу",
+    ),
+    "court_flag": (
+        "Обращение к суду",
+        "ОбращениеКСуду",
+        "Обращение в суд",
     ),
     "application_date": (
         "ДатаЗаявления",
@@ -91,6 +109,11 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "Дата_вызова_модели",
     ),
 }
+
+# Общие фильтры аналитики (Excel).
+EXCLUDED_FILIAL_NEEDLES = ("архангельск", "марийск")
+ALLOWED_REFUND_FORM_NEEDLES = ("денежн", "ремонт", "соглашен")
+PRIMARY_LOSS_STATUS_NEEDLES = ("первичн",)
 
 _ID_HINTS = (
     "номер",
@@ -256,17 +279,58 @@ def profile_columns(
     return pd.DataFrame(rows)
 
 
+def analytics_base_mask(df: pd.DataFrame) -> pd.Series:
+    """Общие фильтры для всей Excel-аналитики.
+
+    Если колонка отсутствует — условие по ней не применяется (pass-through).
+    """
+    mask = pd.Series(True, index=df.index)
+
+    filial_col = resolve_column(df, "filial")
+    if filial_col is not None:
+        text = df[filial_col].fillna("").astype(str).str.casefold()
+        excluded = pd.Series(False, index=df.index)
+        for needle in EXCLUDED_FILIAL_NEEDLES:
+            excluded = excluded | text.str.contains(needle, na=False)
+        mask = mask & ~excluded
+
+    form_col = resolve_column(df, "refund_form")
+    if form_col is not None:
+        text = df[form_col].fillna("").astype(str).str.casefold()
+        allowed = pd.Series(False, index=df.index)
+        for needle in ALLOWED_REFUND_FORM_NEEDLES:
+            allowed = allowed | text.str.contains(needle, na=False)
+        mask = mask & allowed
+
+    status_col = resolve_column(df, "loss_status")
+    if status_col is not None:
+        text = df[status_col].fillna("").astype(str).str.casefold()
+        primary = pd.Series(False, index=df.index)
+        for needle in PRIMARY_LOSS_STATUS_NEEDLES:
+            primary = primary | text.str.contains(needle, na=False)
+        mask = mask & primary
+
+    auto_col = resolve_column(df, "auto_object")
+    if auto_col is not None:
+        mask = mask & _to_numeric(df[auto_col]).fillna(0).eq(1)
+
+    return mask
+
+
 def intervention_mask(df: pd.DataFrame) -> pd.Series:
-    """Черновик I: РезультатПроверки=1 ∧ соглашение=1 ∧ выплата по модели=1."""
-    parts: list[pd.Series] = []
-    for key in ("result_check", "agreement", "model_payout"):
+    """Контур финэффекта I: общие фильтры ∧ вызов модели ∧ выплата по модели.
+
+    Общие: филиал (не Архангельский/Марийский), ФормаВозмещения ∈
+    {денежная, ремонт, соглашение}, УбытокСтатус=первичный,
+    ТипОбъектаАвтотранспорт=1.
+    Дополнительно: ВызовМодельСутяжность=1 ∧ Выплата по модели в Инциденте=1.
+    """
+    mask = analytics_base_mask(df)
+    for key in ("model_call", "model_payout"):
         col = resolve_column(df, key)
         if col is None:
             return pd.Series(False, index=df.index)
-        parts.append(_to_numeric(df[col]).fillna(0).eq(1))
-    mask = parts[0]
-    for p in parts[1:]:
-        mask = mask & p
+        mask = mask & _to_numeric(df[col]).fillna(0).eq(1)
     return mask
 
 

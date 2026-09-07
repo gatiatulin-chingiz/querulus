@@ -86,42 +86,49 @@ ul { margin: 0.35rem 0 0.6rem 1.2rem; }
 <body>
 <div class="page">
   <h1>Мониторинг фин. эффекта Querulus</h1>
-  <p class="sub">Сгенерировано 2026-09-06 16:21. Это оценка без зрелого факта ПСР на выгрузке.</p>
+  <p class="sub">Сгенерировано 2026-09-07 14:41. Это оценка без зрелого факта ПСР на выгрузке.</p>
 
   <div class="grid">
-    <div class="stat"><span>Интервенции I</span><b>20</b></div>
-    <div class="stat"><span>expected_psr</span><b>1 405 994.66</b></div>
-    <div class="stat"><span>cost (СуммаПлатежа)</span><b>1 393 595.51</b></div>
-    <div class="stat"><span>net</span><b>12 399.16</b></div>
+    <div class="stat"><span>Интервенции I</span><b>32</b></div>
+    <div class="stat"><span>expected_psr</span><b>2 408 834.28</b></div>
+    <div class="stat"><span>cost (СуммаПлатежа)</span><b>2 276 420.91</b></div>
+    <div class="stat"><span>net</span><b>132 413.37</b></div>
   </div>
 
   <h2>1. Что считаем</h2>
   <div class="card">
-    <p><b>Интервенция I</b> — кейсы, где модель сказала платить, заключили соглашение
-    и выплата по модели прошла:</p>
-    <div class="formula">I: РезультатПроверки = 1
-   ∧ Заключено соглашение = 1
-   ∧ Выплата по модели в Инциденте = 1</div>
+    <p><b>Интервенция I</b> — общие фильтры аналитики плюс вызов модели и выплата по модели:</p>
+    <div class="formula">общие:
+  Филиал ∉ {Архангельский, Марийский}
+  ∧ ФормаВозмещения ∈ {денежная, ремонт, соглашение}
+  ∧ УбытокСтатус = первичный
+  ∧ ТипОбъектаАвтотранспорт = 1
+
+I = общие
+  ∧ ВызовМодельСутяжность = 1
+  ∧ Выплата по модели в Инциденте = 1</div>
     <p>На этих кейсах оцениваем, сколько ПСР+взносов мы <i>ожидаемо избежали</i>,
-    и вычитаем фактическую доплату клиенту.</p>
+    и вычитаем фактическую сумму к выплате.</p>
   </div>
 
   <h2>2. Формулы</h2>
   <div class="card">
     <div class="formula">e_fee = p_fu × 100_000 + p_court × 15_000
 
-expected_psr = precision × Σ_{i ∈ I} (ОД_i × k + e_fee)
+expected_psr = precision × Σ_{i ∈ I} (ОД_заявлено_i × k + e_fee)
              = precision × ( Σ_I ОД × k  +  n_I × e_fee )
 
-cost = Σ_{i ∈ I} СуммаПлатежа_i
+cost = Σ_{i ∈ I} СуммаКВыплате_i
 
 net  = expected_psr − cost</div>
     <ul>
-      <li><b>ОД</b> (<code>СуммаОсновногоДолгаКВыплате</code>) — только чтобы оценить ПСР через коэффициент <code>k</code>.</li>
-      <li><b>cost</b> — факт платежа (<code>СуммаПлатежа</code>), не ОД.</li>
+      <li><b>ОД</b> (<code>СуммаОсновногоДолгаЗаявлено</code>) — только чтобы оценить ПСР через коэффициент <code>k</code>.</li>
+      <li><b>cost</b> — факт к выплате (<code>СуммаКВыплате</code>).</li>
       <li><b>e_fee</b> в summary — средний взнос <i>на один кейс</i>, не сумма по всем I.
           В expected_psr входит как <code>n_I × e_fee</code>.</li>
       <li><b>precision</b> — доля «правильных» срабатываний модели (задаётся вручную или с preds).</li>
+      <li>Флаги Excel: претензия <code>ЕстьПретензияВИнциденте</code>, ФУ <code>Обращение к ФУ</code>,
+          суд <code>Обращение к суду</code> (для долей/аналитики; e_fee по-прежнему с ретро-долей путей).</li>
     </ul>
   </div>
 
@@ -180,20 +187,20 @@ net  = expected_psr − cost</div>
 
   <h2>5. Пример расчёта на этом прогоне</h2>
   <div class="card">
-    <pre>n_I = 20
+    <pre>n_I = 32
 e_fee (на 1 кейс) = p_fu×100 000.00 + p_court×15 000.00
                  = 30.00%×100 000.00 + 25.00%×15 000.00
                  = 33 750.00
 
-Σ_I ОД = 1 393 595.51
-Σ_I (ОД×k) = 1 393 595.51 × 1.3500 = 1 881 353.94
-Σ_I e_fee  = 20 × 33 750.00 = 675 000.00
+Σ_I ОД = 2 444 221.25
+Σ_I (ОД×k) = 2 444 221.25 × 1.3500 = 3 299 698.68
+Σ_I e_fee  = 32 × 33 750.00 = 1 080 000.00
 
-сырой ПСР+взносы = 1 881 353.94 + 675 000.00 = 2 556 353.94
-expected_psr = precision × … = 0.5500 × 2 556 353.94 = 1 405 994.66
+сырой ПСР+взносы = 3 299 698.68 + 1 080 000.00 = 4 379 698.68
+expected_psr = precision × … = 0.5500 × 4 379 698.68 = 2 408 834.28
 
-cost = Σ_I СуммаПлатежа = 1 393 595.51
-net  = expected_psr − cost = 1 405 994.66 − 1 393 595.51 = 12 399.16
+cost = Σ_I СуммаПлатежа = 2 276 420.91
+net  = expected_psr − cost = 2 408 834.28 − 2 276 420.91 = 132 413.37
 </pre>
   </div>
 
@@ -204,13 +211,14 @@ priors = compute_retro_priors(retro, precision=PRECISION, lookback_years=2.0)
 
 # финэффект на Excel
 effect = estimate_monitoring_effect(df, priors,
-                                    od_col=&quot;СуммаОсновногоДолгаКВыплате&quot;,
-                                    cost_col=&quot;СуммаПлатежа&quot;)
+                                    od_col=&quot;СуммаОсновногоДолгаЗаявлено&quot;,
+                                    cost_col=&quot;СуммаКВыплате&quot;)
 # внутри:
-#   I = РезультатПроверки=1 &amp; соглашение=1 &amp; выплата_по_модели=1
+#   база = филиал/форма/статус/автотранспорт
+#   I = база &amp; ВызовМодельСутяжность=1 &amp; Выплата по модели=1
 #   e_fee = p_fu*100_000 + p_court*15_000
 #   expected_psr = precision * (sum(ОД_I * k) + n_I * e_fee)
-#   cost = sum(СуммаПлатежа_I)
+#   cost = sum(СуммаКВыплате_I)
 #   net = expected_psr - cost
 </pre>
     <p class="muted">Модули: <code>querulus.fin_effect.excel_monitoring</code>,
@@ -225,14 +233,14 @@ effect = estimate_monitoring_effect(df, priors,
     <table>
       <thead><tr><th>Поле</th><th>Значение</th></tr></thead>
       <tbody>
-        <tr><td>od_column</td><td>СуммаОсновногоДолгаКВыплате</td></tr>
-        <tr><td>cost_column</td><td>СуммаПлатежа</td></tr>
-        <tr><td>n_intervention</td><td>20</td></tr>
-        <tr><td>sum_od</td><td>1 393 595.51</td></tr>
-        <tr><td>sum_paid / cost</td><td>1 393 595.51</td></tr>
+        <tr><td>od_column</td><td>СуммаОсновногоДолгаЗаявлено</td></tr>
+        <tr><td>cost_column</td><td>СуммаКВыплате</td></tr>
+        <tr><td>n_intervention</td><td>32</td></tr>
+        <tr><td>sum_od</td><td>2 444 221.25</td></tr>
+        <tr><td>sum_paid / cost</td><td>2 276 420.91</td></tr>
         <tr><td>e_fee</td><td>33 750.00</td></tr>
-        <tr><td>expected_psr</td><td>1 405 994.66</td></tr>
-        <tr><td>net</td><td>12 399.16</td></tr>
+        <tr><td>expected_psr</td><td>2 408 834.28</td></tr>
+        <tr><td>net</td><td>132 413.37</td></tr>
       </tbody>
     </table>
   </div>

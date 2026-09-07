@@ -1,7 +1,8 @@
 """Оценка финэффекта по Excel-выгрузке (фаза 2 мониторинга).
 
-Без факта ПСР: expected_psr = precision × Σ_I (ОД×k + e_fee),
-cost = Σ_I СуммаПлатежа, e_fee = p_fu×fu_fee + p_court×court_fee.
+Без факта ПСР: expected_psr = precision × Σ_I (ОД_заявлено×k + e_fee),
+cost = Σ_I СуммаКВыплате, e_fee = p_fu×fu_fee + p_court×court_fee.
+I = общие фильтры ∧ ВызовМодельСутяжность=1 ∧ Выплата по модели=1.
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ import pandas as pd
 from querulus.fin_effect.excel_explore import (
     COLUMN_ALIASES,
     _to_numeric,
+    analytics_base_mask,
     intervention_mask,
     load_excel,
     resolve_column,
@@ -288,12 +290,12 @@ def resolve_paid_column(
         if resolved is not None:
             return resolved
         raise KeyError(f"PAID_COL не найден: {paid_col}")
-    # Explore: для k нужен прокси ОД → СуммаОсновногоДолгаКВыплате.
-    for key in ("od_to_pay", "od_paid", "payment", "to_pay", "recommended"):
+    # Explore: дефолтный ОД → заявлено.
+    for key in ("od_claimed", "od_to_pay", "od_paid", "to_pay", "payment", "recommended"):
         col = resolve_column(df, key)
         if col is not None:
             return col
-    raise KeyError("Не найдена колонка paid (ОД к выплате / платёж / рекомендованная)")
+    raise KeyError("Не найдена колонка ОД / к выплате / платёж / рекомендованная")
 
 
 def format_money(x: float) -> str:
@@ -324,18 +326,17 @@ def model_used_mask(df: pd.DataFrame) -> pd.Series:
 
 
 def model_positive_mask(df: pd.DataFrame) -> pd.Series:
-    """Модель сказала платить и выплата по модели: без фильтра соглашения.
+    """С моделью внутри общих фильтров: вызов модели ∧ выплата по модели.
 
-    РезультатПроверки=1 ∧ Выплата по модели=1.
-    Нужен для долей соглашений (иначе agreement_share всегда 100%).
+    Без фильтра соглашения — иначе agreement_share всегда 100%.
     """
-    parts: list[pd.Series] = []
-    for key in ("result_check", "model_payout"):
+    mask = analytics_base_mask(df)
+    for key in ("model_call", "model_payout"):
         col = resolve_column(df, key)
         if col is None:
             return pd.Series(False, index=df.index)
-        parts.append(_to_numeric(df[col]).fillna(0).eq(1))
-    return parts[0] & parts[1]
+        mask = mask & _to_numeric(df[col]).fillna(0).eq(1)
+    return mask
 
 
 def agreement_mask(df: pd.DataFrame) -> pd.Series:
@@ -352,32 +353,45 @@ def agreement_mask(df: pd.DataFrame) -> pd.Series:
 
 
 def pretension_mask(df: pd.DataFrame) -> pd.Series:
-    """Претензия: флаг / кол-во > 0."""
+    """Претензия: ЕстьПретензияВИнциденте (или запасные алиасы)."""
     col = resolve_column(df, "pretension")
     if col is None:
-        # запасные имена с explore
-        for name in ("Претензия", "КолВоПретензий", "Кол-во претензий"):
-            if name in df.columns:
-                col = name
-                break
+        return pd.Series(False, index=df.index)
+    return _as_bool01(df[col]).astype(bool)
+
+
+def fu_mask(df: pd.DataFrame) -> pd.Series:
+    """Обращение к ФУ."""
+    col = resolve_column(df, "fu_flag")
+    if col is None:
+        return pd.Series(False, index=df.index)
+    return _as_bool01(df[col]).astype(bool)
+
+
+def court_mask(df: pd.DataFrame) -> pd.Series:
+    """Обращение к суду."""
+    col = resolve_column(df, "court_flag")
     if col is None:
         return pd.Series(False, index=df.index)
     return _as_bool01(df[col]).astype(bool)
 
 
 def compare_agreement_pretension_by_model(df: pd.DataFrame) -> pd.DataFrame:
-    """Доли соглашений и претензий: с моделью vs без.
+    """Доли соглашений и претензий: с моделью vs без — внутри общих фильтров.
 
-    Сегмент ``with_model`` = РезультатПроверки=1 ∧ Выплата по модели=1
-    (без «Заключено соглашение» — иначе доля соглашений всегда 100%).
-    Финэффект по-прежнему на полном I (с соглашением).
+    Сегмент ``with_model`` = analytics_base ∧ ВызовМодель=1 ∧ ВыплатаПоМодели=1.
+    ``without_model`` = analytics_base ∧ не with_model.
     """
+    base = analytics_base_mask(df)
     used = model_positive_mask(df)
     agr = agreement_mask(df)
     pret = pretension_mask(df)
 
     rows: list[dict[str, Any]] = []
-    for label, mask in (("with_model", used), ("without_model", ~used)):
+    for label, mask in (
+        ("with_model", used),
+        ("without_model", base & ~used),
+    ):
         n = int(mask.sum())
         rows.append(
             {
@@ -575,8 +589,8 @@ def estimate_monitoring_effect(
 ) -> MonitoringEffectResult:
     """Оценка net на выгрузке.
 
-    expected_psr = precision × Σ_I (ОД_к_выплате × k + e_fee)
-    cost         = Σ_I СуммаПлатежа
+    expected_psr = precision × Σ_I (ОД_заявлено × k + e_fee)
+    cost         = Σ_I СуммаКВыплате
     net          = expected_psr − cost
 
     ``paid_col`` — устаревший алиас для ``od_col``.
@@ -584,16 +598,15 @@ def estimate_monitoring_effect(
     if od_col is None:
         od_col = paid_col
     if od_col is None:
-        od_col = "СуммаОсновногоДолгаКВыплате"
+        od_col = "СуммаОсновногоДолгаЗаявлено"
     if cost_col is None:
-        cost_col = "СуммаПлатежа"
+        cost_col = "СуммаКВыплате"
 
     od_name = resolve_paid_column(df, od_col)
     try:
         cost_name = resolve_paid_column(df, cost_col)
     except KeyError:
-        # если нет СуммаПлатежа — fallback на алиас payment
-        cost_name = resolve_column(df, "payment") or od_name
+        cost_name = resolve_column(df, "to_pay") or resolve_column(df, "payment") or od_name
 
     mask = intervention_mask(df)
     od = _to_numeric(df[od_name]).fillna(0.0)
@@ -717,6 +730,7 @@ _FILIALS = (
     "Омский",
     "Владимирский",
     "Магнитогорский",
+    "Марийский",
 )
 
 
@@ -726,11 +740,19 @@ def build_synthetic_claims_excel(
     seed: int = 42,
     intervention_rate: float = 0.12,
 ) -> pd.DataFrame:
-    """Синтетика с денежными identity и редкими интервенциями I."""
+    """Синтетика под общие фильтры и I = вызов модели ∧ выплата по модели."""
     if n_rows < 50:
         raise ValueError("n_rows >= 50")
     rng = np.random.default_rng(seed)
-    filial = rng.choice(_FILIALS, size=n_rows)
+    # Большинство — разрешённые филиалы; немного исключённых для проверки фильтра.
+    allowed_filials = [f for f in _FILIALS if "Архангельск" not in f and "Марийск" not in f]
+    excluded_filials = [f for f in _FILIALS if f not in allowed_filials]
+    filial = np.array(
+        [
+            rng.choice(excluded_filials if rng.random() < 0.08 else allowed_filials)
+            for _ in range(n_rows)
+        ]
+    )
     zones = np.array([f"Зона ф-ла {f}" for f in filial])
     incident = 11_000_000 + rng.integers(0, 900_000, size=n_rows)
 
@@ -739,45 +761,63 @@ def build_synthetic_claims_excel(
     )
     apply = event + pd.to_timedelta(rng.integers(1, 15, size=n_rows), unit="D")
 
-    # Модель сказала платить + выплата по модели (шире, чем полное I)
-    n_model = max(2, int(round(n_rows * intervention_rate * 1.8)))
-    model_idx = rng.choice(n_rows, size=min(n_model, n_rows), replace=False)
-    result = np.zeros(n_rows, dtype=int)
-    model_pay = np.zeros(n_rows, dtype=int)
-    result[model_idx] = 1
-    model_pay[model_idx] = 1
+    # Базовые фильтры: почти все строки проходят; чуть шума.
+    auto_obj = np.ones(n_rows, dtype=int)
+    auto_obj[rng.choice(n_rows, size=max(1, n_rows // 25), replace=False)] = 0
+    loss_status = np.array(["Первичный"] * n_rows, dtype=object)
+    loss_status[rng.choice(n_rows, size=max(1, n_rows // 30), replace=False)] = "Повторный"
 
-    # Среди «с моделью» соглашаются не все — иначе agreement_share всегда 100%
-    agree_rate = 0.55
-    agreement = np.zeros(n_rows, dtype=int)
-    with_model = (result == 1) & (model_pay == 1)
-    agreement[with_model] = (rng.random(int(with_model.sum())) < agree_rate).astype(int)
-
-    is_i = with_model & (agreement == 1)
-    n_i = int(is_i.sum())
-
-    # Модель вызвана шире, чем полное I
-    model_call = np.zeros(n_rows, dtype=int)
-    model_call[result == 1] = 1
-    # ещё кусок «вызвали, но не доплатили»
-    extra_call = rng.choice(
-        np.where(model_call == 0)[0],
-        size=min(max(n_i, 1) * 2, int((model_call == 0).sum())),
-        replace=False,
+    forms = np.array(
+        rng.choice(
+            ["Денежная", "Ремонт", "Соглашение", "Отказ"],
+            size=n_rows,
+            p=[0.45, 0.30, 0.18, 0.07],
+        )
     )
+
+    # I: вызов модели + выплата по модели (на разрешённых строках)
+    n_model = max(2, int(round(n_rows * intervention_rate * 1.8)))
+    model_call = np.zeros(n_rows, dtype=int)
+    model_pay = np.zeros(n_rows, dtype=int)
+    result = np.zeros(n_rows, dtype=int)
+    candidate = np.array(
+        [
+            (f in allowed_filials)
+            and (a == 1)
+            and str(s).casefold().startswith("первич")
+            and any(x in str(form).casefold() for x in ("денежн", "ремонт", "соглашен"))
+            for f, a, s, form in zip(filial, auto_obj, loss_status, forms)
+        ]
+    )
+    cand_idx = np.where(candidate)[0]
+    if len(cand_idx) == 0:
+        cand_idx = np.arange(n_rows)
+    pick = rng.choice(cand_idx, size=min(n_model, len(cand_idx)), replace=False)
+    model_call[pick] = 1
+    model_pay[pick] = 1
+    result[pick] = 1
+    # часть — вызвали модель, но без выплаты по модели
+    extra_call = rng.choice(
+        np.where((model_call == 0) & candidate)[0],
+        size=min(max(len(pick), 1), int(((model_call == 0) & candidate).sum()) or 1),
+        replace=False,
+    ) if ((model_call == 0) & candidate).any() else np.array([], dtype=int)
     model_call[extra_call] = 1
 
-    # Претензии чуть чаще при вызове модели (демо lift)
-    pret = (rng.random(n_rows) < np.where(model_call == 1, 0.08, 0.03)).astype(int)
-    # соглашения чаще при вызове модели (вне положительного решения)
+    with_model = (model_call == 1) & (model_pay == 1)
+    is_i = with_model & candidate
+    agreement = np.zeros(n_rows, dtype=int)
+    agreement[with_model] = (rng.random(int(with_model.sum())) < 0.55).astype(int)
     agreement_extra = (model_call == 1) & ~with_model & (rng.random(n_rows) < 0.20)
     agreement = np.where(agreement | agreement_extra, 1, agreement)
-    is_i = (result == 1) & (model_pay == 1) & (agreement == 1)
+
+    pret = (rng.random(n_rows) < np.where(model_call == 1, 0.08, 0.03)).astype(int)
+    fu_flag = (rng.random(n_rows) < np.where(pret == 1, 0.25, 0.02)).astype(int)
+    court_flag = (rng.random(n_rows) < np.where(fu_flag == 1, 0.35, 0.01)).astype(int)
 
     recommended = np.zeros(n_rows, dtype=float)
-    recommended[result == 1] = rng.uniform(15_000, 120_000, size=int((result == 1).sum()))
+    recommended[with_model] = rng.uniform(15_000, 120_000, size=int(with_model.sum()))
 
-    # Основные суммы убытка
     wear = rng.uniform(5_000, 200_000, size=n_rows)
     other = np.where(rng.random(n_rows) < 0.15, rng.uniform(1_000, 40_000, size=n_rows), 0.0)
     to_pay = wear + other
@@ -788,23 +828,15 @@ def build_synthetic_claims_excel(
     claimed_evac = np.zeros(n_rows)
     claimed_storage = np.zeros(n_rows)
     od_claimed = claimed_od + claimed_uts + claimed_evac + claimed_storage
-
     od_to_pay = claimed_od * rng.uniform(0.4, 1.0, size=n_rows)
-    # На I: выплата клиенту = рекомендованная (identity для сверки)
+
     payment[is_i] = recommended[is_i]
     od_to_pay[is_i] = recommended[is_i]
     to_pay[is_i] = recommended[is_i]
+    od_claimed[is_i] = recommended[is_i] * rng.uniform(0.9, 1.3, size=int(is_i.sum()))
     wear[is_i] = recommended[is_i] * 0.85
     other[is_i] = recommended[is_i] * 0.15
-
-    forms = np.array(
-        rng.choice(
-            ["Денежная", "Ремонт", "Соглашение", "Договорная", "Отказ"],
-            size=n_rows,
-            p=[0.45, 0.25, 0.12, 0.08, 0.10],
-        )
-    )
-    forms[is_i] = "Соглашение"
+    forms[is_i] = rng.choice(["Денежная", "Ремонт", "Соглашение"], size=int(is_i.sum()))
 
     products = rng.choice(
         ["Традиционное ОСАГО", "Прямое ОСАГО (с 1 марта 2009)"],
@@ -847,11 +879,15 @@ def build_synthetic_claims_excel(
                 ["Физ. Лицо", "Юр. Лицо"], size=n_rows, p=[0.85, 0.15]
             ),
             "ФормаВозмещения": forms,
+            "УбытокСтатус": loss_status,
+            "ТипОбъектаАвтотранспорт": auto_obj,
             "РезультатПроверки": result,
             "ВызовМодельСутяжность": model_call,
             "Заключено соглашение": agreement,
             "Выплата по модели в Инциденте": model_pay,
-            "Претензия": pret,
+            "ЕстьПретензияВИнциденте": pret,
+            "Обращение к ФУ": fu_flag,
+            "Обращение к суду": court_flag,
             "Сумма рекомендованная к доплате по модулю": recommended,
             "СуммаОсновногоДолгаЗаявлено": od_claimed,
             "СуммаОсновногоДолгаКВыплате": od_to_pay,
@@ -862,12 +898,9 @@ def build_synthetic_claims_excel(
             "СуммаОД": od_to_pay,
             "СуммаОУ": payment,
             "Сумма выплаты по претензии": 0.0,
-            "Кол-во претензий": 0,
-            "Обращение в ФУ": 0,
+            "Кол-во претензий": pret,
             "Сумма выплат по ФУ": 0.0,
-            "Обращение в суд": 0,
             "Сумма выплаты по суду": 0.0,
-            "УбытокСтатус": "Первичный",
             "ОсновныеВыплатыЗаявлено_Основной долг": claimed_od,
             "ОсновныеВыплатыЗаявлено_Утрата товарной стоимости": claimed_uts,
             "ОсновныеВыплатыЗаявлено_Затраты на эвакуацию ТС": claimed_evac,
@@ -901,9 +934,11 @@ __all__ = [
     "RETRO_DATE_CANDIDATES",
     "RetroPriors",
     "agreement_mask",
+    "analytics_base_mask",
     "build_synthetic_claims_excel",
     "compare_agreement_pretension_by_model",
     "compute_retro_priors",
+    "court_mask",
     "default_demo_priors",
     "estimate_monitoring_effect",
     "extrapolate_to_year",
@@ -911,6 +946,7 @@ __all__ = [
     "format_money",
     "format_sensitivity_table",
     "format_summary_dict",
+    "fu_mask",
     "infer_model_start",
     "intervention_mask",
     "load_excel",
