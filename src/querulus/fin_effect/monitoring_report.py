@@ -28,7 +28,7 @@ body {
   color: var(--ink);
   background: var(--bg);
 }
-.page { max-width: 980px; margin: 0 auto; padding: 1.2rem 1.1rem 2rem; }
+.page { max-width: 1180px; margin: 0 auto; padding: 1.2rem 1.1rem 2rem; }
 h1 { margin: 0 0 0.3rem; font-size: 1.45rem; color: var(--accent); }
 h2 { margin: 1.35rem 0 0.4rem; font-size: 1.12rem; color: var(--accent); }
 .sub { color: var(--muted); margin: 0 0 0.85rem; font-size: 0.92rem; }
@@ -58,7 +58,11 @@ table {
   border-collapse: collapse;
   background: var(--surface);
   border: 1px solid var(--line);
-  font-size: 0.88rem;
+  font-size: 0.82rem;
+  margin: 0.35rem 0 0.5rem;
+}
+.scroll {
+  overflow-x: auto;
   margin: 0.35rem 0 0.5rem;
 }
 th, td {
@@ -82,13 +86,49 @@ pre {
   margin: 0.35rem 0;
 }
 .formula {
-  background: var(--soft);
+  background: linear-gradient(135deg, var(--soft), #f7fbfb);
+  border: 1px solid #c7dfe1;
   border-left: 4px solid var(--accent);
-  padding: 0.55rem 0.75rem;
-  margin: 0.4rem 0;
-  font-family: Consolas, "Courier New", monospace;
-  white-space: pre-wrap;
-  font-size: 0.84rem;
+  border-radius: 0 8px 8px 0;
+  padding: 0.75rem 0.9rem;
+  margin: 0.55rem 0;
+  overflow-x: auto;
+}
+.formula-title {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.35rem;
+  text-transform: uppercase;
+}
+.equation {
+  color: #153f43;
+  font-family: Cambria, "Times New Roman", serif;
+  font-size: 1.05rem;
+  line-height: 1.65;
+  white-space: nowrap;
+}
+.equation strong { color: var(--accent); }
+.equation .op { padding: 0 0.2em; }
+.equation-note {
+  border-top: 1px solid #d4e6e7;
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 0.45rem;
+  padding-top: 0.4rem;
+}
+.conditions { display: grid; gap: 0.3rem; }
+.condition {
+  align-items: baseline;
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: minmax(130px, auto) 1fr;
+}
+.condition b { color: var(--accent); font-family: Consolas, monospace; }
+@media (max-width: 620px) {
+  .condition { grid-template-columns: 1fr; gap: 0; }
+  .equation { font-size: 0.95rem; }
 }
 ul { margin: 0.3rem 0 0.45rem 1.15rem; padding: 0; }
 li { margin: 0.15rem 0; }
@@ -97,6 +137,12 @@ li { margin: 0.15rem 0; }
 
 # Семантика только ключевых колонок (без повтора фильтров/формул).
 COLUMN_SEMANTICS: list[dict[str, str]] = [
+    {
+        "column": "РезультатПроверки",
+        "source": "Case _Fld11690 → 0/1/−100",
+        "meaning": "ручеёк: 0/1 в модели, −100 вне",
+        "example": "1",
+    },
     {
         "column": "СуммаОсновногоДолгаЗаявлено",
         "source": "РасчетВыплаты._Fld18877",
@@ -164,9 +210,23 @@ def _df_to_html_table(df: pd.DataFrame) -> str:
     if df is None or getattr(df, "empty", True):
         return "<p class='muted'>(нет данных)</p>"
     try:
-        return df.to_html(index=False, border=0, escape=True)
+        html = df.to_html(index=False, border=0, escape=True)
+        return f'<div class="scroll">{html}</div>'
     except Exception:
         return f"<pre>{escape(str(df))}</pre>"
+
+
+def _analytics_block(
+    analytics: dict[str, Any] | None,
+    key: str,
+    caption: str,
+) -> str:
+    if not analytics or key not in analytics:
+        return ""
+    frame = analytics[key]
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return f"<p class='muted'>{escape(caption)}: нет данных</p>"
+    return f"<p><b>{escape(caption)}</b></p>{_df_to_html_table(frame)}"
 
 
 def _segment_example(segments: Any | None) -> str:
@@ -224,6 +284,7 @@ def build_monitoring_html(
     annual: dict[str, Any] | None = None,
     segments: Any | None = None,
     cost_reconcile: Any | None = None,
+    analytics: dict[str, Any] | None = None,
     source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
     title: str = "Мониторинг фин. эффекта Querulus",
 ) -> str:
@@ -282,11 +343,71 @@ def build_monitoring_html(
     seg_block = ""
     if segments is not None:
         seg_block = f"""
-        <h2>5. Результат долей (этот прогон)</h2>
+        <h2>5. Результат долей (этот прогон, main / ручеёк)</h2>
         <div class="card">
           {_df_to_html_table(segments)}
         </div>
         """
+
+    ext = ""
+    if analytics:
+        ext = f"""
+  <h2>7. Филиалы: использование модели</h2>
+  <div class="card">
+    <p class="muted">База: форма/первичный/авто; филиал не режем (включая Арх/Марийск).
+    with_model = вызов ∧ выплата по модели; ручеёк = доли РезультатПроверки 0/1/−100.</p>
+    {_analytics_block(analytics, "filial_usage", "Все филиалы")}
+  </div>
+
+  <h2>8. Филиалы: доли путей (main)</h2>
+  <div class="card">
+    <p class="muted">Только ручеёк (без Арх/Марийск). Сегменты with_model / without_model.</p>
+    {_analytics_block(analytics, "filial_shares_main", "Доли по филиалам")}
+  </div>
+
+  <h2>9. Ручеёк: РезультатПроверки</h2>
+  <div class="card">
+    <div class="formula">
+      <div class="formula-title">Сегментация ручейка</div>
+      <div class="conditions">
+        <div class="condition"><b>model_0 / model_1</b><span>РезультатПроверки ∈ {{0, 1}} — в модели</span></div>
+        <div class="condition"><b>out_of_model</b><span>РезультатПроверки = −100 — вне модели</span></div>
+        <div class="condition"><b>in_model_0_1</b><span>model_0 ∪ model_1</span></div>
+      </div>
+    </div>
+    {_analytics_block(analytics, "result_distribution_main", "Распределение + выплаты (main)")}
+  </div>
+
+  <h2>10. Выплаты с моделью и без (main)</h2>
+  <div class="card">
+    <p class="muted">with_model = вызов∧выплата; rucheek_* — по РезультатПроверки.
+    Метрики: n, sum, mean, median, p25, p75, min, max.</p>
+    {_analytics_block(analytics, "payments_main", "Выплаты")}
+  </div>
+
+  <h2>11. Вызов модели без использования (main)</h2>
+  <div class="card">
+    <div class="formula">
+      <div class="formula-title">Вызвали, но не использовали</div>
+      <div class="equation"><strong>called_not_used</strong> <span class="op">=</span>
+      (ВызовМодельСутяжность = 1) <span class="op">∧</span>
+      (Выплата по модели в Инциденте ≠ 1)</div>
+      <div class="equation-note">Расчёт выполняется внутри B<sub>main</sub>.</div>
+    </div>
+    {_analytics_block(analytics, "called_not_used_main", "Итого и по филиалам")}
+  </div>
+
+  <h2>12. Пилот Архангельск / Марийск (~100% модель)</h2>
+  <div class="card">
+    <p class="muted">Тот же набор метрик на filial_scope=pilot (только эти филиалы).</p>
+    {_analytics_block(analytics, "segments_pilot", "Доли путей (агрегат)")}
+    {_analytics_block(analytics, "filial_usage_pilot", "Использование модели")}
+    {_analytics_block(analytics, "filial_shares_pilot", "Доли по филиалам")}
+    {_analytics_block(analytics, "result_distribution_pilot", "Ручеёк / −100")}
+    {_analytics_block(analytics, "payments_pilot", "Выплаты")}
+    {_analytics_block(analytics, "called_not_used_pilot", "Вызов без использования")}
+  </div>
+"""
 
     return f"""<!DOCTYPE html>
 <html lang="ru">
@@ -314,31 +435,38 @@ def build_monitoring_html(
 
   <h2>1. Контуры фильтрации (один раз)</h2>
   <div class="card">
-    <div class="formula">B (база аналитики) =
-  Филиал ∉ {{Архангельский, Марийский}}
-  ∧ ФормаВозмещения ∈ {{денежная, ремонт, соглашение}}
-  ∧ УбытокСтатус = первичный
-  ∧ ТипОбъектаАвтотранспорт = 1
-
-I (финэффект) = B ∧ ВызовМодельСутяжность=1 ∧ Выплата по модели в Инциденте=1
-
-W (with_model, доли) = B ∧ ВызовМодельСутяжность=1 ∧ Выплата по модели в Инциденте=1
-  (= I по флагам модели; без требования «соглашение=1»)
-U (without_model) = B \\ W</div>
+    <div class="formula">
+      <div class="formula-title">Контуры выборок</div>
+      <div class="conditions">
+        <div class="condition"><b>B<sub>main</sub></b><span>базовые фильтры; филиал ∉ {{Архангельский, Марийский}} · ручеёк ~50%</span></div>
+        <div class="condition"><b>B<sub>pilot</sub></b><span>базовые фильтры; филиал ∈ {{Архангельский, Марийский}} · модель ~100%</span></div>
+        <div class="condition"><b>I</b><span>B<sub>main</sub> ∩ {{вызов модели = 1}} ∩ {{выплата по модели = 1}}</span></div>
+        <div class="condition"><b>W</b><span>B ∩ {{вызов модели = 1}} ∩ {{выплата по модели = 1}}</span></div>
+        <div class="condition"><b>U</b><span>B ∖ W</span></div>
+      </div>
+      <div class="equation-note">Базовые фильтры: форма возмещения ∈ {{денежная, ремонт, соглашение}}; первичный убыток; автотранспорт = 1.</div>
+    </div>
     <p class="muted">ФУ/суд для долей: сначала
     <code>ЕстьОбращениеКФУ/СудуВИнциденте = max(флаг) по НомерИнцидент</code>,
     иначе на первичных строках loss-флаги почти всегда 0.
-    <code>p_fu</code>/<code>p_court</code> для e_fee — только с ретро, не с витрины.</p>
+    <code>p_fu</code>/<code>p_court</code> для e_fee — только с ретро, не с витрины.
+    Ретро-окно по умолчанию: 2 года до <code>2025-06-30</code>.</p>
   </div>
 
   <h2>2. Финэффект</h2>
   <div class="card">
-    <div class="formula">e_fee = p_fu×100_000 + p_court×15_000
-expected_psr = precision × ( Σ_I ОД_заявлено×k + n_I×e_fee )
-cost = Σ_I {escape(effect.cost_column)}
-net = expected_psr − cost
-
-ОД = {escape(effect.od_column)}</div>
+    <div class="formula">
+      <div class="formula-title">Расчёт ожидаемого эффекта</div>
+      <div class="equation"><strong>e<sub>fee</sub></strong> <span class="op">=</span>
+      p<sub>fu</sub> × 100 000 <span class="op">+</span> p<sub>court</sub> × 15 000</div>
+      <div class="equation"><strong>expected_psr</strong> <span class="op">=</span>
+      precision × (Σ<sub>i∈I</sub> OD<sub>i</sub> × k <span class="op">+</span> n<sub>I</sub> × e<sub>fee</sub>)</div>
+      <div class="equation"><strong>cost</strong> <span class="op">=</span>
+      Σ<sub>i∈I</sub> {escape(effect.cost_column)}<sub>i</sub></div>
+      <div class="equation"><strong>net</strong> <span class="op">=</span>
+      expected_psr <span class="op">−</span> cost</div>
+      <div class="equation-note">OD = <code>{escape(effect.od_column)}</code>; I — контур финэффекта.</div>
+    </div>
     <p><b>Пример этого прогона:</b> {escape(_fin_effect_example(effect))}</p>
   </div>
 
@@ -346,20 +474,24 @@ net = expected_psr − cost
 
   <h2>4. Доли соглашений / претензий / ФУ / суда</h2>
   <div class="card">
-    <div class="formula">на сегменте S ∈ {{W, U}}:
-  agreement_share(S)     = mean(Заключено соглашение | S)
-  pretension_share(S)    = mean(ЕстьПретензияВИнциденте | S)
-  fu_incident_share(S)   = mean(ЕстьОбращениеКФУВИнциденте | S)
-  court_incident_share(S)= mean(ЕстьОбращениеКСудуВИнциденте | S)
-
-lift_pp  = share(W) − share(U)
-lift_rel = share(W)/share(U) − 1</div>
+    <div class="formula">
+      <div class="formula-title">Доли на сегменте S ∈ {{W, U}}</div>
+      <div class="equation"><strong>share<sub>event</sub>(S)</strong> <span class="op">=</span>
+      n(event = 1 ∩ S) / n(S)</div>
+      <div class="equation"><strong>lift<sub>pp</sub></strong> <span class="op">=</span>
+      share(W) <span class="op">−</span> share(U)</div>
+      <div class="equation"><strong>lift<sub>rel</sub></strong> <span class="op">=</span>
+      share(W) / share(U) <span class="op">−</span> 1</div>
+      <div class="equation-note">event ∈ {{соглашение, претензия, ФУ, суд}}. ФУ и суд агрегированы на уровень инцидента.</div>
+    </div>
     <p><b>Пример этого прогона:</b> {escape(_segment_example(segments))}</p>
   </div>
 
   {seg_block}
 
-  <h2>6. Колонки витрины (справка)</h2>
+  {ext}
+
+  <h2>13. Колонки витрины (справка)</h2>
   <div class="card">
     <table>
       <thead>
@@ -368,7 +500,8 @@ lift_rel = share(W)/share(U) − 1</div>
       <tbody>{semantics_rows}</tbody>
     </table>
     <p class="muted">В витрине нет отдельной <code>СуммаВыплаты</code>: она уже лежит
-    под именем <code>СуммаКВыплате</code>.</p>
+    под именем <code>СуммаКВыплате</code>.
+    <code>РезультатПроверки</code>: 0/1 — ручеёк, −100 — вне модели.</p>
   </div>
 </div>
 </body>
@@ -383,6 +516,7 @@ def write_monitoring_html(
     annual: dict[str, Any] | None = None,
     segments: Any | None = None,
     cost_reconcile: Any | None = None,
+    analytics: dict[str, Any] | None = None,
     source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
     title: str = "Мониторинг фин. эффекта Querulus",
 ) -> Path:
@@ -394,6 +528,7 @@ def write_monitoring_html(
         annual=annual,
         segments=segments,
         cost_reconcile=cost_reconcile,
+        analytics=analytics,
         source_label=source_label,
         title=title,
     )

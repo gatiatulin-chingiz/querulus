@@ -7,12 +7,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Literal, Sequence
 
 import numpy as np
 import pandas as pd
 
 DEFAULT_TOLERANCE = 1.0
+
+# main = без Арх/Марийск (ручеек ~50%); pilot = только они (~100%); all = без фильтра филиала.
+FilialScope = Literal["main", "pilot", "all"]
 
 # Алиасы заголовков со скринов (имена плывут: «к доплате» / «к выплате», «в инциденте»).
 COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
@@ -479,20 +482,42 @@ def profile_columns(
     return pd.DataFrame(rows)
 
 
-def analytics_base_mask(df: pd.DataFrame) -> pd.Series:
-    """Общие фильтры для всей Excel-аналитики.
+def excluded_filial_mask(df: pd.DataFrame) -> pd.Series:
+    """True на Архангельский / Марийский (и алиасы по EXCLUDED_FILIAL_NEEDLES)."""
+    filial_col = resolve_column(df, "filial")
+    if filial_col is None:
+        return pd.Series(False, index=df.index)
+    text = df[filial_col].fillna("").astype(str).str.casefold()
+    excluded = pd.Series(False, index=df.index)
+    for needle in EXCLUDED_FILIAL_NEEDLES:
+        excluded = excluded | text.str.contains(needle, na=False)
+    return excluded
+
+
+def analytics_base_mask(
+    df: pd.DataFrame,
+    *,
+    filial_scope: FilialScope = "main",
+) -> pd.Series:
+    """Общие фильтры для Excel/витрина-аналитики.
+
+    ``filial_scope``:
+      - ``main`` — без Архангельского/Марийского (ручеек);
+      - ``pilot`` — только Архангельский/Марийский (~100% модель);
+      - ``all`` — филиал не фильтруем.
 
     Если колонка отсутствует — условие по ней не применяется (pass-through).
     """
     mask = pd.Series(True, index=df.index)
 
-    filial_col = resolve_column(df, "filial")
-    if filial_col is not None:
-        text = df[filial_col].fillna("").astype(str).str.casefold()
-        excluded = pd.Series(False, index=df.index)
-        for needle in EXCLUDED_FILIAL_NEEDLES:
-            excluded = excluded | text.str.contains(needle, na=False)
-        mask = mask & ~excluded
+    if filial_scope != "all":
+        excluded = excluded_filial_mask(df)
+        if filial_scope == "main":
+            mask = mask & ~excluded
+        elif filial_scope == "pilot":
+            mask = mask & excluded
+        else:
+            raise ValueError(f"Unknown filial_scope={filial_scope!r}")
 
     form_col = resolve_column(df, "refund_form")
     if form_col is not None:
@@ -517,15 +542,19 @@ def analytics_base_mask(df: pd.DataFrame) -> pd.Series:
     return mask
 
 
-def intervention_mask(df: pd.DataFrame) -> pd.Series:
+def intervention_mask(
+    df: pd.DataFrame,
+    *,
+    filial_scope: FilialScope = "main",
+) -> pd.Series:
     """Контур финэффекта I: общие фильтры ∧ вызов модели ∧ выплата по модели.
 
-    Общие: филиал (не Архангельский/Марийский), ФормаВозмещения ∈
+    Общие: филиал по ``filial_scope``, ФормаВозмещения ∈
     {денежная, ремонт, соглашение}, УбытокСтатус=первичный,
     ТипОбъектаАвтотранспорт=1.
     Дополнительно: ВызовМодельСутяжность=1 ∧ Выплата по модели в Инциденте=1.
     """
-    mask = analytics_base_mask(df)
+    mask = analytics_base_mask(df, filial_scope=filial_scope)
     for key in ("model_call", "model_payout"):
         col = resolve_column(df, key)
         if col is None:
