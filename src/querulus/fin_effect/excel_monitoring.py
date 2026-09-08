@@ -16,10 +16,17 @@ import pandas as pd
 
 from querulus.fin_effect.excel_explore import (
     COLUMN_ALIASES,
+    INCIDENT_COURT_COL,
+    INCIDENT_FU_COL,
+    VITRINA_TABLE_DEFAULT,
     _to_numeric,
     analytics_base_mask,
+    enrich_incident_path_flags,
     intervention_mask,
     load_excel,
+    load_monitoring_frame,
+    load_vitrina_mssql,
+    reconcile_cost_candidates_on_i,
     resolve_column,
 )
 
@@ -379,15 +386,20 @@ def court_mask(df: pd.DataFrame) -> pd.Series:
 
 
 def compare_agreement_pretension_by_model(df: pd.DataFrame) -> pd.DataFrame:
-    """Доли соглашений и претензий: с моделью vs без — внутри общих фильтров.
+    """Доли соглашений / претензий / ФУ / суда: с моделью vs без.
 
-    Сегмент ``with_model`` = analytics_base ∧ ВызовМодель=1 ∧ ВыплатаПоМодели=1.
-    ``without_model`` = analytics_base ∧ не with_model.
+    Сегменты внутри ``analytics_base``. ФУ и суд — **инцидентные** флаги
+    (после ``enrich_incident_path_flags``), иначе на «первичных» строках всегда 0.
     """
+    if INCIDENT_FU_COL not in df.columns or INCIDENT_COURT_COL not in df.columns:
+        df = enrich_incident_path_flags(df)
+
     base = analytics_base_mask(df)
     used = model_positive_mask(df)
     agr = agreement_mask(df)
     pret = pretension_mask(df)
+    fu = _as_bool01(df[INCIDENT_FU_COL]).astype(bool)
+    court = _as_bool01(df[INCIDENT_COURT_COL]).astype(bool)
 
     rows: list[dict[str, Any]] = []
     for label, mask in (
@@ -401,36 +413,36 @@ def compare_agreement_pretension_by_model(df: pd.DataFrame) -> pd.DataFrame:
                 "n": n,
                 "agreement_share": float(agr[mask].mean()) if n else np.nan,
                 "pretension_share": float(pret[mask].mean()) if n else np.nan,
+                "fu_incident_share": float(fu[mask].mean()) if n else np.nan,
+                "court_incident_share": float(court[mask].mean()) if n else np.nan,
             }
         )
     table = pd.DataFrame(rows)
     used_row = table.loc[table["segment"] == "with_model"].iloc[0]
     ctrl_row = table.loc[table["segment"] == "without_model"].iloc[0]
-    lift = pd.DataFrame(
-        [
-            {
-                "segment": "lift_pp (with - without)",
-                "n": np.nan,
-                "agreement_share": used_row["agreement_share"] - ctrl_row["agreement_share"],
-                "pretension_share": used_row["pretension_share"] - ctrl_row["pretension_share"],
-            },
-            {
-                "segment": "lift_rel (with / without - 1)",
-                "n": np.nan,
-                "agreement_share": (
-                    used_row["agreement_share"] / ctrl_row["agreement_share"] - 1.0
-                    if ctrl_row["agreement_share"] and ctrl_row["agreement_share"] > 0
-                    else np.nan
-                ),
-                "pretension_share": (
-                    used_row["pretension_share"] / ctrl_row["pretension_share"] - 1.0
-                    if ctrl_row["pretension_share"] and ctrl_row["pretension_share"] > 0
-                    else np.nan
-                ),
-            },
-        ]
+
+    def _lift_pp(a: float, b: float) -> float:
+        if pd.isna(a) or pd.isna(b):
+            return np.nan
+        return float(a - b)
+
+    def _lift_rel(a: float, b: float) -> float:
+        if pd.isna(a) or pd.isna(b) or not b:
+            return np.nan
+        return float(a / b - 1.0)
+
+    share_cols = (
+        "agreement_share",
+        "pretension_share",
+        "fu_incident_share",
+        "court_incident_share",
     )
-    return pd.concat([table, lift], ignore_index=True)
+    lift_pp = {"segment": "lift_pp (with - without)", "n": np.nan}
+    lift_rel = {"segment": "lift_rel (with / without - 1)", "n": np.nan}
+    for col in share_cols:
+        lift_pp[col] = _lift_pp(used_row[col], ctrl_row[col])
+        lift_rel[col] = _lift_rel(used_row[col], ctrl_row[col])
+    return pd.concat([table, pd.DataFrame([lift_pp, lift_rel])], ignore_index=True)
 
 
 def resolve_effect_date_series(df: pd.DataFrame) -> pd.Series:
@@ -756,7 +768,8 @@ def build_synthetic_claims_excel(
         ]
     )
     zones = np.array([f"Зона ф-ла {f}" for f in filial])
-    incident = 11_000_000 + rng.integers(0, 900_000, size=n_rows)
+    # Часть убытков делит инцидент — чтобы ФУ/суд на одном loss поднялись на весь инцидент.
+    incident = 11_000_000 + rng.integers(0, max(n_rows // 2, 10), size=n_rows)
 
     event = pd.to_datetime("2024-03-01") + pd.to_timedelta(
         rng.integers(0, 120, size=n_rows), unit="D"
@@ -857,7 +870,7 @@ def build_synthetic_claims_excel(
 
     df = pd.DataFrame(
         {
-            "НомерИнцидента": incident,
+            "НомерИнцидент": incident,
             "ЗонаУрегулирования": zones,
             "Филиал": filial,
             "ДатаЗаявления": apply,
@@ -910,7 +923,7 @@ def build_synthetic_claims_excel(
             "ОсновныеВыплатыСуммаОплаченоДолиВыплата": od_to_pay,
         }
     )
-    return df
+    return enrich_incident_path_flags(df)
 
 
 def write_synthetic_claims_excel(
@@ -932,10 +945,13 @@ __all__ = [
     "COLUMN_ALIASES",
     "COURT_FEE_DEFAULT",
     "FU_FEE_DEFAULT",
+    "INCIDENT_COURT_COL",
+    "INCIDENT_FU_COL",
     "MonitoringEffectResult",
     "RETRO_AS_OF_DEFAULT",
     "RETRO_DATE_CANDIDATES",
     "RetroPriors",
+    "VITRINA_TABLE_DEFAULT",
     "agreement_mask",
     "analytics_base_mask",
     "build_synthetic_claims_excel",
@@ -943,6 +959,7 @@ __all__ = [
     "compute_retro_priors",
     "court_mask",
     "default_demo_priors",
+    "enrich_incident_path_flags",
     "estimate_monitoring_effect",
     "extrapolate_to_year",
     "filter_retro_lookback",
@@ -953,10 +970,13 @@ __all__ = [
     "infer_model_start",
     "intervention_mask",
     "load_excel",
+    "load_monitoring_frame",
     "load_retro_priors",
+    "load_vitrina_mssql",
     "model_positive_mask",
     "model_used_mask",
     "pretension_mask",
+    "reconcile_cost_candidates_on_i",
     "resolve_paid_column",
     "resolve_retro_date_column",
     "save_retro_priors",

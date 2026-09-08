@@ -20,229 +20,244 @@ body {
 }
 .page { max-width: 980px; margin: 0 auto; padding: 1.2rem 1.1rem 2rem; }
 h1 { margin: 0 0 0.3rem; font-size: 1.45rem; color: var(--accent); }
-h2 { margin: 1.4rem 0 0.45rem; font-size: 1.15rem; color: var(--accent); }
-h3 { margin: 1rem 0 0.35rem; font-size: 1rem; }
-.sub { color: var(--muted); margin: 0 0 1rem; }
+h2 { margin: 1.35rem 0 0.4rem; font-size: 1.12rem; color: var(--accent); }
+.sub { color: var(--muted); margin: 0 0 0.85rem; font-size: 0.92rem; }
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 0.85rem 1rem;
-  margin: 0.6rem 0;
+  padding: 0.75rem 0.95rem;
+  margin: 0.45rem 0;
 }
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 0.5rem;
-  margin: 0.6rem 0;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.45rem;
+  margin: 0.5rem 0 0.7rem;
 }
 .stat {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 6px;
-  padding: 0.55rem 0.65rem;
+  padding: 0.5rem 0.6rem;
 }
-.stat span { display: block; color: var(--muted); font-size: 0.78rem; }
+.stat span { display: block; color: var(--muted); font-size: 0.76rem; }
 .stat b { font-variant-numeric: tabular-nums; }
 table {
   width: 100%;
   border-collapse: collapse;
   background: var(--surface);
   border: 1px solid var(--line);
-  font-size: 0.9rem;
-  margin: 0.4rem 0 0.7rem;
+  font-size: 0.88rem;
+  margin: 0.35rem 0 0.5rem;
 }
 th, td {
   border: 1px solid var(--line);
-  padding: 0.4rem 0.5rem;
+  padding: 0.35rem 0.45rem;
   text-align: left;
   vertical-align: top;
 }
 th { background: var(--soft); color: var(--accent); }
 code, pre {
   font-family: Consolas, "Courier New", monospace;
-  font-size: 0.84rem;
+  font-size: 0.82rem;
 }
 pre {
   background: var(--code);
   border: 1px solid var(--line);
   border-radius: 6px;
-  padding: 0.75rem 0.85rem;
+  padding: 0.65rem 0.75rem;
   overflow-x: auto;
   white-space: pre-wrap;
+  margin: 0.35rem 0;
 }
 .formula {
   background: var(--soft);
   border-left: 4px solid var(--accent);
-  padding: 0.65rem 0.85rem;
-  margin: 0.5rem 0;
+  padding: 0.55rem 0.75rem;
+  margin: 0.4rem 0;
   font-family: Consolas, "Courier New", monospace;
   white-space: pre-wrap;
+  font-size: 0.84rem;
 }
-ul { margin: 0.35rem 0 0.6rem 1.2rem; }
-.muted { color: var(--muted); }
+ul { margin: 0.3rem 0 0.45rem 1.15rem; padding: 0; }
+li { margin: 0.15rem 0; }
+.muted { color: var(--muted); font-size: 0.9rem; }
 </style>
 </head>
 <body>
 <div class="page">
   <h1>Мониторинг фин. эффекта Querulus</h1>
-  <p class="sub">Сгенерировано 2026-09-07 14:41. Это оценка без зрелого факта ПСР на выгрузке.</p>
+  <p class="sub">2026-09-08 13:05 · источник <code>synthetic</code> ·
+  ретро-окно окно не задано · precision=0.55, k=1.3500,
+  p_fu=30.00%, p_court=25.00%, p_pret=45.00%,
+  e_fee=33 750.00, psr_share=0.00%</p>
 
   <div class="grid">
-    <div class="stat"><span>Интервенции I</span><b>32</b></div>
-    <div class="stat"><span>expected_psr</span><b>2 408 834.28</b></div>
-    <div class="stat"><span>cost (СуммаПлатежа)</span><b>2 276 420.91</b></div>
-    <div class="stat"><span>net</span><b>132 413.37</b></div>
+    <div class="stat"><span>n_I</span><b>65</b></div>
+    <div class="stat"><span>expected_psr</span><b>5 156 236.43</b></div>
+    <div class="stat"><span>cost</span><b>4 837 596.04</b></div>
+    <div class="stat"><span>net</span><b>318 640.40</b></div>
   </div>
+  
 
-  <h2>1. Что считаем</h2>
+  <h2>1. Контуры фильтрации (один раз)</h2>
   <div class="card">
-    <p><b>Интервенция I</b> — общие фильтры аналитики плюс вызов модели и выплата по модели:</p>
-    <div class="formula">общие:
+    <div class="formula">B (база аналитики) =
   Филиал ∉ {Архангельский, Марийский}
   ∧ ФормаВозмещения ∈ {денежная, ремонт, соглашение}
   ∧ УбытокСтатус = первичный
   ∧ ТипОбъектаАвтотранспорт = 1
 
-I = общие
-  ∧ ВызовМодельСутяжность = 1
-  ∧ Выплата по модели в Инциденте = 1</div>
-    <p>На этих кейсах оцениваем, сколько ПСР+взносов мы <i>ожидаемо избежали</i>,
-    и вычитаем фактическую сумму к выплате.</p>
+I (финэффект) = B ∧ ВызовМодельСутяжность=1 ∧ Выплата по модели в Инциденте=1
+
+W (with_model, доли) = B ∧ ВызовМодельСутяжность=1 ∧ Выплата по модели в Инциденте=1
+  (= I по флагам модели; без требования «соглашение=1»)
+U (without_model) = B \ W</div>
+    <p class="muted">ФУ/суд для долей: сначала
+    <code>ЕстьОбращениеКФУ/СудуВИнциденте = max(флаг) по НомерИнцидент</code>,
+    иначе на первичных строках loss-флаги почти всегда 0.
+    <code>p_fu</code>/<code>p_court</code> для e_fee — только с ретро, не с витрины.</p>
   </div>
 
-  <h2>2. Формулы</h2>
+  <h2>2. Финэффект</h2>
   <div class="card">
-    <div class="formula">e_fee = p_fu × 100_000 + p_court × 15_000
+    <div class="formula">e_fee = p_fu×100_000 + p_court×15_000
+expected_psr = precision × ( Σ_I ОД_заявлено×k + n_I×e_fee )
+cost = Σ_I СуммаПлатежа
+net = expected_psr − cost
 
-expected_psr = precision × Σ_{i ∈ I} (ОД_заявлено_i × k + e_fee)
-             = precision × ( Σ_I ОД × k  +  n_I × e_fee )
-
-cost = Σ_{i ∈ I} СуммаКВыплате_i
-
-net  = expected_psr − cost</div>
-    <ul>
-      <li><b>ОД</b> (<code>СуммаОсновногоДолгаЗаявлено</code>) — только чтобы оценить ПСР через коэффициент <code>k</code>.</li>
-      <li><b>cost</b> — факт к выплате (<code>СуммаКВыплате</code>).</li>
-      <li><b>e_fee</b> в summary — средний взнос <i>на один кейс</i>, не сумма по всем I.
-          В expected_psr входит как <code>n_I × e_fee</code>.</li>
-      <li><b>precision</b> — доля «правильных» срабатываний модели (задаётся вручную или с preds).</li>
-      <li>Флаги Excel: претензия <code>ЕстьПретензияВИнциденте</code>, ФУ <code>Обращение к ФУ</code>,
-          суд <code>Обращение к суду</code> (для долей/аналитики; e_fee по-прежнему с ретро-долей путей).</li>
-    </ul>
-  </div>
-
-  <h2>3. Что такое p_fu и p_court</h2>
-  <div class="card">
-    <p>Среди ретро-кейсов с фактом ПСР (<code>TARGET_FREQ = 1</code>) делим пути
-    (взаимоисключающе, приоритет суд → ФУ → претензия):</p>
-    <table>
-      <thead><tr><th>Доля</th><th>Смысл</th><th>Взнос в e_fee</th><th>Сейчас</th></tr></thead>
-      <tbody>
-        <tr>
-          <td><code>p_pret</code></td>
-          <td>ПСР остановился на претензии (без ФУ/иска)</td>
-          <td>0 ₽</td>
-          <td>45.00%</td>
-        </tr>
-        <tr>
-          <td><code>p_fu</code></td>
-          <td>Дошли до финансового уполномоченного, без суда</td>
-          <td>100 000 ₽</td>
-          <td>30.00%</td>
-        </tr>
-        <tr>
-          <td><code>p_court</code></td>
-          <td>Дошли до суда (иск)</td>
-          <td>15 000 ₽</td>
-          <td>25.00%</td>
-        </tr>
-      </tbody>
-    </table>
-    <p class="muted">Это не «доля всех убытков», а структура путей <b>внутри уже случившегося ПСР</b>.
-    Отдельно <code>psr_share</code> = доля кейсов с ПСР во всём окне ретро =
-    0.00% (0 / 0).</p>
-  </div>
-
-  <h2>4. Период ретро для долей и k</h2>
-  <div class="card">
-    <p>Раньше priors брались со <b>всего</b> parquet. Сейчас по умолчанию —
-    <b>последние 2 года</b> по дате T0 выплаты (<code>PAYMENT_ORDER_DATE_TIME</code>
-    или запасная дата).</p>
-    <table>
-      <thead><tr><th>Параметр</th><th>Значение</th></tr></thead>
-      <tbody>
-        <tr><td>lookback_years</td><td>2.0</td></tr>
-        <tr><td>date_column</td><td>PAYMENT_ORDER_DATE_TIME</td></tr>
-        <tr><td>окно</td><td>окно не применено (нет даты / lookback=0)</td></tr>
-        <tr><td>строк в окне</td><td>0</td></tr>
-        <tr><td>из них ПСР (TARGET_FREQ=1)</td><td>0</td></tr>
-        <tr><td>psr_share</td><td>0.00%</td></tr>
-        <tr><td>k</td><td>1.350000</td></tr>
-        <tr><td>precision</td><td>0.5500</td></tr>
-        <tr><td>e_fee (на кейс)</td><td>33 750.00</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <h2>5. Пример расчёта на этом прогоне</h2>
-  <div class="card">
-    <pre>n_I = 32
-e_fee (на 1 кейс) = p_fu×100 000.00 + p_court×15 000.00
-                 = 30.00%×100 000.00 + 25.00%×15 000.00
-                 = 33 750.00
-
-Σ_I ОД = 2 444 221.25
-Σ_I (ОД×k) = 2 444 221.25 × 1.3500 = 3 299 698.68
-Σ_I e_fee  = 32 × 33 750.00 = 1 080 000.00
-
-сырой ПСР+взносы = 3 299 698.68 + 1 080 000.00 = 4 379 698.68
-expected_psr = precision × … = 0.5500 × 4 379 698.68 = 2 408 834.28
-
-cost = Σ_I СуммаПлатежа = 2 276 420.91
-net  = expected_psr − cost = 2 408 834.28 − 2 276 420.91 = 132 413.37
-</pre>
-  </div>
-
-  <h2>6. Код</h2>
-  <div class="card">
-    <pre># ретро-приоры за последние 2 года
-priors = compute_retro_priors(retro, precision=PRECISION, lookback_years=2.0)
-
-# финэффект на Excel
-effect = estimate_monitoring_effect(df, priors,
-                                    od_col=&quot;СуммаОсновногоДолгаЗаявлено&quot;,
-                                    cost_col=&quot;СуммаКВыплате&quot;)
-# внутри:
-#   база = филиал/форма/статус/автотранспорт
-#   I = база &amp; ВызовМодельСутяжность=1 &amp; Выплата по модели=1
-#   e_fee = p_fu*100_000 + p_court*15_000
-#   expected_psr = precision * (sum(ОД_I * k) + n_I * e_fee)
-#   cost = sum(СуммаКВыплате_I)
-#   net = expected_psr - cost
-</pre>
-    <p class="muted">Модули: <code>querulus.fin_effect.excel_monitoring</code>,
-    отчёт — <code>querulus.fin_effect.monitoring_report</code>.</p>
+ОД = СуммаОсновногоДолгаЗаявлено</div>
+    <p><b>Пример этого прогона:</b> n_I=65; e_fee=33 750.00 (= 30.00%×100 000.00 + 25.00%×15 000.00); Σ ОД×k = 7 181 225.34; Σ e_fee = 2 193 750.00; expected_psr = 0.55×9 374 975.34 = 5 156 236.43; cost(СуммаПлатежа)=4 837 596.04; net=318 640.40</p>
   </div>
 
   
-  
+        <h2>3. Выбор cost на I</h2>
+        <div class="card">
+          <p class="muted">Сверка на I: <code>СуммаКВыплате</code> / <code>СуммаПлатежа</code> /
+          <code>Иные затраты</code> (колонки <code>СуммаВыплаты</code> в витрине нет).
+          <b>Итог:</b> СуммаПлатежа ≈ СуммаКВыплате (match≥90%) → для cost предпочтителен факт кассы СуммаПлатежа → в расчёте cost =
+          <code>СуммаПлатежа</code>.</p>
+          <table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>pair</th>
+      <th>left</th>
+      <th>right</th>
+      <th>n_i</th>
+      <th>match_share</th>
+      <th>median_abs_delta</th>
+      <th>mean_abs_delta</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>СуммаКВыплате ?= СуммаПлатежа</td>
+      <td>СуммаКВыплате</td>
+      <td>СуммаПлатежа</td>
+      <td>65</td>
+      <td>1.0</td>
+      <td>0.000000</td>
+      <td>0.000000</td>
+    </tr>
+    <tr>
+      <td>СуммаКВыплате ?= Иные затраты</td>
+      <td>СуммаКВыплате</td>
+      <td>Иные затраты</td>
+      <td>65</td>
+      <td>0.0</td>
+      <td>62763.370215</td>
+      <td>63260.871242</td>
+    </tr>
+    <tr>
+      <td>СуммаПлатежа ?= Иные затраты</td>
+      <td>СуммаПлатежа</td>
+      <td>Иные затраты</td>
+      <td>65</td>
+      <td>0.0</td>
+      <td>62763.370215</td>
+      <td>63260.871242</td>
+    </tr>
+  </tbody>
+</table>
+        </div>
+        
 
-  <h2>Итог прогона</h2>
+  <h2>4. Доли соглашений / претензий / ФУ / суда</h2>
+  <div class="card">
+    <div class="formula">на сегменте S ∈ {W, U}:
+  agreement_share(S)     = mean(Заключено соглашение | S)
+  pretension_share(S)    = mean(ЕстьПретензияВИнциденте | S)
+  fu_incident_share(S)   = mean(ЕстьОбращениеКФУВИнциденте | S)
+  court_incident_share(S)= mean(ЕстьОбращениеКСудуВИнциденте | S)
+
+lift_pp  = share(W) − share(U)
+lift_rel = share(W)/share(U) − 1</div>
+    <p><b>Пример этого прогона:</b> with_model n=65: agreement=70.77%, pretension=6.15%, fu=6.15%, court=1.54%; without_model n=177: agreement=22.60%, pretension=5.65%, fu=7.34%, court=2.26%</p>
+  </div>
+
+  
+        <h2>5. Результат долей (этот прогон)</h2>
+        <div class="card">
+          <table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>segment</th>
+      <th>n</th>
+      <th>agreement_share</th>
+      <th>pretension_share</th>
+      <th>fu_incident_share</th>
+      <th>court_incident_share</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>with_model</td>
+      <td>65.0</td>
+      <td>70.77</td>
+      <td>6.15</td>
+      <td>6.15</td>
+      <td>1.54</td>
+    </tr>
+    <tr>
+      <td>without_model</td>
+      <td>177.0</td>
+      <td>22.60</td>
+      <td>5.65</td>
+      <td>7.34</td>
+      <td>2.26</td>
+    </tr>
+    <tr>
+      <td>lift_pp (with - without)</td>
+      <td>NaN</td>
+      <td>48.17</td>
+      <td>0.50</td>
+      <td>-1.19</td>
+      <td>-0.72</td>
+    </tr>
+    <tr>
+      <td>lift_rel (with / without - 1)</td>
+      <td>NaN</td>
+      <td>213.15</td>
+      <td>8.92</td>
+      <td>-16.21</td>
+      <td>-31.92</td>
+    </tr>
+  </tbody>
+</table>
+        </div>
+        
+
+  <h2>6. Колонки витрины (справка)</h2>
   <div class="card">
     <table>
-      <thead><tr><th>Поле</th><th>Значение</th></tr></thead>
-      <tbody>
-        <tr><td>od_column</td><td>СуммаОсновногоДолгаЗаявлено</td></tr>
-        <tr><td>cost_column</td><td>СуммаКВыплате</td></tr>
-        <tr><td>n_intervention</td><td>32</td></tr>
-        <tr><td>sum_od</td><td>2 444 221.25</td></tr>
-        <tr><td>sum_paid / cost</td><td>2 276 420.91</td></tr>
-        <tr><td>e_fee</td><td>33 750.00</td></tr>
-        <tr><td>expected_psr</td><td>2 408 834.28</td></tr>
-        <tr><td>net</td><td>132 413.37</td></tr>
-      </tbody>
+      <thead>
+        <tr><th>Колонка</th><th>Источник ETL</th><th>Зачем</th><th>Пример</th></tr>
+      </thead>
+      <tbody><tr><td><code>СуммаОсновногоДолгаЗаявлено</code></td><td>РасчетВыплаты._Fld18877</td><td>ОД для ×k</td><td>85 000</td></tr><tr><td><code>СуммаКВыплате</code></td><td>док. СуммаВыплаты (не 1С-СуммаКВыплате!)</td><td>кандидат cost</td><td>42 300</td></tr><tr><td><code>Иные затраты</code></td><td>док. поле СуммаКВыплате</td><td>кандидат cost; на нём loss-флаг выплаты по модели</td><td>42 300</td></tr><tr><td><code>СуммаПлатежа</code></td><td>sum(Payments)</td><td>факт кассы, кандидат cost</td><td>42 300</td></tr><tr><td><code>ЕстьПретензияВИнциденте</code></td><td>pretensions по инциденту</td><td>доля претензий</td><td>1</td></tr><tr><td><code>ЕстьОбращениеКФУВИнциденте</code></td><td>max(Обращение к ФУ) по инциденту</td><td>доля ФУ (на первичных loss-флаг ≈0)</td><td>1</td></tr><tr><td><code>ЕстьОбращениеКСудуВИнциденте</code></td><td>max(Обращение к суду) по инциденту</td><td>доля судов</td><td>0</td></tr></tbody>
     </table>
+    <p class="muted">В витрине нет отдельной <code>СуммаВыплаты</code>: она уже лежит
+    под именем <code>СуммаКВыплате</code>.</p>
   </div>
 </div>
 </body>

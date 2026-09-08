@@ -16,7 +16,12 @@ DEFAULT_TOLERANCE = 1.0
 
 # Алиасы заголовков со скринов (имена плывут: «к доплате» / «к выплате», «в инциденте»).
 COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
-    "incident": ("НомерИнцидента", "INCIDENT_NUMBER", "Номер инцидента"),
+    "incident": (
+        "НомерИнцидента",
+        "НомерИнцидент",
+        "INCIDENT_NUMBER",
+        "Номер инцидента",
+    ),
     "filial": ("Филиал", "ФилиалУбытка", "Branch"),
     "loss_status": ("УбытокСтатус", "Убыток статус", "СтатусУбытка"),
     "auto_object": (
@@ -39,6 +44,7 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "recommended": (
         "Сумма рекомендованная к доплате по модулю",
         "Сумма рекомендованная к выплате по модели",
+        "Сумма рекомендованная к доплате по модели",
         "Сумма рекомендованная к доплате по модели",
     ),
     "payment": ("СуммаПлатежа", "Сумма платежа"),
@@ -71,6 +77,7 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "claimed_storage": (
         "ОсновныеВыплатыЗаявлено_Затраты на хранение",
+        "ОсновныеВыплатыЗаявлено_Затраты на хранение ТС",
         "ОсновныеВыплатыЗаявление_Затраты на хранение",
     ),
     "refund_form": ("ФормаВозмещения", "Форма возмещения"),
@@ -97,6 +104,14 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "ОбращениеКСуду",
         "Обращение в суд",
     ),
+    "fu_incident": (
+        "ЕстьОбращениеКФУВИнциденте",
+        "Обращение к ФУ в инциденте",
+    ),
+    "court_incident": (
+        "ЕстьОбращениеКСудуВИнциденте",
+        "Обращение к суду в инциденте",
+    ),
     "application_date": (
         "ДатаЗаявления",
         "Дата заявления",
@@ -110,10 +125,15 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     ),
 }
 
-# Общие фильтры аналитики (Excel).
+# Общие фильтры аналитики (витрина / Excel).
 EXCLUDED_FILIAL_NEEDLES = ("архангельск", "марийск")
 ALLOWED_REFUND_FORM_NEEDLES = ("денежн", "ремонт", "соглашен")
 PRIMARY_LOSS_STATUS_NEEDLES = ("первичн",)
+
+# MSSQL-витрина = 1:1 копия Excel-отчёта.
+VITRINA_TABLE_DEFAULT = "[OISUU_report].[dbo].[ВитринаСутяжность]"
+INCIDENT_FU_COL = "ЕстьОбращениеКФУВИнциденте"
+INCIDENT_COURT_COL = "ЕстьОбращениеКСудуВИнциденте"
 
 _ID_HINTS = (
     "номер",
@@ -168,6 +188,186 @@ def load_excel(
     if not path.exists():
         raise FileNotFoundError(f"Excel не найден: {path}")
     return pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
+
+
+def load_vitrina_mssql(
+    connection: Any | None = None,
+    *,
+    table: str = VITRINA_TABLE_DEFAULT,
+    query: str | None = None,
+) -> pd.DataFrame:
+    """Загрузить витрину сутяжности из MSSQL (1:1 с Excel-отчётом).
+
+    По умолчанию: ``[OISUU_report].[dbo].[ВитринаСутяжность]``.
+    Креды — ``OISUU_DB_*`` из ``.env`` / ``env_template`` (как у dataset).
+    """
+    from querulus.dataset.load.io import _read_sql, connect_oisuu
+
+    own_conn = connection is None
+    conn = connection if connection is not None else connect_oisuu()
+    sql = query or f"SELECT * FROM {table}"
+    try:
+        return _read_sql(sql, conn)
+    finally:
+        if own_conn and conn is not None:
+            conn.close()
+
+
+def enrich_incident_path_flags(df: pd.DataFrame) -> pd.DataFrame:
+    """Агрегировать ФУ/суд на весь инцидент и проставить на каждую строку.
+
+    ``ЕстьОбращениеКФУВИнциденте`` / ``ЕстьОбращениеКСудуВИнциденте`` =
+    max флага по убыткам инцидента. Нужно для аналитики долей на
+    «первичных» строках (на самой строке loss-флаг ФУ/суда обычно 0).
+    """
+    out = df.copy()
+    inc_col = resolve_column(out, "incident")
+    fu_col = resolve_column(out, "fu_flag")
+    court_col = resolve_column(out, "court_flag")
+
+    if inc_col is None:
+        out[INCIDENT_FU_COL] = 0
+        out[INCIDENT_COURT_COL] = 0
+        return out
+
+    keys = out[inc_col]
+    if fu_col is not None:
+        fu01 = _to_numeric(out[fu_col]).fillna(0).gt(0).astype(int)
+        out[INCIDENT_FU_COL] = fu01.groupby(keys).transform("max")
+    else:
+        out[INCIDENT_FU_COL] = 0
+
+    if court_col is not None:
+        court01 = _to_numeric(out[court_col]).fillna(0).gt(0).astype(int)
+        out[INCIDENT_COURT_COL] = court01.groupby(keys).transform("max")
+    else:
+        out[INCIDENT_COURT_COL] = 0
+
+    return out
+
+
+def load_monitoring_frame(
+    *,
+    source: str = "mssql",
+    excel_path: str | Path | None = None,
+    connection: Any | None = None,
+    table: str = VITRINA_TABLE_DEFAULT,
+    enrich_incident: bool = True,
+) -> pd.DataFrame:
+    """Единая точка загрузки витрины для мониторинга.
+
+    ``source``: ``mssql`` | ``excel`` | ``synthetic``.
+    После загрузки по умолчанию обогащает инцидентными флагами ФУ/суда.
+    """
+    src = str(source).strip().lower()
+    if src == "mssql":
+        df = load_vitrina_mssql(connection, table=table)
+    elif src == "excel":
+        if excel_path is None:
+            raise ValueError("для source='excel' нужен excel_path")
+        df = load_excel(excel_path)
+    elif src == "synthetic":
+        from querulus.fin_effect.excel_monitoring import build_synthetic_claims_excel
+
+        df = build_synthetic_claims_excel()
+    else:
+        raise ValueError(f"unknown source={source!r}; ожидается mssql|excel|synthetic")
+
+    if enrich_incident:
+        df = enrich_incident_path_flags(df)
+    return df
+
+
+def reconcile_cost_candidates_on_i(
+    df: pd.DataFrame,
+    *,
+    tolerance: float = DEFAULT_TOLERANCE,
+) -> pd.DataFrame:
+    """Сверка денежных колонок на интервенции I (без СуммаВыплаты — её нет в витрине).
+
+    Сравнивает ``СуммаКВыплате``, ``СуммаПлатежа``, ``Иные затраты``.
+    ``suggested_cost_col`` — кто лучше совпадает с ``СуммаПлатежа`` (факт кассы);
+    если платежа нет — ``СуммаКВыплате``.
+    """
+    mask = intervention_mask(df)
+    n_i = int(mask.sum())
+    series: dict[str, pd.Series] = {}
+    for key, label in (
+        ("to_pay", "СуммаКВыплате"),
+        ("payment", "СуммаПлатежа"),
+        ("other_costs", "Иные затраты"),
+    ):
+        col = resolve_column(df, key)
+        if col is not None:
+            series[label] = _to_numeric(df.loc[mask, col]).fillna(0.0)
+
+    labels = list(series.keys())
+    rows: list[dict[str, Any]] = []
+    for i, a in enumerate(labels):
+        for b in labels[i + 1 :]:
+            diff = (series[a] - series[b]).abs()
+            match = diff <= float(tolerance)
+            rows.append(
+                {
+                    "pair": f"{a} ?= {b}",
+                    "left": a,
+                    "right": b,
+                    "n_i": n_i,
+                    "match_share": float(match.mean()) if n_i else np.nan,
+                    "median_abs_delta": float(diff.median()) if n_i else np.nan,
+                    "mean_abs_delta": float(diff.mean()) if n_i else np.nan,
+                }
+            )
+
+    # рекомендация cost
+    suggested = "СуммаКВыплате"
+    note = "дефолт: СуммаКВыплате (документная сумма выплаты в витрине)"
+    if "СуммаПлатежа" in series and n_i:
+        best_name = None
+        best_share = -1.0
+        for cand in ("СуммаКВыплате", "Иные затраты"):
+            if cand not in series:
+                continue
+            share = float(
+                ((series[cand] - series["СуммаПлатежа"]).abs() <= float(tolerance)).mean()
+            )
+            if share > best_share:
+                best_share = share
+                best_name = cand
+        if best_name is not None:
+            suggested = best_name
+            note = (
+                f"лучше совпадает с СуммаПлатежа: {best_name} "
+                f"(match={best_share * 100:.1f}% при tol={tolerance})"
+            )
+            # если платёж сам близок к обоим — всё равно предпочитаем факт кассы
+            if best_share >= 0.9:
+                suggested = "СуммаПлатежа"
+                note = (
+                    f"СуммаПлатежа ≈ {best_name} (match≥90%) → "
+                    "для cost предпочтителен факт кассы СуммаПлатежа"
+                )
+
+    table = pd.DataFrame(rows)
+    if table.empty:
+        table = pd.DataFrame(
+            [
+                {
+                    "pair": "(нет колонок)",
+                    "left": None,
+                    "right": None,
+                    "n_i": n_i,
+                    "match_share": np.nan,
+                    "median_abs_delta": np.nan,
+                    "mean_abs_delta": np.nan,
+                }
+            ]
+        )
+    table.attrs["suggested_cost_col"] = suggested
+    table.attrs["suggestion_note"] = note
+    table["suggested_cost_col"] = suggested
+    table["suggestion_note"] = note
+    return table
 
 
 def resolve_column(
