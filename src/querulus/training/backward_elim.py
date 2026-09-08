@@ -55,13 +55,14 @@ def _prepare_xy(
     train_index: pd.Index,
     eval_index: pd.Index,
     *,
+    task_type: TaskType,
     positive_target: bool,
 ) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
     x_train = df.loc[train_index, features].copy()
     x_eval = df.loc[eval_index, features].copy()
     y_train = df.loc[train_index, target_column]
     y_eval = df.loc[eval_index, target_column]
-    if positive_target:
+    if positive_target or task_type == "regression":
         tr_ok = y_train > 0
         ev_ok = y_eval > 0
         x_train, y_train = x_train.loc[tr_ok], y_train.loc[tr_ok]
@@ -201,6 +202,7 @@ def backward_eliminate_by_metric(
         target_column,
         train_index,
         eval_index,
+        task_type=task_type,
         positive_target=positive_target,
     )
     cats_all = _cat_names(feature_list, mvp_types)

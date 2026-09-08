@@ -182,10 +182,10 @@ def _sev_metrics_row(
     *,
     split_label: str = "test",
 ) -> dict[str, object]:
-    """MAE, RMSE, R², shift (= Σpred / Σfact) на том же holdout."""
+    """Conditional severity: MAE/RMSE/R² только на строках ``y_true > 0``."""
     yt = np.asarray(y_true, dtype=float)
     yp = np.asarray(y_pred, dtype=float)
-    mask = np.isfinite(yt) & np.isfinite(yp)
+    mask = np.isfinite(yt) & np.isfinite(yp) & (yt > 0)
     yt, yp = yt[mask], yp[mask]
     n = int(len(yt))
     fact_sum = float(np.nansum(yt))
@@ -197,6 +197,7 @@ def _sev_metrics_row(
     return {
         "stack": stack,
         "split": split_label,
+        "scope": "severity_target > 0",
         "y_true": y_true.name,
         "n": n,
         "mae": float(mean_absolute_error(yt, yp)) if n else float("nan"),
@@ -514,14 +515,15 @@ def evaluate_legacy_vs_new(
     *,
     index: pd.Index | None = None,
 ) -> StackEvalReport:
-    """Holdout: freq-метрики (свои метки + legacy retrain на TARGET_FREQ); покрытие.
+    """Holdout: freq, conditional severity (target > 0) и покрытие полного стека.
 
     Строки classification:
     - ``legacy`` — старые фичи/hparams, метка TARGET_2;
     - ``legacy feats/hparams @ TARGET_FREQ`` — те же фичи/hparams, переобучение на TARGET_FREQ;
     - ``new`` — новые фичи/hparams, метка TARGET_FREQ.
 
-    Покрытие обеих регрессий — на ``pred_freq`` new. ``index`` — явный holdout
+    Severity-метрики не включают нулевые таргеты. Покрытие обеих регрессий —
+    на ``pred_freq`` new. ``index`` — явный holdout
     (после B: ``splits.test``), иначе пересечение ``frequency_split.x_test``.
     """
     for col in ("TARGET_2", "TARGET_FREQ", "TARGET_3_SEV", _SEV_COL, _PSR_COL):

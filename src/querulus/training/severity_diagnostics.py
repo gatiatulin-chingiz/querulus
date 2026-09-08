@@ -93,20 +93,26 @@ def compare_severity_log1p(
     split = training.severity_split
     features = training.severity_features
     cat_features = training.severity_categorical_features
-    y_train = np.asarray(split.y_train, dtype=float)
-    y_test = np.asarray(split.y_test, dtype=float)
+    train_positive = pd.to_numeric(split.y_train, errors="coerce") > 0
+    test_positive = pd.to_numeric(split.y_test, errors="coerce") > 0
+    x_train = split.x_train.loc[train_positive]
+    x_test = split.x_test.loc[test_positive]
+    y_train = np.asarray(split.y_train.loc[train_positive], dtype=float)
+    y_test = np.asarray(split.y_test.loc[test_positive], dtype=float)
+    if len(x_train) == 0 or len(x_test) == 0:
+        raise ValueError("Нет строк severity target > 0 для сравнения raw/log1p")
     # log1p только для y>=0; отрицательные (если появятся) клипуем в 0.
     y_train_log = np.log1p(np.clip(y_train, a_min=0.0, a_max=None))
     y_test_log = np.log1p(np.clip(y_test, a_min=0.0, a_max=None))
 
     train_pool = Pool(
-        split.x_train[features],
+        x_train[features],
         y_train_log,
         cat_features=cat_features,
         feature_names=features,
     )
     test_pool = Pool(
-        split.x_test[features],
+        x_test[features],
         y_test_log,
         cat_features=cat_features,
         feature_names=features,
@@ -117,11 +123,11 @@ def compare_severity_log1p(
         **config.severity_regressor_params,
     )
     model.fit(train_pool, eval_set=test_pool, plot=False)
-    y_pred_log = np.expm1(np.asarray(model.predict(split.x_test[features]), dtype=float))
+    y_pred_log = np.expm1(np.asarray(model.predict(x_test[features]), dtype=float))
     y_pred_log = np.clip(y_pred_log, a_min=0.0, a_max=None)
 
     y_pred_raw = np.asarray(
-        training.severity_model.predict(split.x_test[features]),
+        training.severity_model.predict(x_test[features]),
         dtype=float,
     )
     q_raw = severity_error_by_quantile(y_test, y_pred_raw)

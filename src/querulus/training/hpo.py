@@ -943,7 +943,7 @@ def run_hpo(
     thread_count = max(1, int(thread_count))
 
     sorted_df = df.sort_values(date_column).reset_index(drop=True)
-    if positive_target:
+    if positive_target or task_type == "regression":
         sorted_df = sorted_df[
             pd.to_numeric(sorted_df[target_column], errors="coerce") > 0
         ].reset_index(drop=True)

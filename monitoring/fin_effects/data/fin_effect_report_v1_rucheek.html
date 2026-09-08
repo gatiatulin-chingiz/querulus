@@ -1,0 +1,1396 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Querulus — вариант 1: ручеёк vs контроль</title>
+  <style>
+:root {
+  --bg: #f6f4ef; --surface: #fff; --ink: #1c1c1c; --muted: #5a5a5a;
+  --line: #ddd6c8; --accent: #0b5f66; --soft: #e7f3f4; --code: #f0ece4;
+  --example: #fff8e8; --example-line: #e6d7a8;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--bg);
+}
+.page { max-width: 1180px; margin: 0 auto; padding: 1.2rem 1.1rem 2rem; }
+h1 { margin: 0 0 0.3rem; font-size: 1.45rem; color: var(--accent); }
+h2 { margin: 1.35rem 0 0.4rem; font-size: 1.12rem; color: var(--accent); }
+h3 { margin: 0.85rem 0 0.3rem; font-size: 0.98rem; color: #2a4f53; }
+.sub { color: var(--muted); margin: 0 0 0.85rem; font-size: 0.92rem; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.75rem 0.95rem;
+  margin: 0.45rem 0;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.45rem;
+  margin: 0.5rem 0 0.7rem;
+}
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+}
+.stat span { display: block; color: var(--muted); font-size: 0.76rem; }
+.stat b { font-variant-numeric: tabular-nums; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 0.82rem;
+  margin: 0.35rem 0 0.5rem;
+}
+.scroll { overflow-x: auto; margin: 0.35rem 0 0.5rem; }
+th, td {
+  border: 1px solid var(--line);
+  padding: 0.35rem 0.45rem;
+  text-align: left;
+  vertical-align: top;
+}
+th { background: var(--soft); color: var(--accent); }
+code {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 0.82rem;
+}
+.formula {
+  background: linear-gradient(135deg, var(--soft), #f7fbfb);
+  border: 1px solid #c7dfe1;
+  border-left: 4px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  padding: 0.75rem 0.9rem;
+  margin: 0.55rem 0;
+  overflow-x: auto;
+}
+.formula-title {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.35rem;
+  text-transform: uppercase;
+}
+.equation {
+  color: #153f43;
+  font-family: Cambria, "Times New Roman", serif;
+  font-size: 1.05rem;
+  line-height: 1.65;
+  white-space: nowrap;
+}
+.equation strong { color: var(--accent); }
+.equation .op { padding: 0 0.2em; }
+.equation-note {
+  border-top: 1px solid #d4e6e7;
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 0.45rem;
+  padding-top: 0.4rem;
+}
+.example {
+  background: var(--example);
+  border: 1px solid var(--example-line);
+  border-left: 4px solid #b08900;
+  border-radius: 0 8px 8px 0;
+  padding: 0.7rem 0.85rem;
+  margin: 0.45rem 0 0.7rem;
+}
+.example-title {
+  color: #7a5c00;
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.3rem;
+  text-transform: uppercase;
+}
+.filters {
+  display: grid;
+  gap: 0.35rem;
+}
+.filter-row {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: minmax(120px, auto) 1fr;
+  align-items: baseline;
+}
+.filter-row b { color: var(--accent); font-family: Consolas, monospace; }
+.legend {
+  background: #faf9f6;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  padding: 0.55rem 0.7rem;
+  margin: 0.35rem 0 0.55rem;
+  font-size: 0.86rem;
+}
+.legend ul { margin: 0.2rem 0 0 1.1rem; padding: 0; }
+.legend li { margin: 0.12rem 0; }
+.muted { color: var(--muted); font-size: 0.9rem; }
+@media (max-width: 620px) {
+  .filter-row { grid-template-columns: 1fr; gap: 0; }
+  .equation { font-size: 0.95rem; white-space: normal; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Querulus — вариант 1: ручеёк vs контроль</h1>
+  <p class="sub">2026-09-08 20:42 · источник <code>synthetic</code> ·
+  ретро-окно окно не задано · precision=0.55, k=1.3500,
+  p_fu=30.00%, p_court=25.00%, e_fee=33 750.00</p>
+
+  <h2>1. База и термины</h2>
+  <div class="card">
+
+    <div class="formula">
+      <div class="formula-title">Термины</div>
+      <div class="filters"><div class="filter-row"><b>Bpilot</b><span>пилот OISUU без Архангельского и Марийского (~50% ручеёк / ~50% контроль)</span></div><div class="filter-row"><b>Bam</b><span>только Архангельский и Марийский (~100% модель)</span></div><div class="filter-row"><b>ручеёк / model</b><span><code>РезультатПроверки ∈ {0, 1}</code> — модель работала</span></div><div class="filter-row"><b>контроль / control</b><span><code>РезультатПроверки = −100</code> — модель не работала</span></div><div class="filter-row"><b>ВызовМодельСутяжность</b><span>неинформативен для сегментации; не используем как критерий «модель работала»</span></div></div>
+    </div>
+
+
+    <div class="formula">
+      <div class="formula-title">Базовые фильтры (для всех слоёв, если не сказано иное)</div>
+      <div class="filters"><div class="filter-row"><b>форма</b><span>ФормаВозмещения ∈ {денежная, ремонт, соглашение}</span></div><div class="filter-row"><b>статус</b><span>УбытокСтатус = первичный</span></div><div class="filter-row"><b>объект</b><span>ТипОбъектаАвтотранспорт = 1</span></div><div class="filter-row"><b>филиал</b><span>задаётся слоем: Bpilot или Bam</span></div></div>
+    </div>
+
+    <h3>Карта расчётов: фильтры и показатели</h3>
+    <p class="muted">Каждая строка показывает, на какой выборке считается слой
+    и какие метрики попадают в таблицу.</p>
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Слой расчёта</th>
+      <th>Контур</th>
+      <th>Базовые фильтры</th>
+      <th>Фильтр сегмента</th>
+      <th>Показатели</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Финэффект</td>
+      <td>Bpilot</td>
+      <td>форма; первичный убыток; автотранспорт=1</td>
+      <td>Benefit: result=1 и выплата по модели=1; cost: result∈{0,1} и выплата по модели=1</td>
+      <td>n_I; expected_psr; cost (СуммаКВыплате); net; экстраполяция на 365 дней</td>
+    </tr>
+    <tr>
+      <td>Соглашения / претензии / ФУ / суд</td>
+      <td>Bpilot</td>
+      <td>форма; первичный убыток; автотранспорт=1</td>
+      <td>model: result∈{0,1}; control: result=−100</td>
+      <td>agreement_share; pretension_share; fu_incident_share; court_incident_share; lift_pp; lift_rel</td>
+    </tr>
+    <tr>
+      <td>Использование модели по филиалам</td>
+      <td>все филиалы</td>
+      <td>форма; первичный убыток; автотранспорт=1</td>
+      <td>result=0 / result=1 / result=−100</td>
+      <td>число и доля ручейка; число и доля контроля; доли result 0/1/−100</td>
+    </tr>
+    <tr>
+      <td>Доли путей по филиалам</td>
+      <td>Bpilot, отдельно каждый филиал</td>
+      <td>форма; первичный убыток; автотранспорт=1</td>
+      <td>model / control</td>
+      <td>agreement_share; pretension_share; fu_incident_share; court_incident_share</td>
+    </tr>
+    <tr>
+      <td>Распределение убытков и выплаты</td>
+      <td>Bpilot</td>
+      <td>форма; первичный убыток; автотранспорт=1</td>
+      <td>result=0 / result=1 / result∈{0,1} / result=−100</td>
+      <td>n; share_of_base; sum; mean; median; p25; p75; min; max</td>
+    </tr>
+    <tr>
+      <td>Выплаты по сегментам</td>
+      <td>Bpilot</td>
+      <td>форма; первичный убыток; автотранспорт=1</td>
+      <td>model / control</td>
+      <td>n; n_amount; sum; mean; median; p25; p75; min; max</td>
+    </tr>
+    <tr>
+      <td>Диагностика применения модели</td>
+      <td>Bpilot</td>
+      <td>форма; первичный убыток; автотранспорт=1</td>
+      <td>4 кейса call/result/payout</td>
+      <td>число каждого кейса всего и по филиалам</td>
+    </tr>
+    <tr>
+      <td>Архангельский / Марийский</td>
+      <td>Bam</td>
+      <td>форма; первичный убыток; автотранспорт=1</td>
+      <td>model / control</td>
+      <td>те же доли, выплаты и кейсы; контроль ожидается почти пустым</td>
+    </tr>
+  </tbody>
+</table></div>
+  </div>
+
+
+  <h2>2. Финэффект</h2>
+  <div class="card">
+
+    <div class="formula">
+      <div class="formula-title">Фильтры слоя финэффекта (Bpilot)</div>
+      <div class="filters"><div class="filter-row"><b>база</b><span>базовые фильтры + филиал ∉ {Архангельский, Марийский}</span></div><div class="filter-row"><b>benefit / I</b><span>РезультатПроверки = 1 ∧ Выплата по модели = 1</span></div><div class="filter-row"><b>cost</b><span>РезультатПроверки ∈ {0, 1} ∧ Выплата по модели = 1</span></div><div class="filter-row"><b>смысл нулей</b><span>result=0 ∧ выплата=1 не даёт expected_psr, но входит в cost</span></div></div>
+    </div>
+
+
+    <div class="formula">
+      <div class="formula-title">Формулы финэффекта</div>
+      <div class="equation"><strong>e<sub>fee</sub></strong> <span class='op'>=</span> p<sub>fu</sub> × 100 000 <span class='op'>+</span> p<sub>court</sub> × 15 000</div><div class="equation"><strong>expected_psr</strong> <span class='op'>=</span> precision × (Σ<sub>i∈I</sub> OD<sub>i</sub> × k <span class='op'>+</span> n<sub>I</sub> × e<sub>fee</sub>)</div><div class="equation"><strong>cost</strong> <span class='op'>=</span> Σ<sub>j∈C</sub> СуммаКВыплате<sub>j</sub></div><div class="equation"><strong>net</strong> <span class='op'>=</span> expected_psr <span class='op'>−</span> cost</div>
+      <div class="equation-note">I = benefit-маска; C = cost-маска варианта 1. OD = <code>СуммаОсновногоДолгаЗаявлено</code>.</div>
+    </div>
+
+
+    <div class="example">
+      <div class="example-title">Численный пример этого прогона</div>
+      <div>n<sub>I</sub>=65; e<sub>fee</sub>=33 750.00 (= 30.00%×100 000.00 + 25.00%×15 000.00); Σ OD×k = 6 753 062.48; Σ e<sub>fee</sub> = 2 193 750.00; expected_psr = 0.55×8 946 812.48 = 4 920 746.87; cost = 4 512 308.24; net = 408 438.63</div>
+    </div>
+
+    <div class="grid">
+      <div class="stat"><span>n_I</span><b>65</b></div>
+      <div class="stat"><span>expected_psr</span><b>4 920 746.87</b></div>
+      <div class="stat"><span>cost</span><b>4 512 308.24</b></div>
+      <div class="stat"><span>net</span><b>408 438.63</b></div>
+    </div>
+
+  </div>
+
+
+  <h2>3. Доли соглашений / претензий / ФУ / суда (Bpilot)</h2>
+  <div class="card">
+
+    <div class="formula">
+      <div class="formula-title">Фильтры слоя долей путей (Bpilot)</div>
+      <div class="filters"><div class="filter-row"><b>база</b><span>базовые фильтры + Bpilot</span></div><div class="filter-row"><b>model</b><span>РезультатПроверки ∈ {0, 1}</span></div><div class="filter-row"><b>control</b><span>РезультатПроверки = −100</span></div><div class="filter-row"><b>события</b><span>agreement / pretension / FU_incident / court_incident</span></div></div>
+    </div>
+
+
+    <div class="formula">
+      <div class="formula-title">Формулы долей путей</div>
+      <div class="equation"><strong>share<sub>event</sub>(S)</strong> <span class='op'>=</span> 100% × n(event=1 ∩ S) / n(S)</div><div class="equation"><strong>lift<sub>pp</sub></strong> <span class='op'>=</span> share(model) <span class='op'>−</span> share(control)  (п.п.)</div><div class="equation"><strong>lift<sub>rel</sub></strong> <span class='op'>=</span> share(model)/share(control) <span class='op'>−</span> 1  (%)</div>
+      <div class="equation-note">S ∈ {model, control}. Доли показывают, как часто после выплаты возникают соглашение / претензия / ФУ / суд.</div>
+    </div>
+
+
+    <div class="example">
+      <div class="example-title">Численный пример сегментов</div>
+      <div><code>model</code>: n=168.0, agreement=42.86%, pretension=5.36%, fu=13.69%, court=4.76%<br/><code>control</code>: n=36.0, agreement=22.22%, pretension=8.33%, fu=11.11%, court=0.0%</div>
+    </div>
+
+
+    <div class="legend">
+      <b>Легенда строк</b>
+      <ul><li><code>model</code> / <code>control</code> или кейсы варианта 2</li><li><code>lift_pp</code> — разница долей в процентных пунктах</li><li><code>lift_rel</code> — относительный рост доли, %</li></ul>
+      <b>Легенда колонок</b>
+      <ul><li><code>n</code> — число строк сегмента</li><li><code>*_share</code> — доля события в сегменте, %</li></ul>
+    </div>
+
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>segment</th>
+      <th>n</th>
+      <th>agreement_share</th>
+      <th>pretension_share</th>
+      <th>fu_incident_share</th>
+      <th>court_incident_share</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>model</td>
+      <td>168.0</td>
+      <td>42.86</td>
+      <td>5.36</td>
+      <td>13.69</td>
+      <td>4.76</td>
+    </tr>
+    <tr>
+      <td>control</td>
+      <td>36.0</td>
+      <td>22.22</td>
+      <td>8.33</td>
+      <td>11.11</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>lift_pp (model - control)</td>
+      <td>NaN</td>
+      <td>20.63</td>
+      <td>-2.98</td>
+      <td>2.58</td>
+      <td>4.76</td>
+    </tr>
+    <tr>
+      <td>lift_rel (model / control - 1)</td>
+      <td>NaN</td>
+      <td>92.86</td>
+      <td>-35.71</td>
+      <td>23.21</td>
+      <td>NaN</td>
+    </tr>
+  </tbody>
+</table></div>
+  </div>
+
+
+  <h2>4. Филиалы: ручеёк / контроль</h2>
+  <div class="card">
+
+    <div class="formula">
+      <div class="formula-title">Фильтры</div>
+      <div class="filters"><div class="filter-row"><b>база</b><span>базовые фильтры</span></div><div class="filter-row"><b>филиал</b><span>все, включая Bam</span></div><div class="filter-row"><b>сегментация</b><span>только по РезультатПроверки</span></div></div>
+    </div>
+
+
+    <div class="formula">
+      <div class="formula-title">Доли</div>
+      <div class="equation"><strong>model_rucheek_share</strong> = 100% × n(result∈{0,1}) / n</div><div class="equation"><strong>control_share</strong> = 100% × n(result=−100) / n</div><div class="equation"><strong>applied_share</strong> = 100% × n(result=1 ∧ выплата=1) / n</div>
+
+    </div>
+
+
+    <div class="example">
+      <div class="example-title">Как читать</div>
+      <div>Высокий <code>model_rucheek_share</code> ≈ попадание в 50% ручеёк; в Bam ожидаем ~100%.</div>
+    </div>
+
+
+    <div class="legend">
+      <b>Легенда строк</b>
+      <ul><li>строка = филиал</li></ul>
+      <b>Легенда колонок</b>
+      <ul><li><code>share_result_0/1</code> — доли решений модели, %</li><li><code>share_out_of_model</code> — доля −100, %</li></ul>
+    </div>
+
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>filial</th>
+      <th>n</th>
+      <th>n_model_rucheek</th>
+      <th>model_rucheek_share</th>
+      <th>n_control</th>
+      <th>control_share</th>
+      <th>n_applied_result1_paid</th>
+      <th>applied_share</th>
+      <th>share_result_0</th>
+      <th>share_result_1</th>
+      <th>share_out_of_model</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Пермский</td>
+      <td>45</td>
+      <td>41</td>
+      <td>91.11</td>
+      <td>4</td>
+      <td>8.89</td>
+      <td>20</td>
+      <td>44.44</td>
+      <td>26.67</td>
+      <td>64.44</td>
+      <td>8.89</td>
+    </tr>
+    <tr>
+      <td>Владимирский</td>
+      <td>37</td>
+      <td>29</td>
+      <td>78.38</td>
+      <td>8</td>
+      <td>21.62</td>
+      <td>13</td>
+      <td>35.14</td>
+      <td>29.73</td>
+      <td>48.65</td>
+      <td>21.62</td>
+    </tr>
+    <tr>
+      <td>Ярославский</td>
+      <td>35</td>
+      <td>25</td>
+      <td>71.43</td>
+      <td>10</td>
+      <td>28.57</td>
+      <td>8</td>
+      <td>22.86</td>
+      <td>34.29</td>
+      <td>37.14</td>
+      <td>28.57</td>
+    </tr>
+    <tr>
+      <td>Магнитогорский</td>
+      <td>30</td>
+      <td>27</td>
+      <td>90.00</td>
+      <td>3</td>
+      <td>10.00</td>
+      <td>11</td>
+      <td>36.67</td>
+      <td>26.67</td>
+      <td>63.33</td>
+      <td>10.00</td>
+    </tr>
+    <tr>
+      <td>Курский</td>
+      <td>29</td>
+      <td>21</td>
+      <td>72.41</td>
+      <td>8</td>
+      <td>27.59</td>
+      <td>7</td>
+      <td>24.14</td>
+      <td>37.93</td>
+      <td>34.48</td>
+      <td>27.59</td>
+    </tr>
+    <tr>
+      <td>Омский</td>
+      <td>28</td>
+      <td>25</td>
+      <td>89.29</td>
+      <td>3</td>
+      <td>10.71</td>
+      <td>6</td>
+      <td>21.43</td>
+      <td>46.43</td>
+      <td>42.86</td>
+      <td>10.71</td>
+    </tr>
+    <tr>
+      <td>Марийский</td>
+      <td>24</td>
+      <td>24</td>
+      <td>100.00</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>12</td>
+      <td>50.00</td>
+      <td>37.50</td>
+      <td>62.50</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>Архангельский</td>
+      <td>21</td>
+      <td>21</td>
+      <td>100.00</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>13</td>
+      <td>61.90</td>
+      <td>28.57</td>
+      <td>71.43</td>
+      <td>0.00</td>
+    </tr>
+  </tbody>
+</table></div>
+  </div>
+
+
+  <h2>5. Филиалы Bpilot: доли путей</h2>
+  <div class="card">
+
+    <div class="formula">
+      <div class="formula-title">Фильтры</div>
+      <div class="filters"><div class="filter-row"><b>база</b><span>базовые фильтры + Bpilot</span></div><div class="filter-row"><b>сегменты</b><span>как в разделе 3, но по каждому филиалу</span></div></div>
+    </div>
+
+
+    <div class="formula">
+      <div class="formula-title">Смысл</div>
+      <div class="equation">Сравниваем частоты agreement / pretension / FU / court внутри model vs control (или кейсов) <em>по филиалу</em>.</div>
+
+    </div>
+
+
+    <div class="example">
+      <div class="example-title">Чтение</div>
+      <div>Смотрите пары строк одного филиала с разными segment.</div>
+    </div>
+
+
+    <div class="legend">
+      <b>Легенда строк</b>
+      <ul><li><code>filial</code> + <code>segment</code></li></ul>
+      <b>Легенда колонок</b>
+      <ul><li><code>*_share</code> в %</li></ul>
+    </div>
+
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>filial</th>
+      <th>segment</th>
+      <th>n</th>
+      <th>agreement_share</th>
+      <th>pretension_share</th>
+      <th>fu_incident_share</th>
+      <th>court_incident_share</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Владимирский</td>
+      <td>control</td>
+      <td>8</td>
+      <td>12.50</td>
+      <td>12.50</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>Владимирский</td>
+      <td>model</td>
+      <td>29</td>
+      <td>55.17</td>
+      <td>0.00</td>
+      <td>24.14</td>
+      <td>10.34</td>
+    </tr>
+    <tr>
+      <td>Курский</td>
+      <td>control</td>
+      <td>8</td>
+      <td>37.50</td>
+      <td>12.50</td>
+      <td>25.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>Курский</td>
+      <td>model</td>
+      <td>21</td>
+      <td>42.86</td>
+      <td>9.52</td>
+      <td>19.05</td>
+      <td>4.76</td>
+    </tr>
+    <tr>
+      <td>Магнитогорский</td>
+      <td>control</td>
+      <td>3</td>
+      <td>0.00</td>
+      <td>0.00</td>
+      <td>33.33</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>Магнитогорский</td>
+      <td>model</td>
+      <td>27</td>
+      <td>40.74</td>
+      <td>7.41</td>
+      <td>14.81</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>Омский</td>
+      <td>control</td>
+      <td>3</td>
+      <td>0.00</td>
+      <td>0.00</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>Омский</td>
+      <td>model</td>
+      <td>25</td>
+      <td>44.00</td>
+      <td>4.00</td>
+      <td>8.00</td>
+      <td>4.00</td>
+    </tr>
+    <tr>
+      <td>Пермский</td>
+      <td>control</td>
+      <td>4</td>
+      <td>25.00</td>
+      <td>0.00</td>
+      <td>25.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>Пермский</td>
+      <td>model</td>
+      <td>41</td>
+      <td>43.90</td>
+      <td>4.88</td>
+      <td>9.76</td>
+      <td>4.88</td>
+    </tr>
+    <tr>
+      <td>Ярославский</td>
+      <td>control</td>
+      <td>10</td>
+      <td>30.00</td>
+      <td>10.00</td>
+      <td>0.00</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <td>Ярославский</td>
+      <td>model</td>
+      <td>25</td>
+      <td>28.00</td>
+      <td>8.00</td>
+      <td>8.00</td>
+      <td>4.00</td>
+    </tr>
+  </tbody>
+</table></div>
+  </div>
+
+
+  <h2>6. Распределение РезультатПроверки + выплаты (Bpilot)</h2>
+  <div class="card">
+
+    <div class="formula">
+      <div class="formula-title">Фильтры</div>
+      <div class="filters"><div class="filter-row"><b>база</b><span>базовые фильтры + Bpilot</span></div></div>
+    </div>
+
+
+    <div class="formula">
+      <div class="formula-title">Корзины</div>
+      <div class="equation"><strong>model_0 / model_1</strong> — решения модели</div><div class="equation"><strong>model_rucheek</strong> — 0 ∪ 1</div><div class="equation"><strong>control</strong> — −100</div><div class="equation"><strong>other / missing</strong> — прочие / пустые значения</div>
+
+    </div>
+
+
+    <div class="example">
+      <div class="example-title">Чтение</div>
+      <div><code>share_of_base</code> — доля корзины от Bpilot; money-колонки — по выбранной amount_col.</div>
+    </div>
+
+
+    <div class="legend">
+      <b>Легенда строк</b>
+      <ul><li><code>other</code> — число ≠ {−100,0,1}</li><li><code>missing</code> — пусто / не число</li></ul>
+      <b>Легенда колонок</b>
+      <ul><li><code>n</code> — строк</li><li><code>share_of_base</code> — % от базы</li><li><code>n_amount</code> — непустых денежных значений</li><li><code>sum/mean/median/…</code> — статистики выплаты</li></ul>
+    </div>
+
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>bucket</th>
+      <th>n</th>
+      <th>share_of_base</th>
+      <th>amount_col</th>
+      <th>n_amount</th>
+      <th>sum</th>
+      <th>mean</th>
+      <th>median</th>
+      <th>p25</th>
+      <th>p75</th>
+      <th>min</th>
+      <th>max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>model_0</td>
+      <td>67</td>
+      <td>32.84</td>
+      <td>СуммаКВыплате</td>
+      <td>67</td>
+      <td>6.782578e+06</td>
+      <td>101232.505224</td>
+      <td>109217.467412</td>
+      <td>48042.464220</td>
+      <td>153843.007626</td>
+      <td>5563.023344</td>
+      <td>214424.639646</td>
+    </tr>
+    <tr>
+      <td>model_1</td>
+      <td>101</td>
+      <td>49.51</td>
+      <td>СуммаКВыплате</td>
+      <td>101</td>
+      <td>7.903895e+06</td>
+      <td>78256.384810</td>
+      <td>73268.789291</td>
+      <td>42414.666021</td>
+      <td>102612.892627</td>
+      <td>5963.131747</td>
+      <td>216591.043578</td>
+    </tr>
+    <tr>
+      <td>model_rucheek</td>
+      <td>168</td>
+      <td>82.35</td>
+      <td>СуммаКВыплате</td>
+      <td>168</td>
+      <td>1.468647e+07</td>
+      <td>87419.480451</td>
+      <td>79374.275094</td>
+      <td>43387.152333</td>
+      <td>121599.022451</td>
+      <td>5563.023344</td>
+      <td>216591.043578</td>
+    </tr>
+    <tr>
+      <td>control</td>
+      <td>36</td>
+      <td>17.65</td>
+      <td>СуммаКВыплате</td>
+      <td>36</td>
+      <td>3.883283e+06</td>
+      <td>107868.962904</td>
+      <td>116388.278949</td>
+      <td>63299.866439</td>
+      <td>148002.436185</td>
+      <td>9610.152701</td>
+      <td>191522.907554</td>
+    </tr>
+    <tr>
+      <td>other</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>СуммаКВыплате</td>
+      <td>0</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>missing</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>СуммаКВыплате</td>
+      <td>0</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+    </tr>
+  </tbody>
+</table></div>
+  </div>
+
+
+  <h2>7. Выплаты по сегментам (Bpilot)</h2>
+  <div class="card">
+
+    <div class="formula">
+      <div class="formula-title">Фильтры</div>
+      <div class="filters"><div class="filter-row"><b>база</b><span>базовые фильтры + Bpilot</span></div><div class="filter-row"><b>сегменты</b><span>вариант 1: model/control; вариант 2: 4 кейса</span></div></div>
+    </div>
+
+
+    <div class="formula">
+      <div class="formula-title">Метрики</div>
+      <div class="equation">sum, mean, median, p25, p75, min, max по amount_col сегмента</div>
+
+    </div>
+
+
+    <div class="example">
+      <div class="example-title">Чтение</div>
+      <div>Сравнивайте типичный размер выплаты model vs control.</div>
+    </div>
+
+
+    <div class="legend">
+      <b>Легенда строк</b>
+      <ul><li>строка = сегмент</li></ul>
+      <b>Легенда колонок</b>
+      <ul><li><code>n</code> — строк сегмента</li><li><code>n_amount</code> — непустых сумм</li></ul>
+    </div>
+
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>segment</th>
+      <th>amount_col</th>
+      <th>n</th>
+      <th>n_amount</th>
+      <th>sum</th>
+      <th>mean</th>
+      <th>median</th>
+      <th>p25</th>
+      <th>p75</th>
+      <th>min</th>
+      <th>max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>model</td>
+      <td>СуммаКВыплате</td>
+      <td>168</td>
+      <td>168</td>
+      <td>1.468647e+07</td>
+      <td>87419.480451</td>
+      <td>79374.275094</td>
+      <td>43387.152333</td>
+      <td>121599.022451</td>
+      <td>5563.023344</td>
+      <td>216591.043578</td>
+    </tr>
+    <tr>
+      <td>control</td>
+      <td>СуммаКВыплате</td>
+      <td>36</td>
+      <td>36</td>
+      <td>3.883283e+06</td>
+      <td>107868.962904</td>
+      <td>116388.278949</td>
+      <td>63299.866439</td>
+      <td>148002.436185</td>
+      <td>9610.152701</td>
+      <td>191522.907554</td>
+    </tr>
+    <tr>
+      <td>base_all</td>
+      <td>СуммаКВыплате</td>
+      <td>204</td>
+      <td>204</td>
+      <td>1.856976e+07</td>
+      <td>91028.212649</td>
+      <td>86966.296231</td>
+      <td>46001.645706</td>
+      <td>127427.172351</td>
+      <td>5563.023344</td>
+      <td>216591.043578</td>
+    </tr>
+  </tbody>
+</table></div>
+  </div>
+
+
+  <h2>8. Диагностика кейсов call/result/payout (Bpilot)</h2>
+  <div class="card">
+
+    <div class="formula">
+      <div class="formula-title">Фильтры</div>
+      <div class="filters"><div class="filter-row"><b>база</b><span>базовые фильтры + Bpilot</span></div></div>
+    </div>
+
+
+    <div class="formula">
+      <div class="formula-title">Счётчики</div>
+      <div class="equation">n_applied_one_paid / n_ignored_zero_paid / n_out_of_model_paid / n_recommended_unpaid</div>
+
+    </div>
+
+
+    <div class="example">
+      <div class="example-title">Зачем</div>
+      <div>Показывает, насколько часто рекомендация модели игнорируется или выплата возникает вне ручейка.</div>
+    </div>
+
+
+    <div class="legend">
+      <b>Легенда строк</b>
+      <ul><li><code>total</code> и строки по филиалам</li></ul>
+      <b>Легенда колонок</b>
+      <ul><li>колонки — счётчики четырёх кейсов</li></ul>
+    </div>
+
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>slice</th>
+      <th>filial</th>
+      <th>n_base</th>
+      <th>n_applied_one_paid</th>
+      <th>n_ignored_zero_paid</th>
+      <th>n_out_of_model_paid</th>
+      <th>n_recommended_unpaid</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>total</td>
+      <td>None</td>
+      <td>204</td>
+      <td>65</td>
+      <td>0</td>
+      <td>0</td>
+      <td>21</td>
+    </tr>
+    <tr>
+      <td>filial</td>
+      <td>Владимирский</td>
+      <td>37</td>
+      <td>13</td>
+      <td>0</td>
+      <td>0</td>
+      <td>4</td>
+    </tr>
+    <tr>
+      <td>filial</td>
+      <td>Курский</td>
+      <td>29</td>
+      <td>7</td>
+      <td>0</td>
+      <td>0</td>
+      <td>1</td>
+    </tr>
+    <tr>
+      <td>filial</td>
+      <td>Магнитогорский</td>
+      <td>30</td>
+      <td>11</td>
+      <td>0</td>
+      <td>0</td>
+      <td>5</td>
+    </tr>
+    <tr>
+      <td>filial</td>
+      <td>Омский</td>
+      <td>28</td>
+      <td>6</td>
+      <td>0</td>
+      <td>0</td>
+      <td>4</td>
+    </tr>
+    <tr>
+      <td>filial</td>
+      <td>Пермский</td>
+      <td>45</td>
+      <td>20</td>
+      <td>0</td>
+      <td>0</td>
+      <td>4</td>
+    </tr>
+    <tr>
+      <td>filial</td>
+      <td>Ярославский</td>
+      <td>35</td>
+      <td>8</td>
+      <td>0</td>
+      <td>0</td>
+      <td>3</td>
+    </tr>
+  </tbody>
+</table></div>
+  </div>
+
+
+  <h2>9. Контур Bam (Архангельский / Марийский)</h2>
+  <div class="card">
+
+    <div class="formula">
+      <div class="formula-title">Фильтры Bam</div>
+      <div class="filters"><div class="filter-row"><b>база</b><span>базовые фильтры + филиал ∈ {Архангельский, Марийский}</span></div><div class="filter-row"><b>ожидание</b><span>~100% РезультатПроверки ∈ {0,1}, контроль почти пуст</span></div></div>
+    </div>
+
+
+    <div class="formula">
+      <div class="formula-title">Аналитика</div>
+      <div class="equation">Те же доли / кейсы, что и для Bpilot, но на Bam.</div>
+
+    </div>
+
+
+    <div class="example">
+      <div class="example-title">Чтение</div>
+      <div><code>model</code>: n=45.0, agreement=62.22%, pretension=4.44%, fu=6.67%, court=0.0%<br/><code>control</code>: n=0.0, agreement=nan%, pretension=nan%, fu=nan%, court=nan%</div>
+    </div>
+
+
+    <div class="legend">
+      <b>Легенда строк</b>
+      <ul><li>сегменты как в разделе 3</li></ul>
+      <b>Легенда колонок</b>
+      <ul><li>доли в %</li></ul>
+    </div>
+
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>segment</th>
+      <th>n</th>
+      <th>agreement_share</th>
+      <th>pretension_share</th>
+      <th>fu_incident_share</th>
+      <th>court_incident_share</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>model</td>
+      <td>45.0</td>
+      <td>62.22</td>
+      <td>4.44</td>
+      <td>6.67</td>
+      <td>0.0</td>
+    </tr>
+    <tr>
+      <td>control</td>
+      <td>0.0</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>lift_pp (model - control)</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>lift_rel (model / control - 1)</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+    </tr>
+  </tbody>
+</table></div>
+  </div>
+
+
+  <h3>9.1 Bam: usage по филиалам</h3>
+  <div class="card">
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>filial</th>
+      <th>n</th>
+      <th>n_model_rucheek</th>
+      <th>model_rucheek_share</th>
+      <th>n_control</th>
+      <th>control_share</th>
+      <th>n_applied_result1_paid</th>
+      <th>applied_share</th>
+      <th>share_result_0</th>
+      <th>share_result_1</th>
+      <th>share_out_of_model</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Марийский</td>
+      <td>24</td>
+      <td>24</td>
+      <td>100.0</td>
+      <td>0</td>
+      <td>0.0</td>
+      <td>12</td>
+      <td>50.0</td>
+      <td>37.50</td>
+      <td>62.50</td>
+      <td>0.0</td>
+    </tr>
+    <tr>
+      <td>Архангельский</td>
+      <td>21</td>
+      <td>21</td>
+      <td>100.0</td>
+      <td>0</td>
+      <td>0.0</td>
+      <td>13</td>
+      <td>61.9</td>
+      <td>28.57</td>
+      <td>71.43</td>
+      <td>0.0</td>
+    </tr>
+  </tbody>
+</table></div>
+  </div>
+
+  <h3>9.2 Bam: доли путей по филиалам</h3>
+  <div class="card">
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>filial</th>
+      <th>segment</th>
+      <th>n</th>
+      <th>agreement_share</th>
+      <th>pretension_share</th>
+      <th>fu_incident_share</th>
+      <th>court_incident_share</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Архангельский</td>
+      <td>control</td>
+      <td>0</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>Архангельский</td>
+      <td>model</td>
+      <td>21</td>
+      <td>52.38</td>
+      <td>0.00</td>
+      <td>4.76</td>
+      <td>0.0</td>
+    </tr>
+    <tr>
+      <td>Марийский</td>
+      <td>control</td>
+      <td>0</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>Марийский</td>
+      <td>model</td>
+      <td>24</td>
+      <td>70.83</td>
+      <td>8.33</td>
+      <td>8.33</td>
+      <td>0.0</td>
+    </tr>
+  </tbody>
+</table></div>
+  </div>
+
+  <h3>9.3 Bam: распределение РезультатПроверки</h3>
+  <div class="card">
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>bucket</th>
+      <th>n</th>
+      <th>share_of_base</th>
+      <th>amount_col</th>
+      <th>n_amount</th>
+      <th>sum</th>
+      <th>mean</th>
+      <th>median</th>
+      <th>p25</th>
+      <th>p75</th>
+      <th>min</th>
+      <th>max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>model_0</td>
+      <td>15</td>
+      <td>33.33</td>
+      <td>СуммаКВыплате</td>
+      <td>15</td>
+      <td>1.810648e+06</td>
+      <td>120709.884162</td>
+      <td>137415.195757</td>
+      <td>71074.529315</td>
+      <td>167126.161551</td>
+      <td>10236.127277</td>
+      <td>198994.196736</td>
+    </tr>
+    <tr>
+      <td>model_1</td>
+      <td>30</td>
+      <td>66.67</td>
+      <td>СуммаКВыплате</td>
+      <td>30</td>
+      <td>2.963376e+06</td>
+      <td>98779.184415</td>
+      <td>89356.615164</td>
+      <td>53573.017194</td>
+      <td>140321.198986</td>
+      <td>10637.956048</td>
+      <td>197861.187910</td>
+    </tr>
+    <tr>
+      <td>model_rucheek</td>
+      <td>45</td>
+      <td>100.00</td>
+      <td>СуммаКВыплате</td>
+      <td>45</td>
+      <td>4.774024e+06</td>
+      <td>106089.417664</td>
+      <td>115527.072328</td>
+      <td>58763.884065</td>
+      <td>149925.743922</td>
+      <td>10236.127277</td>
+      <td>198994.196736</td>
+    </tr>
+    <tr>
+      <td>control</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>СуммаКВыплате</td>
+      <td>0</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>other</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>СуммаКВыплате</td>
+      <td>0</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>missing</td>
+      <td>0</td>
+      <td>0.00</td>
+      <td>СуммаКВыплате</td>
+      <td>0</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+    </tr>
+  </tbody>
+</table></div>
+  </div>
+
+  <h3>9.4 Bam: выплаты</h3>
+  <div class="card">
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>segment</th>
+      <th>amount_col</th>
+      <th>n</th>
+      <th>n_amount</th>
+      <th>sum</th>
+      <th>mean</th>
+      <th>median</th>
+      <th>p25</th>
+      <th>p75</th>
+      <th>min</th>
+      <th>max</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>model</td>
+      <td>СуммаКВыплате</td>
+      <td>45</td>
+      <td>45</td>
+      <td>4.774024e+06</td>
+      <td>106089.417664</td>
+      <td>115527.072328</td>
+      <td>58763.884065</td>
+      <td>149925.743922</td>
+      <td>10236.127277</td>
+      <td>198994.196736</td>
+    </tr>
+    <tr>
+      <td>control</td>
+      <td>СуммаКВыплате</td>
+      <td>0</td>
+      <td>0</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <td>base_all</td>
+      <td>СуммаКВыплате</td>
+      <td>45</td>
+      <td>45</td>
+      <td>4.774024e+06</td>
+      <td>106089.417664</td>
+      <td>115527.072328</td>
+      <td>58763.884065</td>
+      <td>149925.743922</td>
+      <td>10236.127277</td>
+      <td>198994.196736</td>
+    </tr>
+  </tbody>
+</table></div>
+  </div>
+
+  <h3>9.5 Bam: кейсы</h3>
+  <div class="card">
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>slice</th>
+      <th>filial</th>
+      <th>n_base</th>
+      <th>n_applied_one_paid</th>
+      <th>n_ignored_zero_paid</th>
+      <th>n_out_of_model_paid</th>
+      <th>n_recommended_unpaid</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>total</td>
+      <td>None</td>
+      <td>45</td>
+      <td>25</td>
+      <td>10</td>
+      <td>0</td>
+      <td>5</td>
+    </tr>
+    <tr>
+      <td>filial</td>
+      <td>Архангельский</td>
+      <td>21</td>
+      <td>13</td>
+      <td>5</td>
+      <td>0</td>
+      <td>2</td>
+    </tr>
+    <tr>
+      <td>filial</td>
+      <td>Марийский</td>
+      <td>24</td>
+      <td>12</td>
+      <td>5</td>
+      <td>0</td>
+      <td>3</td>
+    </tr>
+  </tbody>
+</table></div>
+  </div>
+
+</div>
+</body>
+</html>

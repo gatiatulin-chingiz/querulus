@@ -36,6 +36,7 @@
       "name": "querulus_rg_3",
       "column_target": "TARGET_SEV",
       "objective": "regression",
+      "data_filter_condition": "TARGET_SEV > 0",
       "wrapper": "catboost",
       "params_catboost": {
         "iterations": 150,
@@ -137,6 +138,7 @@
       "name": "querulus_rg_3_glm",
       "column_target": "TARGET_SEV",
       "objective": "regression",
+      "data_filter_condition": "TARGET_SEV > 0",
       "wrapper": "glm",
       "params_glm": {
         "method": "lbfgs",
@@ -234,6 +236,7 @@
       "name": "querulus_rg_3_xgb",
       "column_target": "TARGET_SEV",
       "objective": "regression",
+      "data_filter_condition": "TARGET_SEV > 0",
       "wrapper": "xgboost",
       "relative_features": [],
       "features": [
@@ -337,6 +340,7 @@
       "name": "querulus_rg_3_lgb",
       "column_target": "TARGET_SEV",
       "objective": "regression",
+      "data_filter_condition": "TARGET_SEV > 0",
       "wrapper": "lightgbm",
       "relative_features": [],
       "features": [

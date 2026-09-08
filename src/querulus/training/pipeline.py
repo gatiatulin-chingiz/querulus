@@ -374,7 +374,7 @@ def _split_by_date(
     data[config.date_column] = pd.to_datetime(data[config.date_column])
     if target_range is not None:
         data = data[data[target].between(*target_range)]
-    elif positive_target:
+    if positive_target:
         data = data[pd.to_numeric(data[target], errors="coerce") > 0]
 
     train_mask = data[config.date_column].between(*config.train_period)
@@ -1218,7 +1218,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         severity_target_filter = f"{config.severity_target} > 0"
     else:
         severity_target_filter = (
-            f"{config.severity_target} in "
+            f"{config.severity_target} > 0 and in "
             f"[{config.severity_range[0]}, {config.severity_range[1]}]"
         )
 
@@ -1261,7 +1261,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         severity_features,
         config,
         target_range=config.severity_range,
-        positive_target=config.severity_range is None,
+        positive_target=True,
     )
     severity_diag_split = _split_by_date(
         data,
@@ -1269,7 +1269,7 @@ def train_models(df: pd.DataFrame, config: TrainingConfig | None = None) -> Trai
         severity_features,
         config,
         target_range=config.severity_range,
-        positive_target=config.severity_range is None,
+        positive_target=True,
         full_frame=True,
     )
     severity_train_pool = make_pool(

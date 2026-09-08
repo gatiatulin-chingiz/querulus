@@ -14,8 +14,9 @@ import pandas as pd
 
 DEFAULT_TOLERANCE = 1.0
 
-# main = без Арх/Марийск (ручеек ~50%); pilot = только они (~100%); all = без фильтра филиала.
-FilialScope = Literal["main", "pilot", "all"]
+# pilot = Bpilot без Арх/Марийск (~50% ручеёк); am = Bam только Арх/Марийск (~100%);
+# all = без фильтра филиала. "main" оставлен как алиас pilot.
+FilialScope = Literal["pilot", "am", "all", "main"]
 
 # Алиасы заголовков со скринов (имена плывут: «к доплате» / «к выплате», «в инциденте»).
 COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
@@ -42,6 +43,10 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "model_payout": (
         "Выплата по модели в Инциденте",
         "Выплата по модели в инциденте",
+        "Выплата по модели",
+    ),
+    # Убытковый флаг (не max по инциденту) — для кейсов применения модели.
+    "model_payout_loss": (
         "Выплата по модели",
     ),
     "recommended": (
@@ -494,30 +499,47 @@ def excluded_filial_mask(df: pd.DataFrame) -> pd.Series:
     return excluded
 
 
+def normalize_filial_scope(filial_scope: str) -> Literal["pilot", "am", "all"]:
+    """Нормализовать имя контура филиалов.
+
+    ``pilot`` / ``main`` → Bpilot; ``am`` / ``bam`` → Bam; ``all`` без фильтра.
+    """
+    key = str(filial_scope).strip().lower()
+    if key in ("pilot", "main"):
+        return "pilot"
+    if key in ("am", "bam"):
+        return "am"
+    if key == "all":
+        return "all"
+    raise ValueError(
+        f"Unknown filial_scope={filial_scope!r}; ожидается pilot|am|all "
+        f"(алиас main=pilot)"
+    )
+
+
 def analytics_base_mask(
     df: pd.DataFrame,
     *,
-    filial_scope: FilialScope = "main",
+    filial_scope: FilialScope = "pilot",
 ) -> pd.Series:
-    """Общие фильтры для Excel/витрина-аналитики.
+    """Базовые фильтры аналитики (без сегментации по модели).
 
     ``filial_scope``:
-      - ``main`` — без Архангельского/Марийского (ручеек);
-      - ``pilot`` — только Архангельский/Марийский (~100% модель);
+      - ``pilot`` / ``main`` — Bpilot: без Архангельского/Марийского;
+      - ``am`` — Bam: только Архангельский/Марийский;
       - ``all`` — филиал не фильтруем.
 
     Если колонка отсутствует — условие по ней не применяется (pass-through).
     """
+    scope = normalize_filial_scope(filial_scope)
     mask = pd.Series(True, index=df.index)
 
-    if filial_scope != "all":
+    if scope != "all":
         excluded = excluded_filial_mask(df)
-        if filial_scope == "main":
+        if scope == "pilot":
             mask = mask & ~excluded
-        elif filial_scope == "pilot":
+        elif scope == "am":
             mask = mask & excluded
-        else:
-            raise ValueError(f"Unknown filial_scope={filial_scope!r}")
 
     form_col = resolve_column(df, "refund_form")
     if form_col is not None:
@@ -542,25 +564,34 @@ def analytics_base_mask(
     return mask
 
 
+def resolve_model_payout_loss_column(df: pd.DataFrame) -> str | None:
+    """Колонка убытковой «Выплата по модели» (не инцидентная)."""
+    col = resolve_column(df, "model_payout_loss")
+    if col is not None:
+        return col
+    # fallback: если в кадре только инцидентный алиас
+    return resolve_column(df, "model_payout")
+
+
 def intervention_mask(
     df: pd.DataFrame,
     *,
-    filial_scope: FilialScope = "main",
+    filial_scope: FilialScope = "pilot",
 ) -> pd.Series:
-    """Контур финэффекта I: общие фильтры ∧ вызов модели ∧ выплата по модели.
+    """Контур финэффекта I (ожидаемый кейс): B ∩ РезультатПроверки=1 ∩ Выплата по модели=1.
 
-    Общие: филиал по ``filial_scope``, ФормаВозмещения ∈
-    {денежная, ремонт, соглашение}, УбытокСтатус=первичный,
-    ТипОбъектаАвтотранспорт=1.
-    Дополнительно: ВызовМодельСутяжность=1 ∧ Выплата по модели в Инциденте=1.
+    ``ВызовМодельСутяжность`` не используем: при result=1 запись модели уже есть.
     """
     mask = analytics_base_mask(df, filial_scope=filial_scope)
-    for key in ("model_call", "model_payout"):
-        col = resolve_column(df, key)
-        if col is None:
-            return pd.Series(False, index=df.index)
-        mask = mask & _to_numeric(df[col]).fillna(0).eq(1)
-    return mask
+    result_col = resolve_column(df, "result_check")
+    pay_col = resolve_model_payout_loss_column(df)
+    if result_col is None or pay_col is None:
+        return pd.Series(False, index=df.index)
+    return (
+        mask
+        & _to_numeric(df[result_col]).fillna(-999).eq(1)
+        & _to_numeric(df[pay_col]).fillna(0).eq(1)
+    )
 
 
 def default_reconcile_specs(df: pd.DataFrame) -> list[ReconcileSpec]:

@@ -69,7 +69,7 @@ def filter_features_by_noise(
     y_train = df.loc[train_index, target_column]
     y_eval = df.loc[eval_index, target_column]
 
-    if positive_target:
+    if positive_target or task_type == "regression":
         tr_ok = y_train > 0
         ev_ok = y_eval > 0
         x_train, y_train = x_train.loc[tr_ok], y_train.loc[tr_ok]

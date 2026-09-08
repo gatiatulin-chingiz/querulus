@@ -26,7 +26,17 @@ from querulus.training.triple_stack import TripleStackResult
 
 DEFAULT_HTML_PATH = PROJECT_ROOT / "notebooks" / "leadership_models_report.html"
 _FREQ_METRIC_COLS = ("stack", "split", "y_true", "n", "pr_auc", "roc_auc", "gini", "shift")
-_SEV_METRIC_COLS = ("stack", "split", "y_true", "n", "mae", "rmse", "r2", "shift")
+_SEV_METRIC_COLS = (
+    "stack",
+    "split",
+    "scope",
+    "y_true",
+    "n",
+    "mae",
+    "rmse",
+    "r2",
+    "shift",
+)
 _SHARE_RENAME = {
     "stack": "модель",
     "n": "дел 1–1",
@@ -458,9 +468,9 @@ def _metrics_section(data: LeadershipReportData) -> str:
     return f"""
       <h3>Frequency, Test (C2+)</h3>
       {_df_html(freq, columns=_FREQ_METRIC_COLS, empty="нужен C2+")}
-      <h3>Severity, Test (C2+)</h3>
+      <h3>Severity, Test (C2+, только target &gt; 0)</h3>
       {_df_html(sev, columns=_SEV_METRIC_COLS, empty="нужен C2+")}
-      <p><code>shift</code> для frequency = число предсказанных единиц / число фактических единиц; для severity = сумма прогноза / сумма факта.</p>
+      <p>Нулевые таргеты не входят в обучение и метрики severity. <code>shift</code> для frequency = число предсказанных единиц / число фактических единиц; для severity = сумма прогноза / сумма факта на положительных строках.</p>
     """
 
 

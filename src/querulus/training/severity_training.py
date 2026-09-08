@@ -74,7 +74,7 @@ def fit_severity_model(
     train_index: pd.Index | None = None,
     eval_index: pd.Index | None = None,
 ) -> object:
-    """Обучить severity на сплите ``training`` (опционально подмножество индексов)."""
+    """Обучить severity только на target > 0 (опционально подмножество индексов)."""
     from querulus.training.pipeline import require_catboost
 
     if training.severity_split is None:
@@ -97,6 +97,13 @@ def fit_severity_model(
         idx = x_test.index.intersection(eval_index)
         x_test = x_test.loc[idx]
         y_test = y_test.loc[idx]
+
+    train_positive = pd.to_numeric(y_train, errors="coerce") > 0
+    test_positive = pd.to_numeric(y_test, errors="coerce") > 0
+    x_train, y_train = x_train.loc[train_positive], y_train.loc[train_positive]
+    x_test, y_test = x_test.loc[test_positive], y_test.loc[test_positive]
+    if x_train.empty:
+        raise ValueError("Нет строк severity target > 0 для обучения")
 
     y_train_arr = np.asarray(y_train, dtype=float)
     y_test_arr = np.asarray(y_test, dtype=float)

@@ -1,8 +1,11 @@
-"""Оценка финэффекта по Excel-выгрузке (фаза 2 мониторинга).
+"""Оценка финэффекта по Excel/витрине (фаза 2 мониторинга).
 
 Без факта ПСР: expected_psr = precision × Σ_I (ОД_заявлено×k + e_fee),
-cost = Σ_I СуммаКВыплате, e_fee = p_fu×fu_fee + p_court×court_fee.
-I = общие фильтры ∧ ВызовМодельСутяжность=1 ∧ Выплата по модели=1.
+cost = Σ cost_mask, e_fee = p_fu×fu_fee + p_court×court_fee.
+
+Сегментация «модель работала» — по РезультатПроверки (0/1 vs −100),
+не по ВызовМодельСутяжность. Подробности — monitoring_analytics /
+два HTML-отчёта.
 """
 from __future__ import annotations
 
@@ -27,8 +30,20 @@ from querulus.fin_effect.excel_explore import (
     load_excel,
     load_monitoring_frame,
     load_vitrina_mssql,
+    normalize_filial_scope,
     reconcile_cost_candidates_on_i,
     resolve_column,
+    resolve_model_payout_loss_column,
+)
+from querulus.fin_effect.monitoring_analytics import (
+    agreement_mask,
+    case_diagnostics as model_called_not_used_stats,
+    filial_path_shares as filial_path_shares_by_model,
+    filial_usage_stats as filial_model_usage_stats,
+    payment_stats as payment_stats_by_model,
+    pretension_mask,
+    result_check_bucket,
+    result_distribution as result_check_distribution,
 )
 
 FU_FEE_DEFAULT = 100_000.0
@@ -320,6 +335,22 @@ def _as_bool01(series: pd.Series) -> pd.Series:
     return (num.fillna(0) > 0).astype(int)
 
 
+def fu_mask(df: pd.DataFrame) -> pd.Series:
+    """Обращение к ФУ на строке убытка."""
+    col = resolve_column(df, "fu_flag")
+    if col is None:
+        return pd.Series(False, index=df.index)
+    return _as_bool01(df[col]).astype(bool)
+
+
+def court_mask(df: pd.DataFrame) -> pd.Series:
+    """Обращение к суду на строке убытка."""
+    col = resolve_column(df, "court_flag")
+    if col is None:
+        return pd.Series(False, index=df.index)
+    return _as_bool01(df[col]).astype(bool)
+
+
 def model_used_mask(df: pd.DataFrame) -> pd.Series:
     """Сегмент «модель использовали»: вызов модели или есть РезультатПроверки."""
     call = resolve_column(df, "model_call")
@@ -338,474 +369,44 @@ def model_used_mask(df: pd.DataFrame) -> pd.Series:
 def model_positive_mask(
     df: pd.DataFrame,
     *,
-    filial_scope: FilialScope = "main",
+    filial_scope: FilialScope = "pilot",
 ) -> pd.Series:
-    """С моделью внутри общих фильтров: вызов модели ∧ выплата по модели.
+    """Ручеёк: РезультатПроверки ∈ {0, 1} внутри базы филиалов."""
+    from querulus.fin_effect.monitoring_analytics import model_rucheek_mask
 
-    Без фильтра соглашения — иначе agreement_share всегда 100%.
-    """
-    mask = analytics_base_mask(df, filial_scope=filial_scope)
-    for key in ("model_call", "model_payout"):
-        col = resolve_column(df, key)
-        if col is None:
-            return pd.Series(False, index=df.index)
-        mask = mask & _to_numeric(df[col]).fillna(0).eq(1)
-    return mask
-
-
-def agreement_mask(df: pd.DataFrame) -> pd.Series:
-    """Соглашение: флаг или ФормаВозмещения содержит «соглашен»."""
-    flag = resolve_column(df, "agreement")
-    form = resolve_column(df, "refund_form")
-    out = pd.Series(False, index=df.index)
-    if flag is not None:
-        out = out | _as_bool01(df[flag]).astype(bool)
-    if form is not None:
-        text = df[form].fillna("").astype(str).str.casefold()
-        out = out | text.str.contains("соглашен", na=False)
-    return out
-
-
-def pretension_mask(df: pd.DataFrame) -> pd.Series:
-    """Претензия: ЕстьПретензияВИнциденте (или запасные алиасы)."""
-    col = resolve_column(df, "pretension")
-    if col is None:
-        return pd.Series(False, index=df.index)
-    return _as_bool01(df[col]).astype(bool)
-
-
-def fu_mask(df: pd.DataFrame) -> pd.Series:
-    """Обращение к ФУ."""
-    col = resolve_column(df, "fu_flag")
-    if col is None:
-        return pd.Series(False, index=df.index)
-    return _as_bool01(df[col]).astype(bool)
-
-
-def court_mask(df: pd.DataFrame) -> pd.Series:
-    """Обращение к суду."""
-    col = resolve_column(df, "court_flag")
-    if col is None:
-        return pd.Series(False, index=df.index)
-    return _as_bool01(df[col]).astype(bool)
+    return model_rucheek_mask(df, filial_scope=filial_scope)
 
 
 def compare_agreement_pretension_by_model(
     df: pd.DataFrame,
     *,
-    filial_scope: FilialScope = "main",
+    filial_scope: FilialScope = "pilot",
+    variant: int = 1,
 ) -> pd.DataFrame:
-    """Доли соглашений / претензий / ФУ / суда: с моделью vs без.
-
-    Сегменты внутри ``analytics_base``. ФУ и суд — **инцидентные** флаги
-    (после ``enrich_incident_path_flags``), иначе на «первичных» строках всегда 0.
-    """
-    if INCIDENT_FU_COL not in df.columns or INCIDENT_COURT_COL not in df.columns:
-        df = enrich_incident_path_flags(df)
-
-    base = analytics_base_mask(df, filial_scope=filial_scope)
-    used = model_positive_mask(df, filial_scope=filial_scope)
-    agr = agreement_mask(df)
-    pret = pretension_mask(df)
-    fu = _as_bool01(df[INCIDENT_FU_COL]).astype(bool)
-    court = _as_bool01(df[INCIDENT_COURT_COL]).astype(bool)
-
-    rows: list[dict[str, Any]] = []
-    for label, mask in (
-        ("with_model", used),
-        ("without_model", base & ~used),
-    ):
-        n = int(mask.sum())
-        rows.append(
-            {
-                "segment": label,
-                "n": n,
-                "agreement_share": float(agr[mask].mean()) if n else np.nan,
-                "pretension_share": float(pret[mask].mean()) if n else np.nan,
-                "fu_incident_share": float(fu[mask].mean()) if n else np.nan,
-                "court_incident_share": float(court[mask].mean()) if n else np.nan,
-            }
-        )
-    table = pd.DataFrame(rows)
-    used_row = table.loc[table["segment"] == "with_model"].iloc[0]
-    ctrl_row = table.loc[table["segment"] == "without_model"].iloc[0]
-
-    def _lift_pp(a: float, b: float) -> float:
-        if pd.isna(a) or pd.isna(b):
-            return np.nan
-        return float(a - b)
-
-    def _lift_rel(a: float, b: float) -> float:
-        if pd.isna(a) or pd.isna(b) or not b:
-            return np.nan
-        return float(a / b - 1.0)
-
-    share_cols = (
-        "agreement_share",
-        "pretension_share",
-        "fu_incident_share",
-        "court_incident_share",
-    )
-    lift_pp = {"segment": "lift_pp (with - without)", "n": np.nan}
-    lift_rel = {"segment": "lift_rel (with / without - 1)", "n": np.nan}
-    for col in share_cols:
-        lift_pp[col] = _lift_pp(used_row[col], ctrl_row[col])
-        lift_rel[col] = _lift_rel(used_row[col], ctrl_row[col])
-    return pd.concat([table, pd.DataFrame([lift_pp, lift_rel])], ignore_index=True)
-
-
-RESULT_OUT_OF_MODEL = -100
-
-
-def result_check_bucket(series: pd.Series) -> pd.Series:
-    """Ручеёк: 0/1 = в модели; -100 = вне модели; иначе other."""
-    num = _to_numeric(series)
-    out = pd.Series("other", index=series.index, dtype=object)
-    out = out.mask(num.eq(0), "model_0")
-    out = out.mask(num.eq(1), "model_1")
-    out = out.mask(num.eq(RESULT_OUT_OF_MODEL), "out_of_model")
-    out = out.mask(num.isna(), "missing")
-    return out
-
-
-def _share_row(
-    mask: pd.Series,
-    *,
-    agr: pd.Series,
-    pret: pd.Series,
-    fu: pd.Series,
-    court: pd.Series,
-    extra: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    n = int(mask.sum())
-    row: dict[str, Any] = {
-        "n": n,
-        "agreement_share": float(agr[mask].mean()) if n else np.nan,
-        "pretension_share": float(pret[mask].mean()) if n else np.nan,
-        "fu_incident_share": float(fu[mask].mean()) if n else np.nan,
-        "court_incident_share": float(court[mask].mean()) if n else np.nan,
-    }
-    if extra:
-        row = {**extra, **row}
-    return row
-
-
-def _money_stats(values: pd.Series) -> dict[str, float]:
-    s = _to_numeric(values).dropna()
-    n = int(len(s))
-    if n == 0:
-        return {
-            "n_pay": 0,
-            "sum": np.nan,
-            "mean": np.nan,
-            "median": np.nan,
-            "p25": np.nan,
-            "p75": np.nan,
-            "min": np.nan,
-            "max": np.nan,
-        }
-    return {
-        "n_pay": n,
-        "sum": float(s.sum()),
-        "mean": float(s.mean()),
-        "median": float(s.median()),
-        "p25": float(s.quantile(0.25)),
-        "p75": float(s.quantile(0.75)),
-        "min": float(s.min()),
-        "max": float(s.max()),
-    }
-
-
-def _resolve_amount_col(df: pd.DataFrame, amount_col: str | None) -> str:
-    if amount_col and amount_col in df.columns:
-        return amount_col
-    for key in ("to_pay", "payment", "other_costs", "od_claimed"):
-        col = resolve_column(df, key)
-        if col is not None:
-            return col
-    raise KeyError("Нет денежной колонки для статистики выплат")
-
-
-def filial_model_usage_stats(
-    df: pd.DataFrame,
-    *,
-    filial_scope: FilialScope = "all",
-) -> pd.DataFrame:
-    """По филиалам: объём базы, вызов модели, выплата по модели, ручеёк."""
-    base = analytics_base_mask(df, filial_scope=filial_scope)
-    filial_col = resolve_column(df, "filial")
-    if filial_col is None:
-        return pd.DataFrame()
-
-    call_col = resolve_column(df, "model_call")
-    pay_col = resolve_column(df, "model_payout")
-    result_col = resolve_column(df, "result_check")
-
-    call = (
-        _as_bool01(df[call_col]).astype(bool)
-        if call_col is not None
-        else pd.Series(False, index=df.index)
-    )
-    pay = (
-        _as_bool01(df[pay_col]).astype(bool)
-        if pay_col is not None
-        else pd.Series(False, index=df.index)
-    )
-    buckets = (
-        result_check_bucket(df[result_col])
-        if result_col is not None
-        else pd.Series("missing", index=df.index)
+    """Доли путей: обёртка над monitoring_analytics.compare_path_shares."""
+    from querulus.fin_effect.monitoring_analytics import (
+        compare_path_shares,
+        shares_as_percent,
     )
 
-    rows: list[dict[str, Any]] = []
-    work = df.loc[base]
-    for filial, idx in work.groupby(filial_col, dropna=False).groups.items():
-        mask = base & df.index.isin(idx)
-        n = int(mask.sum())
-        n_call = int((mask & call).sum())
-        n_pay = int((mask & pay).sum())
-        n_used = int((mask & call & pay).sum())
-        n_call_not_used = int((mask & call & ~pay).sum())
-        b = buckets[mask]
-        rows.append(
-            {
-                "filial": filial,
-                "n": n,
-                "n_model_call": n_call,
-                "model_call_share": float(n_call / n) if n else np.nan,
-                "n_model_payout": n_pay,
-                "model_payout_share": float(n_pay / n) if n else np.nan,
-                "n_with_model": n_used,
-                "with_model_share": float(n_used / n) if n else np.nan,
-                "n_called_not_used": n_call_not_used,
-                "called_not_used_share": float(n_call_not_used / n) if n else np.nan,
-                "share_result_0": float((b == "model_0").mean()) if n else np.nan,
-                "share_result_1": float((b == "model_1").mean()) if n else np.nan,
-                "share_out_of_model": float((b == "out_of_model").mean()) if n else np.nan,
-            }
-        )
-    out = pd.DataFrame(rows)
-    if out.empty:
-        return out
-    return out.sort_values("n", ascending=False).reset_index(drop=True)
-
-
-def filial_path_shares_by_model(
-    df: pd.DataFrame,
-    *,
-    filial_scope: FilialScope = "main",
-) -> pd.DataFrame:
-    """По филиалам: доли agreement/pretension/FU/суд в with_model vs without."""
-    if INCIDENT_FU_COL not in df.columns or INCIDENT_COURT_COL not in df.columns:
-        df = enrich_incident_path_flags(df)
-
-    filial_col = resolve_column(df, "filial")
-    if filial_col is None:
-        return pd.DataFrame()
-
-    base = analytics_base_mask(df, filial_scope=filial_scope)
-    used = model_positive_mask(df, filial_scope=filial_scope)
-    agr = agreement_mask(df)
-    pret = pretension_mask(df)
-    fu = _as_bool01(df[INCIDENT_FU_COL]).astype(bool)
-    court = _as_bool01(df[INCIDENT_COURT_COL]).astype(bool)
-
-    rows: list[dict[str, Any]] = []
-    for filial, idx in df.loc[base].groupby(filial_col, dropna=False).groups.items():
-        in_filial = base & df.index.isin(idx)
-        for label, mask in (
-            ("with_model", in_filial & used),
-            ("without_model", in_filial & ~used),
-        ):
-            rows.append(
-                _share_row(
-                    mask,
-                    agr=agr,
-                    pret=pret,
-                    fu=fu,
-                    court=court,
-                    extra={"filial": filial, "segment": label},
-                )
-            )
-    out = pd.DataFrame(rows)
-    if out.empty:
-        return out
-    return out.sort_values(["filial", "segment"]).reset_index(drop=True)
-
-
-def result_check_distribution(
-    df: pd.DataFrame,
-    *,
-    filial_scope: FilialScope = "main",
-    amount_col: str | None = None,
-) -> pd.DataFrame:
-    """Распределение убытков по ручейку: 0/1 (в модели) vs -100 (вне)."""
-    base = analytics_base_mask(df, filial_scope=filial_scope)
-    result_col = resolve_column(df, "result_check")
-    if result_col is None:
-        return pd.DataFrame()
-
-    amount = _resolve_amount_col(df, amount_col)
-    buckets = result_check_bucket(df[result_col])
-    n_base = int(base.sum())
-    order = ("model_0", "model_1", "in_model_0_1", "out_of_model", "other", "missing")
-
-    rows: list[dict[str, Any]] = []
-    for label, mask in (
-        ("model_0", base & buckets.eq("model_0")),
-        ("model_1", base & buckets.eq("model_1")),
-        ("in_model_0_1", base & buckets.isin(["model_0", "model_1"])),
-        ("out_of_model", base & buckets.eq("out_of_model")),
-        ("other", base & buckets.eq("other")),
-        ("missing", base & buckets.eq("missing")),
-    ):
-        n = int(mask.sum())
-        stats = _money_stats(df.loc[mask, amount])
-        rows.append(
-            {
-                "bucket": label,
-                "n": n,
-                "share_of_base": float(n / n_base) if n_base else np.nan,
-                "amount_col": amount,
-                **stats,
-            }
-        )
-    out = pd.DataFrame(rows)
-    out["_ord"] = out["bucket"].map({b: i for i, b in enumerate(order)})
-    return out.sort_values("_ord").drop(columns="_ord").reset_index(drop=True)
-
-
-def payment_stats_by_model(
-    df: pd.DataFrame,
-    *,
-    filial_scope: FilialScope = "main",
-    amount_col: str | None = None,
-) -> pd.DataFrame:
-    """Выплаты: with_model (вызов∧выплата) vs without; плюс ручеёк 0/1 vs -100."""
-    base = analytics_base_mask(df, filial_scope=filial_scope)
-    used = model_positive_mask(df, filial_scope=filial_scope)
-    amount = _resolve_amount_col(df, amount_col)
-    result_col = resolve_column(df, "result_check")
-    buckets = (
-        result_check_bucket(df[result_col])
-        if result_col is not None
-        else None
+    return shares_as_percent(
+        compare_path_shares(df, filial_scope=filial_scope, variant=variant)
     )
-
-    segments: list[tuple[str, pd.Series]] = [
-        ("with_model", used),
-        ("without_model", base & ~used),
-        ("base_all", base),
-    ]
-    if buckets is not None:
-        segments.extend(
-            [
-                ("rucheek_0", base & buckets.eq("model_0")),
-                ("rucheek_1", base & buckets.eq("model_1")),
-                ("rucheek_in_model", base & buckets.isin(["model_0", "model_1"])),
-                ("rucheek_out", base & buckets.eq("out_of_model")),
-            ]
-        )
-
-    rows: list[dict[str, Any]] = []
-    for label, mask in segments:
-        stats = _money_stats(df.loc[mask, amount])
-        rows.append({"segment": label, "amount_col": amount, "n": int(mask.sum()), **stats})
-    return pd.DataFrame(rows)
-
-
-def model_called_not_used_stats(
-    df: pd.DataFrame,
-    *,
-    filial_scope: FilialScope = "main",
-) -> pd.DataFrame:
-    """Вызов модели без выплаты по модели (в т.ч. разбивка по филиалам)."""
-    base = analytics_base_mask(df, filial_scope=filial_scope)
-    call_col = resolve_column(df, "model_call")
-    pay_col = resolve_column(df, "model_payout")
-    if call_col is None or pay_col is None:
-        return pd.DataFrame()
-
-    call = _as_bool01(df[call_col]).astype(bool)
-    pay = _as_bool01(df[pay_col]).astype(bool)
-    called = base & call
-    used = called & pay
-    unused = called & ~pay
-
-    filial_col = resolve_column(df, "filial")
-    rows: list[dict[str, Any]] = [
-        {
-            "slice": "total",
-            "filial": None,
-            "n_base": int(base.sum()),
-            "n_called": int(called.sum()),
-            "n_used": int(used.sum()),
-            "n_called_not_used": int(unused.sum()),
-            "called_not_used_of_called": (
-                float(unused.sum() / called.sum()) if called.any() else np.nan
-            ),
-            "called_not_used_of_base": (
-                float(unused.sum() / base.sum()) if base.any() else np.nan
-            ),
-        }
-    ]
-    if filial_col is not None:
-        for filial, idx in df.loc[base].groupby(filial_col, dropna=False).groups.items():
-            in_f = base & df.index.isin(idx)
-            c = in_f & call
-            u = c & pay
-            nu = c & ~pay
-            rows.append(
-                {
-                    "slice": "filial",
-                    "filial": filial,
-                    "n_base": int(in_f.sum()),
-                    "n_called": int(c.sum()),
-                    "n_used": int(u.sum()),
-                    "n_called_not_used": int(nu.sum()),
-                    "called_not_used_of_called": (
-                        float(nu.sum() / c.sum()) if c.any() else np.nan
-                    ),
-                    "called_not_used_of_base": (
-                        float(nu.sum() / in_f.sum()) if in_f.any() else np.nan
-                    ),
-                }
-            )
-    return pd.DataFrame(rows)
 
 
 def build_extended_monitoring_analytics(
     df: pd.DataFrame,
     *,
     amount_col: str | None = None,
+    variant: int = 1,
 ) -> dict[str, pd.DataFrame]:
-    """Пакет расширенной аналитики для тетрадки / HTML."""
-    amount = _resolve_amount_col(df, amount_col)
-    return {
-        "filial_usage": filial_model_usage_stats(df, filial_scope="all"),
-        "filial_shares_main": filial_path_shares_by_model(df, filial_scope="main"),
-        "result_distribution_main": result_check_distribution(
-            df, filial_scope="main", amount_col=amount
-        ),
-        "payments_main": payment_stats_by_model(
-            df, filial_scope="main", amount_col=amount
-        ),
-        "called_not_used_main": model_called_not_used_stats(df, filial_scope="main"),
-        "segments_pilot": compare_agreement_pretension_by_model(
-            df, filial_scope="pilot"
-        ),
-        "filial_usage_pilot": filial_model_usage_stats(df, filial_scope="pilot"),
-        "filial_shares_pilot": filial_path_shares_by_model(df, filial_scope="pilot"),
-        "result_distribution_pilot": result_check_distribution(
-            df, filial_scope="pilot", amount_col=amount
-        ),
-        "payments_pilot": payment_stats_by_model(
-            df, filial_scope="pilot", amount_col=amount
-        ),
-        "called_not_used_pilot": model_called_not_used_stats(
-            df, filial_scope="pilot"
-        ),
-    }
+    """Совместимость: пакет аналитики через monitoring_analytics."""
+    from querulus.fin_effect.monitoring_analytics import build_variant_analytics
+
+    return build_variant_analytics(df, amount_col=amount_col, variant=variant)
+
+
+RESULT_OUT_OF_MODEL = -100
 
 
 def resolve_effect_date_series(df: pd.DataFrame) -> pd.Series:
@@ -963,15 +564,25 @@ def estimate_monitoring_effect(
     od_col: str | None = None,
     cost_col: str | None = None,
     paid_col: str | None = None,
+    variant: int = 1,
+    filial_scope: FilialScope = "pilot",
 ) -> MonitoringEffectResult:
     """Оценка net на выгрузке.
 
-    expected_psr = precision × Σ_I (ОД_заявлено × k + e_fee)
-    cost         = Σ_I СуммаКВыплате
-    net          = expected_psr − cost
+    Вариант 1:
+      expected_psr на result=1 ∧ выплата=1;
+      cost на result∈{{0,1}} ∧ выплата=1 (нули бьют через −cost).
+    Вариант 2:
+      expected_psr и cost на вызов=1 ∧ result=1 ∧ выплата=1.
 
     ``paid_col`` — устаревший алиас для ``od_col``.
     """
+    from querulus.fin_effect.monitoring_analytics import (
+        benefit_mask,
+        cost_mask_variant1,
+        variant2_case_masks,
+    )
+
     if od_col is None:
         od_col = paid_col
     if od_col is None:
@@ -985,26 +596,33 @@ def estimate_monitoring_effect(
     except KeyError:
         cost_name = resolve_column(df, "to_pay") or resolve_column(df, "payment") or od_name
 
-    mask = intervention_mask(df)
+    if variant == 1:
+        benefit = benefit_mask(df, filial_scope=filial_scope)
+        cost_m = cost_mask_variant1(df, filial_scope=filial_scope)
+    else:
+        benefit = variant2_case_masks(df, filial_scope=filial_scope)["applied_one_paid"]
+        cost_m = benefit
+
     od = _to_numeric(df[od_name]).fillna(0.0)
     cost_s = _to_numeric(df[cost_name]).fillna(0.0)
-    od_i = od.where(mask, 0.0)
-    cost_i = cost_s.where(mask, 0.0)
+    od_i = od.where(benefit, 0.0)
+    cost_i = cost_s.where(cost_m, 0.0)
     e_fee = priors.expected_fee()
     sum_od = float(od_i.sum())
     sum_paid = float(cost_i.sum())
-    n_i = int(mask.sum())
+    n_i = int(benefit.sum())
     expected_psr = float(priors.precision * ((od_i * priors.k).sum() + n_i * e_fee))
     cost = sum_paid
     net = expected_psr - cost
 
     frame = df.copy()
-    frame["_intervention"] = mask.astype(int)
+    frame["_intervention"] = benefit.astype(int)
+    frame["_cost_mask"] = cost_m.astype(int)
     frame["_od"] = od
     frame["_od_i"] = od_i
     frame["_cost_i"] = cost_i
     frame["_expected_psr_row"] = np.where(
-        mask,
+        benefit,
         priors.precision * (od_i * priors.k + e_fee),
         0.0,
     )
@@ -1032,13 +650,14 @@ def sensitivity_table(
     cost_col: str | None = None,
     paid_col: str | None = None,
     rel_delta: float = 0.2,
+    variant: int = 1,
 ) -> pd.DataFrame:
     """Чувствительность net к ±rel_delta по k и precision."""
     if od_col is None:
         od_col = paid_col
     rows: list[dict[str, Any]] = []
     base = estimate_monitoring_effect(
-        df, priors, od_col=od_col, cost_col=cost_col
+        df, priors, od_col=od_col, cost_col=cost_col, variant=variant
     )
     rows.append(
         {
@@ -1065,7 +684,7 @@ def sensitivity_table(
             court_fee=priors.court_fee,
         )
         res = estimate_monitoring_effect(
-            df, adj, od_col=od_col, cost_col=cost_col
+            df, adj, od_col=od_col, cost_col=cost_col, variant=variant
         )
         rows.append(
             {
@@ -1274,6 +893,7 @@ def build_synthetic_claims_excel(
             "РезультатПроверки": result,
             "ВызовМодельСутяжность": model_call,
             "Заключено соглашение": agreement,
+            "Выплата по модели": model_pay,
             "Выплата по модели в Инциденте": model_pay,
             "ЕстьПретензияВИнциденте": pret,
             "Обращение к ФУ": fu_flag,
