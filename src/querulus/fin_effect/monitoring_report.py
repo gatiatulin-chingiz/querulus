@@ -238,12 +238,29 @@ def _table_section(
 
 def _fin_example(effect: MonitoringEffectResult) -> str:
     p = effect.priors
+    d = effect.details or {}
+    if d.get("variant") == 1:
+        m = d.get("model", {})
+        c = d.get("control", {})
+        return (
+            f"psr_share={_pct(float(d.get('psr_share', p.psr_share)))}; "
+            f"e<sub>fee</sub>={_money(effect.e_fee)}; "
+            f"model: n={m.get('n', '—')}, agreement={m.get('n_agreement', '—')}, "
+            f"open={m.get('n_open', '—')}, "
+            f"avoided={_money(float(m.get('avoided', 0)))}, "
+            f"open_psr={_money(float(m.get('open_psr', 0)))}, "
+            f"cost={_money(float(m.get('cost', 0)))}, "
+            f"value={_money(float(m.get('value', 0)))}; "
+            f"control: value={_money(float(c.get('value', 0)))}; "
+            f"net = value(model) − value(control) = {_money(effect.net)}; "
+            f"net/case = {_money(float(d.get('net_per_case', 0)))}"
+        )
     n = effect.n_intervention
     fees_total = n * effect.e_fee
     od_term = effect.sum_od * p.k
     raw = od_term + fees_total
     return (
-        f"n<sub>I</sub>={n}; "
+        f"сегмент 111: n={n}; "
         f"e<sub>fee</sub>={_money(effect.e_fee)} "
         f"(= {_pct(p.p_fu)}×{_money(p.fu_fee)} + {_pct(p.p_court)}×{_money(p.court_fee)}); "
         f"Σ OD×k = {_money(od_term)}; Σ e<sub>fee</sub> = {_money(fees_total)}; "
@@ -304,18 +321,30 @@ def _filters_overview_table(
     """Сводная карта фильтров и показателей по слоям отчёта."""
     if variant == 1:
         fin_effect_filter = (
-            "Benefit: result=1 и выплата по модели=1; "
-            "cost: result∈{0,1} и выплата по модели=1"
+            "model: result∈{0,1}; control: result=−100; "
+            "внутри: agreement=1 → избежанный ПСР−cost; "
+            "agreement=0 → psr_share×(OD×k+e_fee); "
+            "net = value(model) − value(control)"
         )
         comparison_filter = "model: result∈{0,1}; control: result=−100"
         segment_filter = "model / control"
+        fin_metrics = (
+            "value(model); value(control); net; net/case; "
+            "avoided / open_psr / cost по группам; экстраполяция net на 365 дней"
+        )
     else:
-        fin_effect_filter = "вызов=1, result=1, выплата по модели=1"
+        fin_effect_filter = (
+            "сегмент 111: РезультатПроверки=1 ∧ выплата по модели=1 ∧ соглашение=1"
+        )
         comparison_filter = (
             "4 кейса: applied_one_paid, ignored_zero_paid, "
             "out_of_model_paid, recommended_unpaid"
         )
         segment_filter = "четыре кейса call/result/payout"
+        fin_metrics = (
+            f"n_111; expected_psr; cost ({effect.cost_column}); net; "
+            "экстраполяция на 365 дней"
+        )
 
     rows = [
         {
@@ -323,10 +352,7 @@ def _filters_overview_table(
             "Контур": "Bpilot",
             "Базовые фильтры": "форма; первичный убыток; автотранспорт=1",
             "Фильтр сегмента": fin_effect_filter,
-            "Показатели": (
-                f"n_I; expected_psr; cost ({effect.cost_column}); net; "
-                "экстраполяция на 365 дней"
-            ),
+            "Показатели": fin_metrics,
         },
         {
             "Слой расчёта": "Соглашения / претензии / ФУ / суд",
@@ -416,7 +442,7 @@ def build_monitoring_html(
         title = (
             "Querulus — вариант 1: ручеёк vs контроль"
             if variant == 1
-            else "Querulus — вариант 2: кейсы применения модели"
+            else "Querulus — вариант 2: сегмент 111 (result×payout×agreement)"
         )
 
     annual_line = ""
@@ -434,9 +460,10 @@ def build_monitoring_html(
             "Фильтры слоя финэффекта (Bpilot)",
             [
                 ("база", "базовые фильтры + филиал ∉ {Архангельский, Марийский}"),
-                ("benefit / I", "РезультатПроверки = 1 ∧ Выплата по модели = 1"),
-                ("cost", "РезультатПроверки ∈ {0, 1} ∧ Выплата по модели = 1"),
-                ("смысл нулей", "result=0 ∧ выплата=1 не даёт expected_psr, но входит в cost"),
+                ("model", "РезультатПроверки ∈ {0, 1} — все сегменты *×*×* с 0/1"),
+                ("control", "РезультатПроверки = −100 — та же логика, отдельная группа"),
+                ("agreement=1", "избежанный ПСР (стандарт) − cost доплат/выплат"),
+                ("agreement=0", "ожидаемый открытый ПСР ≈ psr_share × (OD×k + e_fee)"),
             ],
         )
         share_filters = _block_filters(
@@ -453,15 +480,22 @@ def build_monitoring_html(
             [
                 "<strong>e<sub>fee</sub></strong> <span class='op'>=</span> "
                 "p<sub>fu</sub> × 100 000 <span class='op'>+</span> p<sub>court</sub> × 15 000",
-                "<strong>expected_psr</strong> <span class='op'>=</span> "
-                "precision × (Σ<sub>i∈I</sub> OD<sub>i</sub> × k <span class='op'>+</span> "
-                "n<sub>I</sub> × e<sub>fee</sub>)",
-                "<strong>cost</strong> <span class='op'>=</span> "
-                f"Σ<sub>j∈C</sub> {escape(effect.cost_column)}<sub>j</sub>",
-                "<strong>net</strong> <span class='op'>=</span> expected_psr <span class='op'>−</span> cost",
+                "<strong>avoided(G)</strong> <span class='op'>=</span> "
+                "precision × (Σ<sub>agreement=1∩G</sub> OD × k <span class='op'>+</span> "
+                "n<sub>agr</sub> × e<sub>fee</sub>)",
+                "<strong>open_psr(G)</strong> <span class='op'>=</span> "
+                "psr_share × (Σ<sub>agreement=0∩G</sub> OD × k <span class='op'>+</span> "
+                "n<sub>open</sub> × e<sub>fee</sub>)",
+                f"<strong>cost(G)</strong> <span class='op'>=</span> "
+                f"Σ<sub>agreement=1∩G</sub> {escape(effect.cost_column)}",
+                "<strong>value(G)</strong> <span class='op'>=</span> "
+                "avoided(G) <span class='op'>−</span> cost(G) <span class='op'>−</span> open_psr(G)",
+                "<strong>net</strong> <span class='op'>=</span> "
+                "value(model) <span class='op'>−</span> value(control)",
             ],
-            note="I = benefit-маска; C = cost-маска варианта 1. OD = "
-            f"<code>{escape(effect.od_column)}</code>.",
+            note="G ∈ {model, control}. psr_share — доля ПСР в ретро; "
+            "к OD×k добавлен средний пакет взносов e_fee (как при полном ПСР). "
+            f"OD = <code>{escape(effect.od_column)}</code>.",
         )
         share_formula = _block_formula(
             "Формулы долей путей",
@@ -481,8 +515,8 @@ def build_monitoring_html(
             "Фильтры слоя финэффекта (Bpilot, вариант 2)",
             [
                 ("база", "базовые фильтры + Bpilot"),
-                ("I = cost = benefit", "вызов=1 ∧ РезультатПроверки=1 ∧ Выплата по модели=1"),
-                ("остальные кейсы", "в финэффект не входят; только в аналитику долей"),
+                ("сегмент 111", "РезультатПроверки=1 ∧ выплата по модели=1 ∧ соглашение=1"),
+                ("остальное", "в финэффект не входит; только аналитика долей/кейсов"),
             ],
         )
         share_filters = _block_filters(
@@ -501,13 +535,14 @@ def build_monitoring_html(
                 "<strong>e<sub>fee</sub></strong> <span class='op'>=</span> "
                 "p<sub>fu</sub> × 100 000 <span class='op'>+</span> p<sub>court</sub> × 15 000",
                 "<strong>expected_psr</strong> <span class='op'>=</span> "
-                "precision × (Σ<sub>i∈I</sub> OD<sub>i</sub> × k <span class='op'>+</span> "
-                "n<sub>I</sub> × e<sub>fee</sub>)",
+                "precision × (Σ<sub>i∈111</sub> OD<sub>i</sub> × k <span class='op'>+</span> "
+                "n<sub>111</sub> × e<sub>fee</sub>)",
                 "<strong>cost</strong> <span class='op'>=</span> "
-                f"Σ<sub>i∈I</sub> {escape(effect.cost_column)}<sub>i</sub>",
+                f"Σ<sub>i∈111</sub> {escape(effect.cost_column)}<sub>i</sub>",
                 "<strong>net</strong> <span class='op'>=</span> expected_psr <span class='op'>−</span> cost",
             ],
-            note="I — только ожидаемый кейс applied_one_paid.",
+            note="Только сегмент 111. OD = "
+            f"<code>{escape(effect.od_column)}</code>.",
         )
         case_lines = "".join(
             f"<div class='equation'><strong>{escape(k)}</strong> "
@@ -525,18 +560,37 @@ def build_monitoring_html(
         </div>
         """
 
+    d = effect.details or {}
+    if variant == 1:
+        stats_html = f"""
+    <div class="grid">
+      <div class="stat"><span>value(model)</span><b>{_money(float(d.get('model_value', 0)))}</b></div>
+      <div class="stat"><span>value(control)</span><b>{_money(float(d.get('control_value', 0)))}</b></div>
+      <div class="stat"><span>net</span><b>{_money(effect.net)}</b></div>
+      <div class="stat"><span>net / case</span><b>{_money(float(d.get('net_per_case', 0)))}</b></div>
+      <div class="stat"><span>model avoided</span><b>{_money(float(d.get('model_avoided', 0)))}</b></div>
+      <div class="stat"><span>model open_psr</span><b>{_money(float(d.get('model_open_psr', 0)))}</b></div>
+      <div class="stat"><span>model cost</span><b>{_money(float(d.get('model_cost', 0)))}</b></div>
+      <div class="stat"><span>control open_psr</span><b>{_money(float(d.get('control_open_psr', 0)))}</b></div>
+    </div>
+"""
+    else:
+        stats_html = f"""
+    <div class="grid">
+      <div class="stat"><span>n_111</span><b>{effect.n_intervention}</b></div>
+      <div class="stat"><span>expected_psr</span><b>{_money(effect.expected_psr)}</b></div>
+      <div class="stat"><span>cost</span><b>{_money(effect.cost)}</b></div>
+      <div class="stat"><span>net</span><b>{_money(effect.net)}</b></div>
+    </div>
+"""
+
     fin_section = f"""
   <h2>2. Финэффект</h2>
   <div class="card">
     {fin_filters}
     {fin_formula}
     {_block_example("Численный пример этого прогона", _fin_example(effect))}
-    <div class="grid">
-      <div class="stat"><span>n_I</span><b>{effect.n_intervention}</b></div>
-      <div class="stat"><span>expected_psr</span><b>{_money(effect.expected_psr)}</b></div>
-      <div class="stat"><span>cost</span><b>{_money(effect.cost)}</b></div>
-      <div class="stat"><span>net</span><b>{_money(effect.net)}</b></div>
-    </div>
+    {stats_html}
     {annual_line}
   </div>
 """

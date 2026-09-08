@@ -1,16 +1,19 @@
 """Оценка финэффекта по Excel/витрине (фаза 2 мониторинга).
 
-Без факта ПСР: expected_psr = precision × Σ_I (ОД_заявлено×k + e_fee),
-cost = Σ cost_mask, e_fee = p_fu×fu_fee + p_court×court_fee.
+Вариант 1: model (result∈{0,1}) vs control (−100); по соглашению —
+избежанный ПСР (precision×(OD×k+e_fee)−cost), без соглашения —
+ожидаемый ПСР (psr_share×(OD×k+e_fee)); net = value_model − value_control.
+
+Вариант 2: только сегмент 111 (result=1 ∧ выплата=1 ∧ соглашение=1),
+стандарт: expected_psr − cost.
 
 Сегментация «модель работала» — по РезультатПроверки (0/1 vs −100),
-не по ВызовМодельСутяжность. Подробности — monitoring_analytics /
-два HTML-отчёта.
+не по ВызовМодельСутяжность.
 """
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +97,7 @@ class MonitoringEffectResult:
     priors: RetroPriors
     od_column: str
     cost_column: str
+    details: dict[str, Any] = field(default_factory=dict)
 
     @property
     def paid_column(self) -> str:
@@ -536,6 +540,17 @@ def format_summary_dict(summary: dict[str, Any]) -> dict[str, Any]:
         "net_annual_365",
         "cost_annual_365",
         "expected_psr_annual_365",
+        "model_value",
+        "control_value",
+        "model_avoided",
+        "control_avoided",
+        "model_open_psr",
+        "control_open_psr",
+        "model_cost",
+        "control_cost",
+        "net_per_case",
+        "model_value_per_case",
+        "control_value_per_case",
     }
     out: dict[str, Any] = {}
     for k, v in summary.items():
@@ -557,6 +572,44 @@ def format_sensitivity_table(sens: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _group_agreement_value(
+    *,
+    group: pd.Series,
+    agr: pd.Series,
+    od: pd.Series,
+    cost_s: pd.Series,
+    precision: float,
+    k: float,
+    e_fee: float,
+    psr_share: float,
+) -> dict[str, float | int]:
+    """Value группы: соглашение → избежанный ПСР − cost; иначе → −ожидаемый ПСР."""
+    with_agr = group & agr
+    no_agr = group & ~agr
+    n_agr = int(with_agr.sum())
+    n_open = int(no_agr.sum())
+    n = int(group.sum())
+
+    sum_od_agr = float(od[with_agr].sum())
+    sum_od_open = float(od[no_agr].sum())
+    avoided = float(precision * (sum_od_agr * k + n_agr * e_fee))
+    open_psr = float(psr_share * (sum_od_open * k + n_open * e_fee))
+    cost = float(cost_s[with_agr].sum())
+    value = avoided - cost - open_psr
+    return {
+        "n": n,
+        "n_agreement": n_agr,
+        "n_open": n_open,
+        "sum_od_agreement": sum_od_agr,
+        "sum_od_open": sum_od_open,
+        "avoided": avoided,
+        "open_psr": open_psr,
+        "cost": cost,
+        "value": value,
+        "value_per_case": float(value / n) if n else 0.0,
+    }
+
+
 def estimate_monitoring_effect(
     df: pd.DataFrame,
     priors: RetroPriors,
@@ -569,18 +622,22 @@ def estimate_monitoring_effect(
 ) -> MonitoringEffectResult:
     """Оценка net на выгрузке.
 
-    Вариант 1:
-      expected_psr на result=1 ∧ выплата=1;
-      cost на result∈{{0,1}} ∧ выплата=1 (нули бьют через −cost).
+    Вариант 1 (model vs control):
+      • agreement=1: избежанный ПСР = precision×(Σ OD×k + n×e_fee) − cost;
+      • agreement=0: ожидаемый ПСР = psr_share×(Σ OD×k + n×e_fee);
+      • value(G) = avoided − cost − open_psr;
+      • net = value(model) − value(control).
+
     Вариант 2:
-      expected_psr и cost на вызов=1 ∧ result=1 ∧ выплата=1.
+      только сегмент 111 (result=1 ∧ выплата=1 ∧ соглашение=1),
+      expected_psr − cost по стандартной формуле.
 
     ``paid_col`` — устаревший алиас для ``od_col``.
     """
     from querulus.fin_effect.monitoring_analytics import (
-        benefit_mask,
-        cost_mask_variant1,
-        variant2_case_masks,
+        control_mask,
+        model_rucheek_mask,
+        segment_111_mask,
     )
 
     if od_col is None:
@@ -596,36 +653,121 @@ def estimate_monitoring_effect(
     except KeyError:
         cost_name = resolve_column(df, "to_pay") or resolve_column(df, "payment") or od_name
 
-    if variant == 1:
-        benefit = benefit_mask(df, filial_scope=filial_scope)
-        cost_m = cost_mask_variant1(df, filial_scope=filial_scope)
-    else:
-        benefit = variant2_case_masks(df, filial_scope=filial_scope)["applied_one_paid"]
-        cost_m = benefit
-
     od = _to_numeric(df[od_name]).fillna(0.0)
     cost_s = _to_numeric(df[cost_name]).fillna(0.0)
-    od_i = od.where(benefit, 0.0)
-    cost_i = cost_s.where(cost_m, 0.0)
     e_fee = priors.expected_fee()
-    sum_od = float(od_i.sum())
-    sum_paid = float(cost_i.sum())
-    n_i = int(benefit.sum())
-    expected_psr = float(priors.precision * ((od_i * priors.k).sum() + n_i * e_fee))
-    cost = sum_paid
-    net = expected_psr - cost
+    agr = agreement_mask(df)
+    psr_share = float(priors.psr_share)
 
     frame = df.copy()
-    frame["_intervention"] = benefit.astype(int)
-    frame["_cost_mask"] = cost_m.astype(int)
     frame["_od"] = od
-    frame["_od_i"] = od_i
-    frame["_cost_i"] = cost_i
-    frame["_expected_psr_row"] = np.where(
-        benefit,
-        priors.precision * (od_i * priors.k + e_fee),
-        0.0,
-    )
+    frame["_agreement"] = agr.astype(int)
+
+    if variant == 1:
+        model = model_rucheek_mask(df, filial_scope=filial_scope)
+        control = control_mask(df, filial_scope=filial_scope)
+        model_stats = _group_agreement_value(
+            group=model,
+            agr=agr,
+            od=od,
+            cost_s=cost_s,
+            precision=priors.precision,
+            k=priors.k,
+            e_fee=e_fee,
+            psr_share=psr_share,
+        )
+        control_stats = _group_agreement_value(
+            group=control,
+            agr=agr,
+            od=od,
+            cost_s=cost_s,
+            precision=priors.precision,
+            k=priors.k,
+            e_fee=e_fee,
+            psr_share=psr_share,
+        )
+        net = float(model_stats["value"] - control_stats["value"])
+        net_per_case = float(
+            model_stats["value_per_case"] - control_stats["value_per_case"]
+        )
+        # Совместимость полей: «ожидаемый/избежанный» ПСР и cost — по model.
+        expected_psr = float(model_stats["avoided"])
+        cost = float(model_stats["cost"])
+        sum_od = float(model_stats["sum_od_agreement"])
+        sum_paid = cost
+        n_i = int(model_stats["n_agreement"])
+
+        row_avoided = np.where(
+            agr,
+            priors.precision * (od * priors.k + e_fee),
+            0.0,
+        )
+        row_open = np.where(
+            ~agr,
+            psr_share * (od * priors.k + e_fee),
+            0.0,
+        )
+        row_cost = np.where(agr, cost_s, 0.0)
+        row_value = row_avoided - row_cost - row_open
+
+        frame["_model"] = model.astype(int)
+        frame["_control"] = control.astype(int)
+        frame["_intervention"] = (model & agr).astype(int)
+        frame["_cost_mask"] = (model & agr).astype(int)
+        frame["_od_i"] = od.where(model & agr, 0.0)
+        frame["_cost_i"] = cost_s.where(model & agr, 0.0)
+        frame["_expected_psr_row"] = np.where(model, row_avoided, 0.0)
+        frame["_open_psr_row"] = np.where(model | control, row_open, 0.0)
+        frame["_row_value"] = np.where(model | control, row_value, 0.0)
+
+        details: dict[str, Any] = {
+            "variant": 1,
+            "psr_share": psr_share,
+            "model": model_stats,
+            "control": control_stats,
+            "model_value": float(model_stats["value"]),
+            "control_value": float(control_stats["value"]),
+            "model_avoided": float(model_stats["avoided"]),
+            "control_avoided": float(control_stats["avoided"]),
+            "model_open_psr": float(model_stats["open_psr"]),
+            "control_open_psr": float(control_stats["open_psr"]),
+            "model_cost": float(model_stats["cost"]),
+            "control_cost": float(control_stats["cost"]),
+            "net_per_case": net_per_case,
+            "model_value_per_case": float(model_stats["value_per_case"]),
+            "control_value_per_case": float(control_stats["value_per_case"]),
+        }
+    else:
+        benefit = segment_111_mask(df, filial_scope=filial_scope)
+        cost_m = benefit
+        od_i = od.where(benefit, 0.0)
+        cost_i = cost_s.where(cost_m, 0.0)
+        sum_od = float(od_i.sum())
+        sum_paid = float(cost_i.sum())
+        n_i = int(benefit.sum())
+        expected_psr = float(
+            priors.precision * ((od_i * priors.k).sum() + n_i * e_fee)
+        )
+        cost = sum_paid
+        net = expected_psr - cost
+
+        frame["_intervention"] = benefit.astype(int)
+        frame["_cost_mask"] = cost_m.astype(int)
+        frame["_od_i"] = od_i
+        frame["_cost_i"] = cost_i
+        frame["_expected_psr_row"] = np.where(
+            benefit,
+            priors.precision * (od_i * priors.k + e_fee),
+            0.0,
+        )
+        frame["_open_psr_row"] = 0.0
+        frame["_row_value"] = frame["_expected_psr_row"] - cost_i
+
+        details = {
+            "variant": 2,
+            "segment": "111",
+            "n_111": n_i,
+        }
 
     return MonitoringEffectResult(
         frame=frame,
@@ -639,6 +781,7 @@ def estimate_monitoring_effect(
         priors=priors,
         od_column=od_name,
         cost_column=cost_name,
+        details=details,
     )
 
 
@@ -682,6 +825,13 @@ def sensitivity_table(
             p_court=priors.p_court,
             fu_fee=priors.fu_fee,
             court_fee=priors.court_fee,
+            lookback_years=priors.lookback_years,
+            date_column=priors.date_column,
+            window_start=priors.window_start,
+            window_end=priors.window_end,
+            n_rows=priors.n_rows,
+            n_pos=priors.n_pos,
+            psr_share=priors.psr_share,
         )
         res = estimate_monitoring_effect(
             df, adj, od_col=od_col, cost_col=cost_col, variant=variant
@@ -714,7 +864,7 @@ def default_demo_priors() -> RetroPriors:
         window_end=None,
         n_rows=0,
         n_pos=0,
-        psr_share=0.0,
+        psr_share=0.20,
     )
 
 

@@ -88,7 +88,7 @@ def benefit_mask(
     *,
     filial_scope: FilialScope = "pilot",
 ) -> pd.Series:
-    """I для expected_psr: result=1 ∧ выплата по модели=1."""
+    """Устаревшая маска: result=1 ∧ выплата=1 (для совместимости)."""
     base = analytics_base_mask(df, filial_scope=filial_scope)
     result_col = resolve_column(df, "result_check")
     if result_col is None:
@@ -105,7 +105,7 @@ def cost_mask_variant1(
     *,
     filial_scope: FilialScope = "pilot",
 ) -> pd.Series:
-    """Cost варианта 1: ручеёк 0/1 с выплатой (нули бьют через −cost)."""
+    """Устаревшая cost-маска v1: ручеёк 0/1 с выплатой."""
     base = analytics_base_mask(df, filial_scope=filial_scope)
     result_col = resolve_column(df, "result_check")
     if result_col is None:
@@ -148,6 +148,24 @@ def agreement_mask(df: pd.DataFrame) -> pd.Series:
         text = df[form].fillna("").astype(str).str.casefold()
         out = out | text.str.contains("соглашен", na=False)
     return out
+
+
+def segment_111_mask(
+    df: pd.DataFrame,
+    *,
+    filial_scope: FilialScope = "pilot",
+) -> pd.Series:
+    """Сегмент 111: result=1 ∧ выплата по модели=1 ∧ соглашение=1."""
+    base = analytics_base_mask(df, filial_scope=filial_scope)
+    result_col = resolve_column(df, "result_check")
+    if result_col is None:
+        return pd.Series(False, index=df.index)
+    return (
+        base
+        & _to_numeric(df[result_col]).fillna(-999).eq(1)
+        & model_payout_loss_mask(df)
+        & agreement_mask(df)
+    )
 
 
 def pretension_mask(df: pd.DataFrame) -> pd.Series:
