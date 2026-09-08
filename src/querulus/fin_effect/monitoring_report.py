@@ -147,6 +147,38 @@ code {
 .legend ul { margin: 0.2rem 0 0 1.1rem; padding: 0; }
 .legend li { margin: 0.12rem 0; }
 .muted { color: var(--muted); font-size: 0.9rem; }
+.calc-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin: 0.55rem 0 0.7rem;
+}
+.calc-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.7rem 0.8rem;
+}
+.calc-panel.model { border-top: 4px solid var(--accent); }
+.calc-panel.control { border-top: 4px solid #6b5b4b; }
+.calc-panel h3 { margin: 0 0 0.25rem; }
+.calc-panel .panel-sub {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin: 0 0 0.55rem;
+}
+.calc-panel .equation { white-space: normal; font-size: 0.98rem; }
+.compare-box {
+  background: linear-gradient(135deg, #eef6f0, #f7fbf8);
+  border: 1px solid #c5dcc9;
+  border-left: 4px solid #2f6b3a;
+  border-radius: 0 8px 8px 0;
+  padding: 0.7rem 0.85rem;
+  margin: 0.35rem 0 0.55rem;
+}
+@media (max-width: 820px) {
+  .calc-pair { grid-template-columns: 1fr; }
+}
 @media (max-width: 620px) {
   .filter-row { grid-template-columns: 1fr; gap: 0; }
   .equation { font-size: 0.95rem; white-space: normal; }
@@ -238,23 +270,6 @@ def _table_section(
 
 def _fin_example(effect: MonitoringEffectResult) -> str:
     p = effect.priors
-    d = effect.details or {}
-    if d.get("variant") == 1:
-        m = d.get("model", {})
-        c = d.get("control", {})
-        return (
-            f"psr_share={_pct(float(d.get('psr_share', p.psr_share)))}; "
-            f"e<sub>fee</sub>={_money(effect.e_fee)}; "
-            f"model: n={m.get('n', '—')}, agreement={m.get('n_agreement', '—')}, "
-            f"open={m.get('n_open', '—')}, "
-            f"avoided={_money(float(m.get('avoided', 0)))}, "
-            f"open_psr={_money(float(m.get('open_psr', 0)))}, "
-            f"cost={_money(float(m.get('cost', 0)))}, "
-            f"value={_money(float(m.get('value', 0)))}; "
-            f"control: value={_money(float(c.get('value', 0)))}; "
-            f"net = value(model) − value(control) = {_money(effect.net)}; "
-            f"net/case = {_money(float(d.get('net_per_case', 0)))}"
-        )
     n = effect.n_intervention
     fees_total = n * effect.e_fee
     od_term = effect.sum_od * p.k
@@ -268,6 +283,125 @@ def _fin_example(effect: MonitoringEffectResult) -> str:
         f"cost = {_money(effect.cost)}; "
         f"net = {_money(effect.net)}"
     )
+
+
+def _group_fin_calc_panel(
+    *,
+    title: str,
+    css_class: str,
+    scope: str,
+    stats: dict[str, Any],
+    effect: MonitoringEffectResult,
+) -> str:
+    """Отдельная карточка расчёта value(G) с цифрами прогона."""
+    p = effect.priors
+    n = int(stats.get("n", 0) or 0)
+    n_agr = int(stats.get("n_agreement", 0) or 0)
+    n_open = int(stats.get("n_open", 0) or 0)
+    sum_od_agr = float(stats.get("sum_od_agreement", 0) or 0)
+    sum_od_open = float(stats.get("sum_od_open", 0) or 0)
+    od_k_agr = sum_od_agr * p.k
+    od_k_open = sum_od_open * p.k
+    fees_agr = n_agr * effect.e_fee
+    fees_open = n_open * effect.e_fee
+    avoided = float(stats.get("avoided", 0) or 0)
+    open_psr = float(stats.get("open_psr", 0) or 0)
+    cost = float(stats.get("cost", 0) or 0)
+    value = float(stats.get("value", 0) or 0)
+    value_pc = float(stats.get("value_per_case", 0) or 0)
+    return f"""
+    <div class="calc-panel {css_class}">
+      <h3>{escape(title)}</h3>
+      <p class="panel-sub">{escape(scope)}</p>
+      <div class="equation">n = {n}; n<sub>agr</sub> = {n_agr}; n<sub>open</sub> = {n_open}</div>
+      <div class="equation">
+        Σ<sub>agr</sub> OD×k = {_money(od_k_agr)};
+        n<sub>agr</sub>×e<sub>fee</sub> = {_money(fees_agr)}
+      </div>
+      <div class="equation">
+        <strong>avoided</strong> <span class="op">=</span>
+        {p.precision:.2f} × {_money(od_k_agr + fees_agr)}
+        <span class="op">=</span> {_money(avoided)}
+      </div>
+      <div class="equation">
+        Σ<sub>open</sub> OD×k = {_money(od_k_open)};
+        n<sub>open</sub>×e<sub>fee</sub> = {_money(fees_open)}
+      </div>
+      <div class="equation">
+        <strong>open_psr</strong> <span class="op">=</span>
+        {_pct(float(p.psr_share))} × {_money(od_k_open + fees_open)}
+        <span class="op">=</span> {_money(open_psr)}
+      </div>
+      <div class="equation">
+        <strong>cost</strong> <span class="op">=</span> {_money(cost)}
+        <span class="muted">({escape(effect.cost_column)})</span>
+      </div>
+      <div class="equation">
+        <strong>value</strong> <span class="op">=</span>
+        {_money(avoided)} <span class="op">−</span> {_money(cost)}
+        <span class="op">−</span> {_money(open_psr)}
+        <span class="op">=</span> {_money(value)}
+      </div>
+      <div class="equation">
+        value / case <span class="op">=</span> {_money(value_pc)}
+      </div>
+    </div>
+"""
+
+
+def _variant1_fin_numbers(effect: MonitoringEffectResult) -> str:
+    """Общие константы + два отдельных расчёта model/control + сравнение."""
+    p = effect.priors
+    d = effect.details or {}
+    m = d.get("model") or {}
+    c = d.get("control") or {}
+    shared = _block_example(
+        "Общие параметры этого прогона",
+        (
+            f"precision={p.precision:.2f}; k={p.k:.4f}; "
+            f"psr_share={_pct(float(d.get('psr_share', p.psr_share)))}; "
+            f"e<sub>fee</sub>={_money(effect.e_fee)} "
+            f"(= {_pct(p.p_fu)}×{_money(p.fu_fee)} + {_pct(p.p_court)}×{_money(p.court_fee)}); "
+            f"OD = <code>{escape(effect.od_column)}</code>"
+        ),
+    )
+    panels = (
+        '<div class="calc-pair">'
+        + _group_fin_calc_panel(
+            title="Расчёт model",
+            css_class="model",
+            scope="РезультатПроверки ∈ {0, 1}",
+            stats=m,
+            effect=effect,
+        )
+        + _group_fin_calc_panel(
+            title="Расчёт control",
+            css_class="control",
+            scope="РезультатПроверки = −100",
+            stats=c,
+            effect=effect,
+        )
+        + "</div>"
+    )
+    compare = f"""
+    <div class="compare-box">
+      <div class="formula-title">Сравнение групп</div>
+      <div class="equation">
+        <strong>net</strong> <span class="op">=</span>
+        value(model) <span class="op">−</span> value(control)
+        <span class="op">=</span> {_money(float(d.get('model_value', 0)))}
+        <span class="op">−</span> {_money(float(d.get('control_value', 0)))}
+        <span class="op">=</span> {_money(effect.net)}
+      </div>
+      <div class="equation">
+        <strong>net / case</strong> <span class="op">=</span>
+        {_money(float(d.get('model_value_per_case', 0)))}
+        <span class="op">−</span> {_money(float(d.get('control_value_per_case', 0)))}
+        <span class="op">=</span> {_money(float(d.get('net_per_case', 0)))}
+      </div>
+    </div>
+"""
+    return shared + panels + compare
 
 
 def _share_example(segments: Any) -> str:
@@ -476,7 +610,7 @@ def build_monitoring_html(
             ],
         )
         fin_formula = _block_formula(
-            "Формулы финэффекта",
+            "Общие формулы (одинаковые для model и control)",
             [
                 "<strong>e<sub>fee</sub></strong> <span class='op'>=</span> "
                 "p<sub>fu</sub> × 100 000 <span class='op'>+</span> p<sub>court</sub> × 15 000",
@@ -493,8 +627,8 @@ def build_monitoring_html(
                 "<strong>net</strong> <span class='op'>=</span> "
                 "value(model) <span class='op'>−</span> value(control)",
             ],
-            note="G ∈ {model, control}. psr_share — доля ПСР в ретро; "
-            "к OD×k добавлен средний пакет взносов e_fee (как при полном ПСР). "
+            note="G ∈ {model, control}. Сначала считаем value отдельно для каждой группы, "
+            "потом сравниваем. psr_share — доля ПСР в ретро; к OD×k добавлен e_fee. "
             f"OD = <code>{escape(effect.od_column)}</code>.",
         )
         share_formula = _block_formula(
@@ -560,19 +694,16 @@ def build_monitoring_html(
         </div>
         """
 
-    d = effect.details or {}
     if variant == 1:
-        stats_html = f"""
-    <div class="grid">
-      <div class="stat"><span>value(model)</span><b>{_money(float(d.get('model_value', 0)))}</b></div>
-      <div class="stat"><span>value(control)</span><b>{_money(float(d.get('control_value', 0)))}</b></div>
-      <div class="stat"><span>net</span><b>{_money(effect.net)}</b></div>
-      <div class="stat"><span>net / case</span><b>{_money(float(d.get('net_per_case', 0)))}</b></div>
-      <div class="stat"><span>model avoided</span><b>{_money(float(d.get('model_avoided', 0)))}</b></div>
-      <div class="stat"><span>model open_psr</span><b>{_money(float(d.get('model_open_psr', 0)))}</b></div>
-      <div class="stat"><span>model cost</span><b>{_money(float(d.get('model_cost', 0)))}</b></div>
-      <div class="stat"><span>control open_psr</span><b>{_money(float(d.get('control_open_psr', 0)))}</b></div>
-    </div>
+        numbers_html = _variant1_fin_numbers(effect)
+        fin_section = f"""
+  <h2>2. Финэффект</h2>
+  <div class="card">
+    {fin_filters}
+    {fin_formula}
+    {numbers_html}
+    {annual_line}
+  </div>
 """
     else:
         stats_html = f"""
@@ -583,8 +714,7 @@ def build_monitoring_html(
       <div class="stat"><span>net</span><b>{_money(effect.net)}</b></div>
     </div>
 """
-
-    fin_section = f"""
+        fin_section = f"""
   <h2>2. Финэффект</h2>
   <div class="card">
     {fin_filters}
