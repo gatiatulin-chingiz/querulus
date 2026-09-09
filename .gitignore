@@ -78,3 +78,6 @@ features_engineering/discriptions/
 # Локальные HTML-отчёты (не в git)
 notebooks/pi_estimate_querulus.html
 **/pi_estimate_querulus.html
+
+# Локальный SQL-исходник витрины
+monitoring/fin_effects/sql/sql.sql
