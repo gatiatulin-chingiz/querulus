@@ -1,1138 +1,1106 @@
-"""Оценка финэффекта по Excel/витрине (фаза 2 мониторинга).
-
-Вариант 1: model (result∈{0,1}) vs control (−100); по соглашению —
-избежанный ПСР (precision×(OD×k+e_fee)−cost), без соглашения —
-ожидаемый ПСР (psr_share×(OD×k+e_fee)); net = value_model − value_control.
-
-Вариант 2: только сегмент 111 (result=1 ∧ выплата=1 ∧ соглашение=1),
-стандарт: expected_psr − cost.
-
-Сегментация «модель работала» — по РезультатПроверки (0/1 vs −100),
-не по ВызовМодельСутяжность.
-"""
+"""Единая ITT-оценка финансового эффекта по витрине мониторинга."""
 from __future__ import annotations
 
-import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
 
 from querulus.fin_effect.excel_explore import (
-    COLUMN_ALIASES,
-    INCIDENT_COURT_COL,
-    INCIDENT_FU_COL,
     VITRINA_TABLE_DEFAULT,
-    FilialScope,
     _to_numeric,
     analytics_base_mask,
-    enrich_incident_path_flags,
-    intervention_mask,
-    load_excel,
     load_monitoring_frame,
-    load_vitrina_mssql,
-    normalize_filial_scope,
-    reconcile_cost_candidates_on_i,
     resolve_column,
     resolve_model_payout_loss_column,
 )
-from querulus.fin_effect.monitoring_analytics import (
-    agreement_mask,
-    case_diagnostics as model_called_not_used_stats,
-    filial_path_shares as filial_path_shares_by_model,
-    filial_usage_stats as filial_model_usage_stats,
-    payment_stats as payment_stats_by_model,
-    pretension_mask,
-    result_check_bucket,
-    result_distribution as result_check_distribution,
-)
+from querulus.fin_effect.monitoring_analytics import agreement_mask
 
 FU_FEE_DEFAULT = 100_000.0
 COURT_FEE_DEFAULT = 15_000.0
-# Конец окна ретро для k / p_fu / p_court / psr_share (2 года назад от этой даты).
 RETRO_AS_OF_DEFAULT = "2025-06-30"
+RESULT_OUT_OF_MODEL = -100
+HORIZONS = (365, 1095)
+PILOT_FILIALS = (
+    "Владимирский",
+    "Кемеровский",
+    "Курский",
+    "Магнитогорский",
+    "Мурманский",
+    "Омский",
+    "Пермский",
+    "Петропавловск-Камчатский",
+    "Уфимский",
+    "Ярославский",
+)
 
-
-@dataclass(frozen=True)
-class RetroPriors:
-    """Ретро-приоры для оценки на выгрузке."""
-
-    precision: float
-    k: float
-    p_pret: float
-    p_fu: float
-    p_court: float
-    fu_fee: float = FU_FEE_DEFAULT
-    court_fee: float = COURT_FEE_DEFAULT
-    lookback_years: float | None = None
-    date_column: str | None = None
-    window_start: str | None = None
-    window_end: str | None = None
-    n_rows: int = 0
-    n_pos: int = 0
-    psr_share: float = 0.0
-
-    def expected_fee(self) -> float:
-        """Средний пакет взносов: ФУ 100k или суд 15k (без двойного 100k)."""
-        return self.p_fu * self.fu_fee + self.p_court * self.court_fee
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
-class MonitoringEffectResult:
-    """Итог оценки на Excel."""
-
-    frame: pd.DataFrame
-    n_intervention: int
-    sum_od: float
-    sum_paid: float
-    expected_psr: float
-    cost: float
-    net: float
-    e_fee: float
-    priors: RetroPriors
-    od_column: str
-    cost_column: str
-    details: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def paid_column(self) -> str:
-        """Обратная совместимость: колонка ОД для ×k."""
-        return self.od_column
-
-
-def load_retro_priors(path: str | Path) -> RetroPriors:
-    """Загрузить priors из JSON."""
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
-    return RetroPriors(
-        precision=float(data["precision"]),
-        k=float(data["k"]),
-        p_pret=float(data["p_pret"]),
-        p_fu=float(data["p_fu"]),
-        p_court=float(data["p_court"]),
-        fu_fee=float(data.get("fu_fee", FU_FEE_DEFAULT)),
-        court_fee=float(data.get("court_fee", COURT_FEE_DEFAULT)),
-        lookback_years=(
-            float(data["lookback_years"])
-            if data.get("lookback_years") is not None
-            else None
-        ),
-        date_column=data.get("date_column"),
-        window_start=data.get("window_start"),
-        window_end=data.get("window_end"),
-        n_rows=int(data.get("n_rows", 0)),
-        n_pos=int(data.get("n_pos", 0)),
-        psr_share=float(data.get("psr_share", 0.0)),
-    )
-
-
-def save_retro_priors(priors: RetroPriors, path: str | Path) -> Path:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(priors.to_dict(), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    return path
-
-
+LOSS_CANDIDATES = ("Убыток", "LOSS_NUMBER", "LossNumber")
+INCIDENT_CANDIDATES = (
+    "НомерИнцидент",
+    "НомерИнцидента",
+    "INCIDENT_NUMBER",
+)
 RETRO_DATE_CANDIDATES = (
     "PAYMENT_ORDER_DATE_TIME",
     "INCOMING_CLAIM_GET_DATE",
     "INCOMING_CLAIM_GET_DATE_1",
     "LOSS_DATE",
-    "ДатаСобытия",
-    "ДатаЗаявления",
 )
+RETRO_FILIAL_CANDIDATES = ("FILIAL", "Филиал")
+PSR_AMOUNT_CANDIDATES = {
+    "pretension": (
+        "Cумма выплаты по претензии",
+        "Сумма выплаты по претензии",
+        "TARGET_FREQ_PRET_AMOUNT",
+    ),
+    "fu": ("Сумма выплат по ФУ", "Сумма_взыскано_по_ФУ"),
+    "court": ("Cумма выплаты по суду", "Сумма выплаты по суду", "Суммы_взыскано_по_иску"),
+}
 
 
-def resolve_retro_date_column(
+@dataclass(frozen=True)
+class GroupRetroPriors:
+    """Терминальные коэффициенты ПСР для одной группы филиалов."""
+
+    group: str
+    filials: tuple[str, ...]
+    n_rows: int
+    n_positive: int
+    n_positive_with_od: int
+    p_ultimate: float
+    k_ultimate: float
+    mean_positive_psr: float
+    mean_psr_all: float
+    p_fu_given_psr: float
+    p_court_given_psr: float
+    fu_fee: float = FU_FEE_DEFAULT
+    court_fee: float = COURT_FEE_DEFAULT
+
+    @property
+    def expected_fee(self) -> float:
+        """Средние организационные расходы ФУ/суда на один ПСР."""
+        return (
+            self.p_fu_given_psr * self.fu_fee
+            + self.p_court_given_psr * self.court_fee
+        )
+
+    def as_row(self) -> dict[str, Any]:
+        """Представить коэффициенты строкой отчёта."""
+        return {
+            "group": self.group,
+            "n_filials": len(self.filials),
+            "filials": ", ".join(self.filials) if self.group == "pilot" else "all other",
+            "n_rows": self.n_rows,
+            "n_positive": self.n_positive,
+            "n_positive_with_od": self.n_positive_with_od,
+            "n_positive_without_retro_od": (
+                self.n_positive - self.n_positive_with_od
+            ),
+            "p_U": self.p_ultimate,
+            "k_U": self.k_ultimate,
+            "m_U": self.mean_positive_psr,
+            "mean_PSR_all": self.mean_psr_all,
+            "p_FU_given_PSR": self.p_fu_given_psr,
+            "p_court_given_PSR": self.p_court_given_psr,
+            "e_U": self.expected_fee,
+        }
+
+
+@dataclass(frozen=True)
+class TerminalRetroPriors:
+    """Терминальные priors пилотных и непилотных филиалов."""
+
+    pilot: GroupRetroPriors
+    nonpilot: GroupRetroPriors
+    date_column: str | None
+    window_start: str | None
+    window_end: str | None
+    lookback_years: float | None
+
+    def table(self) -> pd.DataFrame:
+        """Таблица коэффициентов для HTML."""
+        return pd.DataFrame([self.pilot.as_row(), self.nonpilot.as_row()])
+
+
+@dataclass
+class MonitoringEffectResult:
+    """Все результаты единой методики для HTML-отчёта."""
+
+    frame: pd.DataFrame
+    priors: TerminalRetroPriors
+    effect_summary: pd.DataFrame
+    group_summary: pd.DataFrame
+    filial_effects: pd.DataFrame
+    compliance_a: pd.DataFrame
+    compliance_b: pd.DataFrame
+    sensitivity: pd.DataFrame
+    annual_summary: pd.DataFrame
+    seasonality: pd.DataFrame
+    data_quality: pd.DataFrame
+    contract: dict[str, str]
+    t_calc: pd.Timestamp
+    discount_rate: float
+    residual_share: float
+    bootstrap_iterations: int
+    warnings: list[str] = field(default_factory=list)
+
+
+def format_money(value: float) -> str:
+    """Форматировать сумму без научной нотации."""
+    return f"{float(value):,.2f}".replace(",", " ")
+
+
+def _first_existing(df: pd.DataFrame, names: Iterable[str]) -> str | None:
+    return next((name for name in names if name in df.columns), None)
+
+
+def _required_existing(
     df: pd.DataFrame,
-    date_col: str | None = None,
-) -> str | None:
-    """Колонка даты для окна ретро (T0 выплаты / заявление)."""
-    if date_col and date_col in df.columns:
-        return date_col
-    for name in RETRO_DATE_CANDIDATES:
-        if name in df.columns:
-            return name
-    return None
+    names: Iterable[str],
+    label: str,
+) -> str:
+    column = _first_existing(df, names)
+    if column is None:
+        raise KeyError(f"Не найдена колонка {label}. Проверены: {tuple(names)}")
+    return column
+
+
+def _required_alias(df: pd.DataFrame, alias: str, label: str) -> str:
+    column = resolve_column(df, alias)
+    if column is None:
+        raise KeyError(f"Не найдена колонка {label} (alias={alias})")
+    return column
+
+
+def _normalize_text(series: pd.Series) -> pd.Series:
+    return series.astype("string").str.strip().str.casefold()
+
+
+def _resolve_retro_date(df: pd.DataFrame) -> str | None:
+    return _first_existing(df, RETRO_DATE_CANDIDATES)
 
 
 def filter_retro_lookback(
     df: pd.DataFrame,
     *,
-    lookback_years: float = 2.0,
-    date_col: str | None = None,
-    as_of: pd.Timestamp | str | None = RETRO_AS_OF_DEFAULT,
+    lookback_years: float | None = 2.0,
+    as_of: str | pd.Timestamp | None = RETRO_AS_OF_DEFAULT,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Оставить строки за последние ``lookback_years`` лет по дате T0.
-
-    Конец окна — ``as_of`` (по умолчанию ``2025-06-30``) или max(дата),
-    если ``as_of`` явно None и дат нет валидных.
-    """
-    resolved = resolve_retro_date_column(df, date_col)
-    meta: dict[str, Any] = {
-        "lookback_years": float(lookback_years),
-        "date_column": resolved,
+    """Ограничить финальный incident-level датафрейм ретро-окном."""
+    date_column = _resolve_retro_date(df)
+    meta = {
+        "date_column": date_column,
         "window_start": None,
         "window_end": None,
-        "applied": False,
-        "n_before": int(len(df)),
-        "n_after": int(len(df)),
+        "lookback_years": lookback_years,
     }
-    if resolved is None or lookback_years <= 0:
-        return df, meta
+    if date_column is None or not lookback_years:
+        return df.copy(), meta
 
-    dates = pd.to_datetime(df[resolved], errors="coerce")
-    if as_of is None:
-        end = dates.max()
-    else:
-        end = pd.Timestamp(as_of)
+    dates = pd.to_datetime(df[date_column], errors="coerce")
+    end = pd.Timestamp(as_of) if as_of is not None else dates.max()
     if pd.isna(end):
-        return df, meta
-
-    start = end - pd.DateOffset(years=lookback_years)
-    mask = dates.notna() & (dates >= start) & (dates <= end)
-    out = df.loc[mask].copy()
+        raise ValueError("В ретро-данных нет валидной даты для окна коэффициентов")
+    start = end - pd.Timedelta(days=365.25 * float(lookback_years))
+    mask = dates.between(start, end, inclusive="both")
+    work = df.loc[mask].copy()
+    if work.empty:
+        raise ValueError("Ретро-окно не содержит строк")
     meta.update(
         {
-            "window_start": start.strftime("%Y-%m-%d"),
-            "window_end": pd.Timestamp(end).strftime("%Y-%m-%d"),
-            "applied": True,
-            "n_after": int(len(out)),
+            "window_start": start.date().isoformat(),
+            "window_end": pd.Timestamp(end).date().isoformat(),
         }
     )
-    return out, meta
+    return work, meta
 
 
-def compute_retro_priors(
+def _group_retro_priors(
     df: pd.DataFrame,
     *,
-    precision: float | None = None,
-    threshold: float = 0.5,
-    proba_col: str = "preds_cf",
-    freq_col: str = "TARGET_FREQ",
-    amount_col: str = "TARGET_FREQ_AMOUNT",
-    od_col: str = "RECOVEREDMAINDEBT_LAST_INST_SUM",
-    pret_col: str = "TARGET_FREQ_PRET_AMOUNT",
-    fu_col: str = "Сумма_взыскано_по_ФУ",
-    court_col: str = "Суммы_взыскано_по_иску",
-    fu_fee: float = FU_FEE_DEFAULT,
-    court_fee: float = COURT_FEE_DEFAULT,
-    lookback_years: float = 2.0,
-    date_col: str | None = None,
-    as_of: pd.Timestamp | str | None = RETRO_AS_OF_DEFAULT,
-) -> RetroPriors:
-    """Посчитать priors на зрелом ретро-кадре с таргетами.
+    group: str,
+    filials: tuple[str, ...],
+    amount_col: str,
+    od_col: str,
+    fu_col: str,
+    court_col: str,
+) -> GroupRetroPriors:
+    amount = _to_numeric(df[amount_col]).fillna(0.0).clip(lower=0.0)
+    od = _to_numeric(df[od_col])
+    fu = _to_numeric(df[fu_col]).fillna(0.0)
+    court = _to_numeric(df[court_col]).fillna(0.0)
+    positive = amount > 0
+    positive_with_od = positive & od.gt(0)
 
-    По умолчанию ``k``, ``psr_share`` и доли путей (p_pret/p_fu/p_court)
-    считаются на окне **2 года до 2025-06-30** по ``PAYMENT_ORDER_DATE_TIME``
-    (т.е. примерно 2023-06-30 … 2025-06-30). ``precision``: если задан —
-    как есть; иначе из preds_cf vs TARGET_FREQ (нет preds → 0.5).
-    """
-    work, window = filter_retro_lookback(
-        df,
+    n_rows = int(len(df))
+    n_positive = int(positive.sum())
+    if n_rows == 0:
+        raise ValueError(f"Нет строк для ретро-группы {group}")
+    if n_positive == 0:
+        raise ValueError(f"Нет положительных ПСР для ретро-группы {group}")
+
+    od_sum = float(od[positive_with_od].sum())
+    k_ultimate = (
+        float(amount[positive_with_od].sum() / od_sum)
+        if od_sum > 0
+        else 0.0
+    )
+    is_court = positive & court.gt(0)
+    is_fu = positive & fu.gt(0) & ~is_court
+    return GroupRetroPriors(
+        group=group,
+        filials=filials,
+        n_rows=n_rows,
+        n_positive=n_positive,
+        n_positive_with_od=int(positive_with_od.sum()),
+        p_ultimate=float(n_positive / n_rows),
+        k_ultimate=k_ultimate,
+        mean_positive_psr=float(amount[positive].mean()),
+        mean_psr_all=float(amount.mean()),
+        p_fu_given_psr=float(is_fu.sum() / n_positive),
+        p_court_given_psr=float(is_court.sum() / n_positive),
+    )
+
+
+def compute_terminal_priors(
+    retro_df: pd.DataFrame,
+    *,
+    pilot_filials: Iterable[str],
+    lookback_years: float | None = 2.0,
+    as_of: str | pd.Timestamp | None = RETRO_AS_OF_DEFAULT,
+) -> TerminalRetroPriors:
+    """Посчитать p_U, k_U, m_U и e_U из финального incident-level df."""
+    work, meta = filter_retro_lookback(
+        retro_df,
         lookback_years=lookback_years,
-        date_col=date_col,
         as_of=as_of,
     )
-    y = _to_numeric(work[freq_col]).fillna(0).astype(int)
-    if precision is not None:
-        precision_val = float(precision)
-        if not 0.0 <= precision_val <= 1.0:
-            raise ValueError(f"precision должен быть в [0, 1], получено {precision_val}")
-    elif proba_col in work.columns:
-        proba = _to_numeric(work[proba_col])
-        pred = (proba >= threshold).astype(int)
-        tp = int(((pred == 1) & (y == 1)).sum())
-        fp = int(((pred == 1) & (y == 0)).sum())
-        precision_val = float(tp / (tp + fp)) if (tp + fp) else 0.0
-    else:
-        precision_val = 0.5
-
-    pos = y == 1
-    n_rows = int(len(work))
-    n_pos = int(pos.sum())
-    psr_share = float(n_pos / n_rows) if n_rows else 0.0
-
-    amount = _to_numeric(work[amount_col]).fillna(0.0) if amount_col in work.columns else pd.Series(0.0, index=work.index)
-    od = _to_numeric(work[od_col]).fillna(0.0) if od_col in work.columns else pd.Series(0.0, index=work.index)
-    od_pos = pos & (od > 0)
-    k = float(amount[od_pos].sum() / od[od_pos].sum()) if od_pos.any() and od[od_pos].sum() > 0 else 1.0
-
-    pret = _to_numeric(work[pret_col]).fillna(0.0) if pret_col in work.columns else pd.Series(0.0, index=work.index)
-    fu = _to_numeric(work[fu_col]).fillna(0.0) if fu_col in work.columns else pd.Series(0.0, index=work.index)
-    court = (
-        _to_numeric(work[court_col]).fillna(0.0)
-        if court_col in work.columns
-        else pd.Series(0.0, index=work.index)
+    filial_col = _required_existing(work, RETRO_FILIAL_CANDIDATES, "FILIAL")
+    amount_col = _required_existing(work, ("TARGET_FREQ_AMOUNT",), "TARGET_FREQ_AMOUNT")
+    od_col = _required_existing(
+        work,
+        ("RECOVEREDMAINDEBT_LAST_INST_SUM",),
+        "RECOVEREDMAINDEBT_LAST_INST_SUM",
+    )
+    fu_col = _required_existing(
+        work,
+        ("Сумма_взыскано_по_ФУ",),
+        "Сумма_взыскано_по_ФУ",
+    )
+    court_col = _required_existing(
+        work,
+        ("Суммы_взыскано_по_иску",),
+        "Суммы_взыскано_по_иску",
     )
 
-    if n_pos == 0:
-        p_pret, p_fu, p_court = 1.0, 0.0, 0.0
-    else:
-        is_court = pos & (court > 0)
-        is_fu = pos & (fu > 0) & ~is_court
-        is_pret = pos & ~is_court & ~is_fu & ((pret > 0) | (amount > 0))
-        # остаток позитивов без явных сумм — в pret_only
-        covered = is_court | is_fu | is_pret
-        is_pret = is_pret | (pos & ~covered)
-        p_court = float(is_court.sum() / n_pos)
-        p_fu = float(is_fu.sum() / n_pos)
-        p_pret = float(is_pret.sum() / n_pos)
-        total = p_pret + p_fu + p_court
-        if total > 0:
-            p_pret, p_fu, p_court = p_pret / total, p_fu / total, p_court / total
+    pilot_names = tuple(sorted({str(value).strip() for value in pilot_filials}))
+    pilot_norm = {value.casefold() for value in pilot_names}
+    is_pilot = _normalize_text(work[filial_col]).isin(pilot_norm)
+    pilot_df = work.loc[is_pilot]
+    nonpilot_df = work.loc[~is_pilot & work[filial_col].notna()]
+    nonpilot_names = tuple(
+        sorted(nonpilot_df[filial_col].dropna().astype(str).str.strip().unique())
+    )
 
-    return RetroPriors(
-        precision=precision_val,
-        k=k,
-        p_pret=p_pret,
-        p_fu=p_fu,
-        p_court=p_court,
-        fu_fee=fu_fee,
-        court_fee=court_fee,
-        lookback_years=float(lookback_years) if lookback_years else None,
-        date_column=window.get("date_column"),
-        window_start=window.get("window_start"),
-        window_end=window.get("window_end"),
-        n_rows=n_rows,
-        n_pos=n_pos,
-        psr_share=psr_share,
+    kwargs = {
+        "amount_col": amount_col,
+        "od_col": od_col,
+        "fu_col": fu_col,
+        "court_col": court_col,
+    }
+    return TerminalRetroPriors(
+        pilot=_group_retro_priors(
+            pilot_df,
+            group="pilot",
+            filials=pilot_names,
+            **kwargs,
+        ),
+        nonpilot=_group_retro_priors(
+            nonpilot_df,
+            group="nonpilot",
+            filials=nonpilot_names,
+            **kwargs,
+        ),
+        date_column=meta["date_column"],
+        window_start=meta["window_start"],
+        window_end=meta["window_end"],
+        lookback_years=lookback_years,
     )
 
 
-def resolve_paid_column(
-    df: pd.DataFrame,
-    paid_col: str | None = None,
-) -> str:
-    """Выбрать колонку paid: явная константа или эвристика по алиасам."""
-    if paid_col:
-        if paid_col in df.columns:
-            return paid_col
-        resolved = resolve_column(df, paid_col)
-        if resolved is not None:
-            return resolved
-        raise KeyError(f"PAID_COL не найден: {paid_col}")
-    # Explore: дефолтный ОД → заявлено.
-    for key in ("od_claimed", "od_to_pay", "od_paid", "to_pay", "payment", "recommended"):
-        col = resolve_column(df, key)
-        if col is not None:
-            return col
-    raise KeyError("Не найдена колонка ОД / к выплате / платёж / рекомендованная")
-
-
-def format_money(x: float) -> str:
-    """Число без научной нотации, с пробелами тысяч."""
-    return f"{float(x):,.2f}".replace(",", " ")
-
-
-def _as_bool01(series: pd.Series) -> pd.Series:
-    num = _to_numeric(series)
-    # NA / -999 (explore fill) → 0
-    num = num.where(~num.isin([-999, -100]), np.nan)
-    return (num.fillna(0) > 0).astype(int)
-
-
-def fu_mask(df: pd.DataFrame) -> pd.Series:
-    """Обращение к ФУ на строке убытка."""
-    col = resolve_column(df, "fu_flag")
-    if col is None:
-        return pd.Series(False, index=df.index)
-    return _as_bool01(df[col]).astype(bool)
-
-
-def court_mask(df: pd.DataFrame) -> pd.Series:
-    """Обращение к суду на строке убытка."""
-    col = resolve_column(df, "court_flag")
-    if col is None:
-        return pd.Series(False, index=df.index)
-    return _as_bool01(df[col]).astype(bool)
-
-
-def model_used_mask(df: pd.DataFrame) -> pd.Series:
-    """Сегмент «модель использовали»: вызов модели или есть РезультатПроверки."""
-    call = resolve_column(df, "model_call")
-    if call is not None:
-        return _as_bool01(df[call]).astype(bool)
-    result = resolve_column(df, "result_check")
-    if result is not None:
-        num = _to_numeric(df[result])
-        return num.notna() & ~num.isin([-999])
-    payout = resolve_column(df, "model_payout")
-    if payout is not None:
-        return _as_bool01(df[payout]).astype(bool)
-    raise KeyError("Нет колонки вызова модели / РезультатПроверки / выплаты по модели")
-
-
-def model_positive_mask(
+def _prepare_monitoring_contract(
     df: pd.DataFrame,
     *,
-    filial_scope: FilialScope = "pilot",
-) -> pd.Series:
-    """Ручеёк: РезультатПроверки ∈ {0, 1} внутри базы филиалов."""
-    from querulus.fin_effect.monitoring_analytics import model_rucheek_mask
+    t_calc: str | pd.Timestamp | None,
+) -> tuple[pd.DataFrame, dict[str, str], list[str]]:
+    result_col = _required_alias(df, "result_check", "РезультатПроверки")
+    filial_col = _required_alias(df, "filial", "Филиал")
+    payment_col = _required_alias(df, "payment", "СуммаПлатежа")
+    to_pay_col = _required_alias(df, "to_pay", "СуммаКВыплате")
+    od_col = _required_alias(df, "od_claimed", "СуммаОсновногоДолгаЗаявлено")
+    recommended_col = _required_alias(
+        df,
+        "recommended",
+        "Сумма рекомендованная к доплате по модели",
+    )
+    payout_col = resolve_model_payout_loss_column(df)
+    if payout_col is None:
+        raise KeyError("Не найдена колонка Выплата по модели")
+    loss_col = _required_existing(df, LOSS_CANDIDATES, "номера убытка")
+    incident_col = _required_existing(df, INCIDENT_CANDIDATES, "номера инцидента")
+    call_date_col = _required_alias(
+        df,
+        "model_call_date",
+        "Дата вызова модели сутяжности",
+    )
+    application_col = _required_alias(df, "application_date", "ДатаЗаявления")
+    psr_columns = {
+        key: _required_existing(df, candidates, f"ПСР: {key}")
+        for key, candidates in PSR_AMOUNT_CANDIDATES.items()
+    }
 
-    return model_rucheek_mask(df, filial_scope=filial_scope)
+    base = analytics_base_mask(df, filial_scope="pilot")
+    result = _to_numeric(df[result_col])
+    eligible = base & result.isin([0, 1, RESULT_OUT_OF_MODEL])
+    work = df.loc[eligible].copy()
+    if work.empty:
+        raise ValueError("После model/control и базовых фильтров нет строк")
+
+    work["_result"] = _to_numeric(work[result_col])
+    work["_group"] = np.where(
+        work["_result"].eq(RESULT_OUT_OF_MODEL),
+        "control",
+        "model",
+    )
+    work["_filial"] = work[filial_col].astype("string").fillna("(пусто)")
+    work["_loss"] = work[loss_col]
+    work["_incident"] = work[incident_col]
+    work["_paid_missing"] = _to_numeric(work[payment_col]).isna()
+    work["_od_missing"] = _to_numeric(work[od_col]).isna()
+    work["_paid_to_date"] = _to_numeric(work[payment_col]).fillna(0.0).clip(lower=0.0)
+    work["_to_pay"] = _to_numeric(work[to_pay_col]).fillna(0.0).clip(lower=0.0)
+    work["_od"] = _to_numeric(work[od_col])
+    work["_recommended_extra"] = (
+        _to_numeric(work[recommended_col]).fillna(0.0).clip(lower=0.0)
+    )
+    work["_payout_by_model"] = (
+        _to_numeric(work[payout_col]).fillna(0.0).eq(1)
+    )
+    work["_agreement"] = agreement_mask(work)
+    for key, column in psr_columns.items():
+        work[f"_psr_{key}"] = _to_numeric(work[column]).fillna(0.0).clip(lower=0.0)
+    work["_observed_psr"] = work[
+        ["_psr_pretension", "_psr_fu", "_psr_court"]
+    ].sum(axis=1)
+
+    call_dates = pd.to_datetime(work[call_date_col], errors="coerce")
+    application_dates = pd.to_datetime(work[application_col], errors="coerce")
+    work["_t0"] = call_dates.fillna(application_dates)
+    work["_application_date"] = application_dates.fillna(work["_t0"])
+    if work["_t0"].isna().any():
+        raise ValueError("Есть строки без t0: нет даты вызова модели и ДатаЗаявления")
+
+    calc_date = (
+        pd.Timestamp(t_calc).normalize()
+        if t_calc is not None
+        else pd.Timestamp.today().normalize()
+    )
+    work["_age_days"] = (calc_date - work["_t0"].dt.normalize()).dt.days
+    warnings: list[str] = []
+    if work["_age_days"].lt(0).any():
+        warnings.append("Есть t0 позже t_calc; age_days для них ограничен нулём.")
+        work["_age_days"] = work["_age_days"].clip(lower=0)
+    if work["_age_days"].ge(min(HORIZONS)).any():
+        n_old = int(work["_age_days"].ge(min(HORIZONS)).sum())
+        raise ValueError(
+            f"{n_old} строк имеют age_days >= 365. "
+            "Методика требует отдельного наблюдаемого Y365 и останавливает расчёт."
+        )
+
+    contract = {
+        "loss": loss_col,
+        "incident": incident_col,
+        "result": result_col,
+        "filial": filial_col,
+        "payment": payment_col,
+        "to_pay_diagnostic_only": to_pay_col,
+        "od": od_col,
+        "recommended_extra": recommended_col,
+        "payout_by_model": payout_col,
+        "agreement": resolve_column(df, "agreement") or "agreement_mask",
+        "t0_primary": call_date_col,
+        "t0_fallback": application_col,
+        "psr_pretension": psr_columns["pretension"],
+        "psr_fu": psr_columns["fu"],
+        "psr_court": psr_columns["court"],
+    }
+    return work, contract, warnings
 
 
-def compare_agreement_pretension_by_model(
-    df: pd.DataFrame,
+def _add_outcomes(
+    frame: pd.DataFrame,
+    priors: GroupRetroPriors,
     *,
-    filial_scope: FilialScope = "pilot",
-    variant: int = 1,
+    residual_share: float,
+    discount_rate: float,
+    compliance_100: bool = False,
 ) -> pd.DataFrame:
-    """Доли путей: обёртка над monitoring_analytics.compare_path_shares."""
-    from querulus.fin_effect.monitoring_analytics import (
-        compare_path_shares,
-        shares_as_percent,
+    work = frame.copy()
+    od_available = work["_od"].gt(0)
+    work["_ultimate_base"] = np.where(
+        od_available,
+        work["_od"].fillna(0.0) * priors.k_ultimate,
+        priors.mean_positive_psr,
+    )
+    work["_expected_open_psr"] = priors.p_ultimate * (
+        work["_ultimate_base"] + priors.expected_fee
     )
 
-    return shares_as_percent(
-        compare_path_shares(df, filial_scope=filial_scope, variant=variant)
-    )
-
-
-def build_extended_monitoring_analytics(
-    df: pd.DataFrame,
-    *,
-    amount_col: str | None = None,
-    variant: int = 1,
-) -> dict[str, pd.DataFrame]:
-    """Совместимость: пакет аналитики через monitoring_analytics."""
-    from querulus.fin_effect.monitoring_analytics import build_variant_analytics
-
-    return build_variant_analytics(df, amount_col=amount_col, variant=variant)
-
-
-RESULT_OUT_OF_MODEL = -100
-
-
-def resolve_effect_date_series(df: pd.DataFrame) -> pd.Series:
-    """Дата для окна экстраполяции (заявление / событие / вызов модели)."""
-    col = resolve_column(df, "application_date")
-    if col is None:
-        col = resolve_column(df, "model_call_date")
-    if col is None:
-        for name in (
-            "ДатаЗаявления",
-            "ДатаСобытия",
-            "Дата вызова модели сутяжности",
-        ):
-            if name in df.columns:
-                col = name
-                break
-    if col is None:
-        raise KeyError("Нет даты для экстраполяции (ДатаЗаявления / вызов модели)")
-    return pd.to_datetime(df[col], errors="coerce")
-
-
-def resolve_model_call_date_series(df: pd.DataFrame) -> pd.Series | None:
-    """Колонка даты вызова модели, если есть."""
-    col = resolve_column(df, "model_call_date")
-    if col is None:
-        for name in (
-            "Дата вызова модели сутяжности",
-            "Дата_выхода_модели_ступенчатая",
-            "Дата вызова модуля суррогативности",
-        ):
-            if name in df.columns:
-                col = name
-                break
-    if col is None:
-        return None
-    return pd.to_datetime(df[col], errors="coerce")
-
-
-def infer_model_start(df: pd.DataFrame) -> pd.Timestamp:
-    """Начало работы модели = min даты вызова модели (где модель использовали).
-
-    Fallback: min даты вызова по всем непустым; иначе min ДатаЗаявления в окне.
-    """
-    call_dates = resolve_model_call_date_series(df)
-    if call_dates is not None:
-        try:
-            used = model_used_mask(df)
-            among_used = call_dates[used].dropna()
-            if not among_used.empty:
-                return pd.Timestamp(among_used.min())
-        except KeyError:
-            pass
-        all_calls = call_dates.dropna()
-        if not all_calls.empty:
-            return pd.Timestamp(all_calls.min())
-    # fallback — начало окна выгрузки
-    dates = resolve_effect_date_series(df).dropna()
-    if dates.empty:
-        raise ValueError("Не удалось вывести MODEL_START из дат Excel")
-    return pd.Timestamp(dates.min())
-
-
-def extrapolate_to_year(
-    effect: MonitoringEffectResult,
-    df: pd.DataFrame,
-    *,
-    model_start: str | pd.Timestamp | None = None,
-    as_of: str | pd.Timestamp | None = None,
-    year_days: float = 365.0,
-) -> dict[str, Any]:
-    """Экстраполяция net/cost/expected_psr на year_days с начала работы модели.
-
-    ``model_start=None`` → ``infer_model_start(df)`` из дат Excel.
-    Скорость: net / дней в окне Excel (по датам строк).
-    """
-    dates = resolve_effect_date_series(df)
-    valid = dates.dropna()
-    if valid.empty:
-        raise ValueError("Нет валидных дат в Excel для экстраполяции")
-    sample_start = valid.min()
-    sample_end = valid.max()
-    sample_days = max(1.0, float((sample_end - sample_start).days) + 1.0)
-
-    if model_start is None:
-        start = infer_model_start(df)
-        model_start_source = "excel"
+    if compliance_100:
+        force = (
+            work["_group"].eq("model")
+            & work["_result"].eq(1)
+            & ~work["_payout_by_model"]
+        )
+        model_one = work["_group"].eq("model") & work["_result"].eq(1)
+        work["_forced_extra"] = work["_recommended_extra"].where(force, 0.0)
+        work["Yfact_100"] = work["_paid_to_date"] + work["_forced_extra"]
+        residual = pd.Series(1.0, index=work.index)
+        residual.loc[work["_agreement"]] = residual_share
+        residual.loc[model_one] = residual_share
+        prefix = "_100"
+        fact_column = "Yfact_100"
     else:
-        start = pd.Timestamp(model_start)
-        model_start_source = "manual"
-    end = pd.Timestamp(as_of) if as_of is not None else sample_end
-    elapsed_days = max(1.0, float((end - start).days) + 1.0)
+        work["_forced_extra"] = 0.0
+        work["Yfact"] = work["_paid_to_date"]
+        residual = pd.Series(1.0, index=work.index)
+        residual.loc[work["_agreement"]] = residual_share
+        prefix = ""
+        fact_column = "Yfact"
 
-    daily_net = effect.net / sample_days
-    daily_cost = effect.cost / sample_days
-    daily_psr = effect.expected_psr / sample_days
+    remaining = (
+        residual * work["_expected_open_psr"] - work["_observed_psr"]
+    ).clip(lower=0.0)
+    work[f"_remaining_nominal{prefix}"] = remaining
+    for horizon in HORIZONS:
+        remaining_days = (horizon - work["_age_days"]).clip(lower=0.0)
+        midpoint_days = remaining_days / 2.0
+        discount_factor = (1.0 + discount_rate) ** (midpoint_days / 365.0)
+        column = f"Y{horizon}{prefix}"
+        work[column] = work[fact_column] + remaining / discount_factor
+        work[f"_midpoint_days_{horizon}{prefix}"] = midpoint_days
+    return work
 
-    return {
-        "sample_start": sample_start.date().isoformat(),
-        "sample_end": sample_end.date().isoformat(),
-        "sample_days": round(sample_days, 1),
-        "model_start": start.date().isoformat(),
-        "model_start_source": model_start_source,
-        "as_of": end.date().isoformat(),
-        "elapsed_days_since_model_start": round(elapsed_days, 1),
-        "net_sample": round(effect.net, 2),
-        "net_per_day": round(daily_net, 2),
-        "net_since_model_start": round(daily_net * elapsed_days, 2),
-        "net_annual_365": round(daily_net * year_days, 2),
-        "cost_annual_365": round(daily_cost * year_days, 2),
-        "expected_psr_annual_365": round(daily_psr * year_days, 2),
-        "scale_sample_to_365": round(year_days / sample_days, 4),
+
+def _summaries(
+    frame: pd.DataFrame,
+    *,
+    suffix: str = "",
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    outcomes = {
+        "fact": f"Yfact{suffix}",
+        "365": f"Y365{suffix}",
+        "1095": f"Y1095{suffix}",
     }
+    group_rows: list[dict[str, Any]] = []
+    filial_rows: list[dict[str, Any]] = []
+    effect_rows: list[dict[str, Any]] = []
 
-
-def format_summary_dict(summary: dict[str, Any]) -> dict[str, Any]:
-    """Копия summary с денежными полями без e-нотации."""
-    money_keys = {
-        "sum_od",
-        "sum_paid",
-        "e_fee",
-        "expected_psr",
-        "cost",
-        "net",
-        "net_sample",
-        "net_per_day",
-        "net_since_model_start",
-        "net_annual_365",
-        "cost_annual_365",
-        "expected_psr_annual_365",
-        "model_value",
-        "control_value",
-        "model_avoided",
-        "control_avoided",
-        "model_open_psr",
-        "control_open_psr",
-        "model_cost",
-        "control_cost",
-        "net_per_case",
-        "model_value_per_case",
-        "control_value_per_case",
-    }
-    out: dict[str, Any] = {}
-    for k, v in summary.items():
-        if k in money_keys and isinstance(v, (int, float)) and not isinstance(v, bool):
-            out[k] = format_money(v)
-        else:
-            out[k] = v
-    return out
-
-
-def format_sensitivity_table(sens: pd.DataFrame) -> pd.DataFrame:
-    """Чувствительность с обычными числами (не 1.2e+06)."""
-    out = sens.copy()
-    for col in ("net", "expected_psr", "k", "precision"):
-        if col in out.columns:
-            out[col] = out[col].map(
-                lambda x: round(float(x), 2) if pd.notna(x) else x
+    for horizon, column in outcomes.items():
+        for group, part in frame.groupby("_group", observed=True):
+            group_rows.append(
+                {
+                    "horizon": horizon,
+                    "group": group,
+                    "n": len(part),
+                    "sum_cost": float(part[column].sum()),
+                    "mean_cost": float(part[column].mean()),
+                }
             )
-    return out
 
+        valid_filials: list[dict[str, Any]] = []
+        for filial, part in frame.groupby("_filial", observed=True):
+            means = part.groupby("_group", observed=True)[column].mean()
+            row = {
+                "horizon": horizon,
+                "filial": filial,
+                "n": len(part),
+                "n_model": int(part["_group"].eq("model").sum()),
+                "n_control": int(part["_group"].eq("control").sum()),
+                "mean_model": float(means.get("model", np.nan)),
+                "mean_control": float(means.get("control", np.nan)),
+            }
+            row["effect_control_minus_model"] = (
+                row["mean_control"] - row["mean_model"]
+            )
+            filial_rows.append(row)
+            if pd.notna(row["effect_control_minus_model"]):
+                valid_filials.append(row)
 
-def _group_agreement_value(
-    *,
-    group: pd.Series,
-    agr: pd.Series,
-    od: pd.Series,
-    cost_s: pd.Series,
-    precision: float,
-    k: float,
-    e_fee: float,
-    psr_share: float,
-) -> dict[str, float | int]:
-    """Value группы: соглашение → избежанный ПСР − cost; иначе → −ожидаемый ПСР."""
-    with_agr = group & agr
-    no_agr = group & ~agr
-    n_agr = int(with_agr.sum())
-    n_open = int(no_agr.sum())
-    n = int(group.sum())
-
-    sum_od_agr = float(od[with_agr].sum())
-    sum_od_open = float(od[no_agr].sum())
-    avoided = float(precision * (sum_od_agr * k + n_agr * e_fee))
-    open_psr = float(psr_share * (sum_od_open * k + n_open * e_fee))
-    cost = float(cost_s[with_agr].sum())
-    value = avoided - cost - open_psr
-    return {
-        "n": n,
-        "n_agreement": n_agr,
-        "n_open": n_open,
-        "sum_od_agreement": sum_od_agr,
-        "sum_od_open": sum_od_open,
-        "avoided": avoided,
-        "open_psr": open_psr,
-        "cost": cost,
-        "value": value,
-        "value_per_case": float(value / n) if n else 0.0,
-    }
-
-
-def estimate_monitoring_effect(
-    df: pd.DataFrame,
-    priors: RetroPriors,
-    *,
-    od_col: str | None = None,
-    cost_col: str | None = None,
-    paid_col: str | None = None,
-    variant: int = 1,
-    filial_scope: FilialScope = "pilot",
-) -> MonitoringEffectResult:
-    """Оценка net на выгрузке.
-
-    Вариант 1 (model vs control):
-      • agreement=1: избежанный ПСР = precision×(Σ OD×k + n×e_fee) − cost;
-      • agreement=0: ожидаемый ПСР = psr_share×(Σ OD×k + n×e_fee);
-      • value(G) = avoided − cost − open_psr;
-      • net = value(model) − value(control).
-
-    Вариант 2:
-      только сегмент 111 (result=1 ∧ выплата=1 ∧ соглашение=1),
-      expected_psr − cost по стандартной формуле.
-
-    ``paid_col`` — устаревший алиас для ``od_col``.
-    """
-    from querulus.fin_effect.monitoring_analytics import (
-        control_mask,
-        model_rucheek_mask,
-        segment_111_mask,
-    )
-
-    if od_col is None:
-        od_col = paid_col
-    if od_col is None:
-        od_col = "СуммаОсновногоДолгаЗаявлено"
-    if cost_col is None:
-        cost_col = "СуммаКВыплате"
-
-    od_name = resolve_paid_column(df, od_col)
-    try:
-        cost_name = resolve_paid_column(df, cost_col)
-    except KeyError:
-        cost_name = resolve_column(df, "to_pay") or resolve_column(df, "payment") or od_name
-
-    od = _to_numeric(df[od_name]).fillna(0.0)
-    cost_s = _to_numeric(df[cost_name]).fillna(0.0)
-    e_fee = priors.expected_fee()
-    agr = agreement_mask(df)
-    psr_share = float(priors.psr_share)
-
-    frame = df.copy()
-    frame["_od"] = od
-    frame["_agreement"] = agr.astype(int)
-
-    if variant == 1:
-        model = model_rucheek_mask(df, filial_scope=filial_scope)
-        control = control_mask(df, filial_scope=filial_scope)
-        model_stats = _group_agreement_value(
-            group=model,
-            agr=agr,
-            od=od,
-            cost_s=cost_s,
-            precision=priors.precision,
-            k=priors.k,
-            e_fee=e_fee,
-            psr_share=psr_share,
+        if not valid_filials:
+            raise ValueError(
+                f"Нет филиалов с model и control для горизонта {horizon}"
+            )
+        weight_total = sum(int(row["n"]) for row in valid_filials)
+        effect = sum(
+            float(row["effect_control_minus_model"]) * int(row["n"])
+            for row in valid_filials
+        ) / weight_total
+        overall = frame.groupby("_group", observed=True)[column].mean()
+        effect_rows.append(
+            {
+                "horizon": horizon,
+                "effect_per_case": float(effect),
+                "unstratified_effect": float(
+                    overall.get("control", np.nan) - overall.get("model", np.nan)
+                ),
+                "n_weighted": weight_total,
+                "n_filials": len(valid_filials),
+            }
         )
-        control_stats = _group_agreement_value(
-            group=control,
-            agr=agr,
-            od=od,
-            cost_s=cost_s,
-            precision=priors.precision,
-            k=priors.k,
-            e_fee=e_fee,
-            psr_share=psr_share,
-        )
-        net = float(model_stats["value"] - control_stats["value"])
-        net_per_case = float(
-            model_stats["value_per_case"] - control_stats["value_per_case"]
-        )
-        # Совместимость полей: «ожидаемый/избежанный» ПСР и cost — по model.
-        expected_psr = float(model_stats["avoided"])
-        cost = float(model_stats["cost"])
-        sum_od = float(model_stats["sum_od_agreement"])
-        sum_paid = cost
-        n_i = int(model_stats["n_agreement"])
 
-        row_avoided = np.where(
-            agr,
-            priors.precision * (od * priors.k + e_fee),
-            0.0,
-        )
-        row_open = np.where(
-            ~agr,
-            psr_share * (od * priors.k + e_fee),
-            0.0,
-        )
-        row_cost = np.where(agr, cost_s, 0.0)
-        row_value = row_avoided - row_cost - row_open
-
-        frame["_model"] = model.astype(int)
-        frame["_control"] = control.astype(int)
-        frame["_intervention"] = (model & agr).astype(int)
-        frame["_cost_mask"] = (model & agr).astype(int)
-        frame["_od_i"] = od.where(model & agr, 0.0)
-        frame["_cost_i"] = cost_s.where(model & agr, 0.0)
-        frame["_expected_psr_row"] = np.where(model, row_avoided, 0.0)
-        frame["_open_psr_row"] = np.where(model | control, row_open, 0.0)
-        frame["_row_value"] = np.where(model | control, row_value, 0.0)
-
-        details: dict[str, Any] = {
-            "variant": 1,
-            "psr_share": psr_share,
-            "model": model_stats,
-            "control": control_stats,
-            "model_value": float(model_stats["value"]),
-            "control_value": float(control_stats["value"]),
-            "model_avoided": float(model_stats["avoided"]),
-            "control_avoided": float(control_stats["avoided"]),
-            "model_open_psr": float(model_stats["open_psr"]),
-            "control_open_psr": float(control_stats["open_psr"]),
-            "model_cost": float(model_stats["cost"]),
-            "control_cost": float(control_stats["cost"]),
-            "net_per_case": net_per_case,
-            "model_value_per_case": float(model_stats["value_per_case"]),
-            "control_value_per_case": float(control_stats["value_per_case"]),
-        }
-    else:
-        benefit = segment_111_mask(df, filial_scope=filial_scope)
-        cost_m = benefit
-        od_i = od.where(benefit, 0.0)
-        cost_i = cost_s.where(cost_m, 0.0)
-        sum_od = float(od_i.sum())
-        sum_paid = float(cost_i.sum())
-        n_i = int(benefit.sum())
-        expected_psr = float(
-            priors.precision * ((od_i * priors.k).sum() + n_i * e_fee)
-        )
-        cost = sum_paid
-        net = expected_psr - cost
-
-        frame["_intervention"] = benefit.astype(int)
-        frame["_cost_mask"] = cost_m.astype(int)
-        frame["_od_i"] = od_i
-        frame["_cost_i"] = cost_i
-        frame["_expected_psr_row"] = np.where(
-            benefit,
-            priors.precision * (od_i * priors.k + e_fee),
-            0.0,
-        )
-        frame["_open_psr_row"] = 0.0
-        frame["_row_value"] = frame["_expected_psr_row"] - cost_i
-
-        details = {
-            "variant": 2,
-            "segment": "111",
-            "n_111": n_i,
-        }
-
-    return MonitoringEffectResult(
-        frame=frame,
-        n_intervention=n_i,
-        sum_od=sum_od,
-        sum_paid=sum_paid,
-        expected_psr=expected_psr,
-        cost=cost,
-        net=net,
-        e_fee=e_fee,
-        priors=priors,
-        od_column=od_name,
-        cost_column=cost_name,
-        details=details,
+    return (
+        pd.DataFrame(group_rows),
+        pd.DataFrame(filial_rows),
+        pd.DataFrame(effect_rows),
     )
 
 
-def sensitivity_table(
-    df: pd.DataFrame,
-    priors: RetroPriors,
-    *,
-    od_col: str | None = None,
-    cost_col: str | None = None,
-    paid_col: str | None = None,
-    rel_delta: float = 0.2,
-    variant: int = 1,
+def _cluster_resample(
+    frame: pd.DataFrame,
+    rng: np.random.Generator,
 ) -> pd.DataFrame:
-    """Чувствительность net к ±rel_delta по k и precision."""
-    if od_col is None:
-        od_col = paid_col
-    rows: list[dict[str, Any]] = []
-    base = estimate_monitoring_effect(
-        df, priors, od_col=od_col, cost_col=cost_col, variant=variant
-    )
-    rows.append(
-        {
-            "scenario": "base",
-            "precision": priors.precision,
-            "k": priors.k,
-            "net": base.net,
-            "expected_psr": base.expected_psr,
-        }
-    )
-    for name, p_mult, k_mult in (
-        ("precision -20%", 1 - rel_delta, 1.0),
-        ("precision +20%", 1 + rel_delta, 1.0),
-        ("k -20%", 1.0, 1 - rel_delta),
-        ("k +20%", 1.0, 1 + rel_delta),
-    ):
-        adj = RetroPriors(
-            precision=max(0.0, min(1.0, priors.precision * p_mult)),
-            k=max(0.0, priors.k * k_mult),
-            p_pret=priors.p_pret,
-            p_fu=priors.p_fu,
-            p_court=priors.p_court,
-            fu_fee=priors.fu_fee,
-            court_fee=priors.court_fee,
-            lookback_years=priors.lookback_years,
-            date_column=priors.date_column,
-            window_start=priors.window_start,
-            window_end=priors.window_end,
-            n_rows=priors.n_rows,
-            n_pos=priors.n_pos,
-            psr_share=priors.psr_share,
-        )
-        res = estimate_monitoring_effect(
-            df, adj, od_col=od_col, cost_col=cost_col, variant=variant
-        )
+    groups = [part for _, part in frame.groupby("_incident", dropna=False)]
+    picks = rng.integers(0, len(groups), size=len(groups))
+    sampled = [groups[index].copy() for index in picks]
+    return pd.concat(sampled, ignore_index=True)
+
+
+def _bootstrap_ci(
+    current: pd.DataFrame,
+    retro: pd.DataFrame,
+    *,
+    pilot_filials: tuple[str, ...],
+    lookback_years: float | None,
+    as_of: str | pd.Timestamp | None,
+    residual_share: float,
+    discount_rate: float,
+    iterations: int,
+    seed: int,
+) -> pd.DataFrame:
+    if iterations <= 0:
+        return pd.DataFrame(columns=["horizon", "ci_low", "ci_high", "n_bootstrap"])
+    rng = np.random.default_rng(seed)
+    values: dict[str, list[float]] = {"fact": [], "365": [], "1095": []}
+    for _ in range(iterations):
+        retro_sample = retro.iloc[
+            rng.integers(0, len(retro), size=len(retro))
+        ].reset_index(drop=True)
+        try:
+            priors = compute_terminal_priors(
+                retro_sample,
+                pilot_filials=pilot_filials,
+                lookback_years=lookback_years,
+                as_of=as_of,
+            )
+            current_sample = _cluster_resample(current, rng)
+            outcomes = _add_outcomes(
+                current_sample,
+                priors.pilot,
+                residual_share=residual_share,
+                discount_rate=discount_rate,
+            )
+            _, _, effects = _summaries(outcomes)
+        except (KeyError, ValueError, ZeroDivisionError):
+            continue
+        for row in effects.to_dict("records"):
+            values[str(row["horizon"])].append(float(row["effect_per_case"]))
+
+    rows = []
+    for horizon, sample in values.items():
+        if sample:
+            low, high = np.quantile(sample, [0.025, 0.975])
+        else:
+            low, high = np.nan, np.nan
         rows.append(
             {
-                "scenario": name,
-                "precision": adj.precision,
-                "k": adj.k,
-                "net": res.net,
-                "expected_psr": res.expected_psr,
+                "horizon": horizon,
+                "ci_low": float(low),
+                "ci_high": float(high),
+                "n_bootstrap": len(sample),
             }
         )
     return pd.DataFrame(rows)
 
 
-def default_demo_priors() -> RetroPriors:
-    """Демо-приоры, пока нет ретро-parquet на контуре."""
-    return RetroPriors(
-        precision=0.55,
-        k=1.35,
-        p_pret=0.45,
-        p_fu=0.30,
-        p_court=0.25,
-        fu_fee=FU_FEE_DEFAULT,
-        court_fee=COURT_FEE_DEFAULT,
-        lookback_years=2.0,
-        date_column="PAYMENT_ORDER_DATE_TIME",
-        window_start=None,
-        window_end=None,
-        n_rows=0,
-        n_pos=0,
-        psr_share=0.20,
+def _compliance_a(frame: pd.DataFrame) -> pd.DataFrame:
+    model_one = frame.loc[
+        frame["_group"].eq("model") & frame["_result"].eq(1)
+    ].copy()
+    model_one["_compliance"] = np.where(
+        model_one["_payout_by_model"],
+        "complied",
+        "not_complied",
     )
+    rows: list[dict[str, Any]] = []
+    for horizon, column in (
+        ("fact", "Yfact"),
+        ("365", "Y365"),
+        ("1095", "Y1095"),
+    ):
+        means: dict[str, float] = {}
+        for status, part in model_one.groupby("_compliance", observed=True):
+            mean = float(part[column].mean())
+            means[str(status)] = mean
+            rows.append(
+                {
+                    "horizon": horizon,
+                    "compliance": status,
+                    "n": len(part),
+                    "mean_cost": mean,
+                    "descriptive_only": True,
+                }
+            )
+        rows.append(
+            {
+                "horizon": horizon,
+                "compliance": "gap_not_complied_minus_complied",
+                "n": len(model_one),
+                "mean_cost": (
+                    means.get("not_complied", np.nan)
+                    - means.get("complied", np.nan)
+                ),
+                "descriptive_only": True,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
-_FILIALS = (
-    "Курский",
-    "Ярославский",
-    "Пермский",
-    "Архангельский",
-    "Омский",
-    "Владимирский",
-    "Магнитогорский",
-    "Марийский",
-)
+def _sensitivity(
+    frame: pd.DataFrame,
+    priors: GroupRetroPriors,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for discount_rate in (0.08, 0.12, 0.16):
+        for residual_share in (0.00, 0.07, 0.15):
+            outcomes = _add_outcomes(
+                frame,
+                priors,
+                residual_share=residual_share,
+                discount_rate=discount_rate,
+            )
+            _, _, effects = _summaries(outcomes)
+            for row in effects.to_dict("records"):
+                rows.append(
+                    {
+                        "discount_rate": discount_rate,
+                        "residual_share": residual_share,
+                        "horizon": row["horizon"],
+                        "effect_per_case": row["effect_per_case"],
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def _seasonal_scaling(
+    retro_df: pd.DataFrame,
+    current: pd.DataFrame,
+    priors: TerminalRetroPriors,
+    effects: pd.DataFrame,
+    compliance_effects: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    warnings: list[str] = []
+    date_col = _resolve_retro_date(retro_df)
+    filial_col = _required_existing(retro_df, RETRO_FILIAL_CANDIDATES, "FILIAL")
+    if date_col is None:
+        raise KeyError("Нет даты ретро для сезонной экстраполяции")
+    dates = pd.to_datetime(retro_df[date_col], errors="coerce")
+    pilot_norm = {value.casefold() for value in priors.pilot.filials}
+    is_pilot = _normalize_text(retro_df[filial_col]).isin(pilot_norm)
+    season_source = pd.DataFrame(
+        {
+            "date": dates,
+            "is_pilot": is_pilot,
+        }
+    ).dropna(subset=["date"])
+    pilot_source = season_source.loc[season_source["is_pilot"]].copy()
+    pilot_source["year"] = pilot_source["date"].dt.year
+    pilot_source["month"] = pilot_source["date"].dt.month
+    complete_years = [
+        int(year)
+        for year, part in pilot_source.groupby("year")
+        if part["month"].nunique() == 12
+    ]
+    if complete_years:
+        pilot_source = pilot_source.loc[pilot_source["year"].isin(complete_years)]
+    else:
+        warnings.append(
+            "Для сезонности нет полного ретро-года; использованы все доступные годы."
+        )
+    seasonal_counts = (
+        pilot_source.groupby(["year", "month"])
+        .size()
+        .rename("n_month")
+        .reset_index()
+    )
+    annual_counts = (
+        pilot_source.groupby("year").size().rename("n_year").reset_index()
+    )
+    seasonal_counts = seasonal_counts.merge(annual_counts, on="year", how="left")
+    seasonal_counts["share"] = (
+        seasonal_counts["n_month"] / seasonal_counts["n_year"]
+    )
+    shares = seasonal_counts.groupby("month")["share"].mean()
+    shares = shares.reindex(range(1, 13), fill_value=0.0)
+    if shares.sum() <= 0:
+        raise ValueError("Не удалось рассчитать сезонные доли")
+    shares = shares / shares.sum()
+
+    observed_dates = current["_application_date"].dropna()
+    observed_start = observed_dates.min().normalize()
+    observed_end = observed_dates.max().normalize()
+    coverage = {month: 0.0 for month in range(1, 13)}
+    for period in pd.period_range(observed_start, observed_end, freq="M"):
+        month_start = max(observed_start, period.start_time.normalize())
+        month_end = min(observed_end, period.end_time.normalize())
+        observed_days = max(0, (month_end - month_start).days + 1)
+        coverage[period.month] += observed_days / period.days_in_month
+    seasonal_exposure = sum(
+        coverage[month] * float(shares.loc[month]) for month in range(1, 13)
+    )
+    if seasonal_exposure <= 0:
+        raise ValueError("Сезонная экспозиция равна нулю")
+
+    n_observed = len(current)
+    share_model = float(current["_group"].eq("model").mean())
+    n_pilot_eligible_year = n_observed / seasonal_exposure
+    n_model_year_current = share_model * n_pilot_eligible_year
+    n_model_year_full = n_pilot_eligible_year
+
+    volume_source = season_source.assign(year=season_source["date"].dt.year)
+    if complete_years:
+        volume_source = volume_source.loc[
+            volume_source["year"].isin(complete_years)
+        ]
+    counts = volume_source.groupby(
+        ["year", "is_pilot"]
+    ).size().unstack(fill_value=0)
+    pilot_annual = float(counts.get(True, pd.Series(dtype=float)).mean())
+    nonpilot_annual = float(counts.get(False, pd.Series(dtype=float)).mean())
+    volume_ratio = nonpilot_annual / pilot_annual if pilot_annual > 0 else 0.0
+    amount_col = _required_existing(
+        retro_df,
+        ("TARGET_FREQ_AMOUNT",),
+        "TARGET_FREQ_AMOUNT",
+    )
+    amount = _to_numeric(retro_df[amount_col]).fillna(0.0).clip(lower=0.0)
+    valid_filial = retro_df[filial_col].notna()
+    pilot_mean_psr = float(amount[is_pilot].mean())
+    nonpilot_mean_psr = float(amount[~is_pilot & valid_filial].mean())
+    risk_ratio = (
+        nonpilot_mean_psr / pilot_mean_psr if pilot_mean_psr > 0 else 0.0
+    )
+    network_multiplier = 1.0 + volume_ratio * risk_ratio
+
+    seasonal_rows = [
+        {
+            "month": month,
+            "retro_share": float(shares.loc[month]),
+            "observed_coverage": coverage[month],
+            "exposure_contribution": coverage[month] * float(shares.loc[month]),
+        }
+        for month in range(1, 13)
+    ]
+    effect_map = effects.set_index("horizon")["effect_per_case"].to_dict()
+    compliance_map = compliance_effects.set_index("horizon")[
+        "effect_per_case"
+    ].to_dict()
+    annual_rows = []
+    for horizon in ("fact", "365", "1095"):
+        effect = float(effect_map[horizon])
+        effect_100 = float(compliance_map[horizon])
+        annual_rows.append(
+            {
+                "horizon": horizon,
+                "effect_per_case": effect,
+                "effect_100_compliance": effect_100,
+                "seasonal_exposure": seasonal_exposure,
+                "N_pilot_eligible_year": n_pilot_eligible_year,
+                "N_pilot_model_year_current": n_model_year_current,
+                "N_pilot_model_year_full": n_model_year_full,
+                "volume_ratio_nonpilot": volume_ratio,
+                "risk_ratio_nonpilot": risk_ratio,
+                "network_multiplier": network_multiplier,
+                "annual_pilot_current": effect * n_model_year_current,
+                "annual_pilot_full": effect * n_model_year_full,
+                "effect_per_case_nonpilot": effect * risk_ratio,
+                "annual_network_full": (
+                    effect * n_model_year_full * network_multiplier
+                ),
+                "annual_network_full_compliance": (
+                    effect_100 * n_model_year_full * network_multiplier
+                ),
+            }
+        )
+    return pd.DataFrame(annual_rows), pd.DataFrame(seasonal_rows), warnings
+
+
+def _data_quality(
+    frame: pd.DataFrame,
+    contract: dict[str, str],
+) -> pd.DataFrame:
+    rows_per_loss = frame.groupby("_loss", dropna=False).size()
+    duplicate_losses = rows_per_loss.gt(1)
+    payment = frame["_paid_to_date"]
+    unique_loss_payment = (
+        frame[["_loss", "_paid_to_date"]]
+        .drop_duplicates()["_paid_to_date"]
+        .sum()
+    )
+    multiple_psr = (
+        frame[["_psr_pretension", "_psr_fu", "_psr_court"]].gt(0).sum(axis=1) > 1
+    )
+    metrics = {
+        "n_rows": len(frame),
+        "n_unique_losses": frame["_loss"].nunique(dropna=False),
+        "losses_with_multiple_rows": int(duplicate_losses.sum()),
+        "extra_rows_vs_one_row_per_loss": int(
+            (rows_per_loss - 1).clip(lower=0).sum()
+        ),
+        "exact_duplicate_rows": int(frame.duplicated(keep=False).sum()),
+        "payment_raw_sum": float(payment.sum()),
+        "payment_possible_inflation": float(payment.sum() - unique_loss_payment),
+        "payment_minus_to_pay_sum": float(
+            (frame["_paid_to_date"] - frame["_to_pay"]).sum()
+        ),
+        "payment_to_pay_mismatch_rows": int(
+            frame["_paid_to_date"].ne(frame["_to_pay"]).sum()
+        ),
+        "missing_payment": int(frame["_paid_missing"].sum()),
+        "missing_od": int(frame["_od_missing"].sum()),
+        "rows_with_multiple_psr_components": int(multiple_psr.sum()),
+        "observed_psr_gt_paid": int(
+            frame["_observed_psr"].gt(frame["_paid_to_date"]).sum()
+        ),
+        "max_age_days": int(frame["_age_days"].max()),
+        "observation_start": frame["_application_date"].min().date().isoformat(),
+        "observation_end": frame["_application_date"].max().date().isoformat(),
+        "n_model": int(frame["_group"].eq("model").sum()),
+        "n_control": int(frame["_group"].eq("control").sum()),
+        "n_filials": frame["_filial"].nunique(dropna=False),
+    }
+    rows = [{"metric": key, "value": value} for key, value in metrics.items()]
+    rows.extend(
+        {
+            "metric": f"column:{key}",
+            "value": value,
+        }
+        for key, value in contract.items()
+    )
+    return pd.DataFrame(rows)
+
+
+def estimate_monitoring_effect(
+    monitoring_df: pd.DataFrame,
+    retro_df: pd.DataFrame,
+    *,
+    t_calc: str | pd.Timestamp | None = None,
+    residual_share: float = 0.07,
+    discount_rate: float = 0.12,
+    lookback_years: float | None = 2.0,
+    retro_as_of: str | pd.Timestamp | None = RETRO_AS_OF_DEFAULT,
+    bootstrap_iterations: int = 200,
+    bootstrap_seed: int = 42,
+) -> MonitoringEffectResult:
+    """Выполнить ITT, compliance-сценарии, CI и сезонную экстраполяцию."""
+    if not 0 <= residual_share <= 1:
+        raise ValueError("residual_share должен быть в [0, 1]")
+    if discount_rate <= -1:
+        raise ValueError("discount_rate должен быть больше -1")
+
+    current, contract, warnings = _prepare_monitoring_contract(
+        monitoring_df,
+        t_calc=t_calc,
+    )
+    pilot_filials = PILOT_FILIALS
+    priors = compute_terminal_priors(
+        retro_df,
+        pilot_filials=pilot_filials,
+        lookback_years=lookback_years,
+        as_of=retro_as_of,
+    )
+    current = _add_outcomes(
+        current,
+        priors.pilot,
+        residual_share=residual_share,
+        discount_rate=discount_rate,
+    )
+    group_summary, filial_effects, effects = _summaries(current)
+
+    ci = _bootstrap_ci(
+        current,
+        retro_df,
+        pilot_filials=pilot_filials,
+        lookback_years=lookback_years,
+        as_of=retro_as_of,
+        residual_share=residual_share,
+        discount_rate=discount_rate,
+        iterations=bootstrap_iterations,
+        seed=bootstrap_seed,
+    )
+    effects = effects.merge(ci, on="horizon", how="left")
+
+    compliance_a = _compliance_a(current)
+    current_100 = _add_outcomes(
+        current,
+        priors.pilot,
+        residual_share=residual_share,
+        discount_rate=discount_rate,
+        compliance_100=True,
+    )
+    _, _, compliance_b = _summaries(current_100, suffix="_100")
+    compliance_b["scenario"] = "100% compliance for model result=1"
+
+    sensitivity = _sensitivity(current, priors.pilot)
+    annual, seasonality, season_warnings = _seasonal_scaling(
+        retro_df,
+        current,
+        priors,
+        effects,
+        compliance_b,
+    )
+    warnings.extend(season_warnings)
+    for group_priors in (priors.pilot, priors.nonpilot):
+        if group_priors.n_positive < 30:
+            warnings.append(
+                f"В ретро-группе {group_priors.group} только "
+                f"{group_priors.n_positive} положительных ПСР (<30)."
+            )
+    warnings.append(
+        "Масштабирование на сеть является сценарным, а не экспериментальным."
+    )
+    missing_strata = set(current["_filial"].astype(str)) - set(
+        filial_effects.dropna(subset=["effect_control_minus_model"])["filial"].astype(str)
+    )
+    if missing_strata:
+        warnings.append(
+            "Без пары model/control и исключены из ITT-взвешивания филиалы: "
+            + ", ".join(sorted(missing_strata))
+        )
+    data_quality = _data_quality(current, contract)
+    quality = data_quality.set_index("metric")["value"].to_dict()
+    if int(quality["observed_psr_gt_paid"]) > 0:
+        warnings.append(
+            "Есть строки, где observed_PSR больше СуммаПлатежа; "
+            "проверьте состав кассового факта."
+        )
+    if int(quality["losses_with_multiple_rows"]) > 0:
+        warnings.append(
+            "Есть повторяющиеся номера убытков. Они не удалены согласно контракту."
+        )
+    if int(quality["payment_to_pay_mismatch_rows"]) > 0:
+        warnings.append(
+            "СуммаПлатежа отличается от СуммаКВыплате хотя бы в одной строке; "
+            "в outcome используется только СуммаПлатежа."
+        )
+
+    calc_date = (
+        pd.Timestamp(t_calc).normalize()
+        if t_calc is not None
+        else pd.Timestamp.today().normalize()
+    )
+    return MonitoringEffectResult(
+        frame=current_100,
+        priors=priors,
+        effect_summary=effects,
+        group_summary=group_summary,
+        filial_effects=filial_effects,
+        compliance_a=compliance_a,
+        compliance_b=compliance_b,
+        sensitivity=sensitivity,
+        annual_summary=annual,
+        seasonality=seasonality,
+        data_quality=data_quality,
+        contract=contract,
+        t_calc=calc_date,
+        discount_rate=discount_rate,
+        residual_share=residual_share,
+        bootstrap_iterations=bootstrap_iterations,
+        warnings=warnings,
+    )
 
 
 def build_synthetic_claims_excel(
     n_rows: int = 300,
     *,
     seed: int = 42,
-    intervention_rate: float = 0.12,
 ) -> pd.DataFrame:
-    """Синтетика под общие фильтры и I = вызов модели ∧ выплата по модели."""
-    if n_rows < 50:
-        raise ValueError("n_rows >= 50")
+    """Сохранить совместимость synthetic-источника загрузчика мониторинга."""
+    if n_rows < 20:
+        raise ValueError("n_rows должен быть не меньше 20")
     rng = np.random.default_rng(seed)
-    # Большинство — разрешённые филиалы; немного исключённых для проверки фильтра.
-    allowed_filials = [f for f in _FILIALS if "Архангельск" not in f and "Марийск" not in f]
-    excluded_filials = [f for f in _FILIALS if f not in allowed_filials]
-    filial = np.array(
-        [
-            rng.choice(excluded_filials if rng.random() < 0.18 else allowed_filials)
-            for _ in range(n_rows)
-        ]
-    )
-    zones = np.array([f"Зона ф-ла {f}" for f in filial])
-    # Часть убытков делит инцидент — чтобы ФУ/суд на одном loss поднялись на весь инцидент.
-    incident = 11_000_000 + rng.integers(0, max(n_rows // 2, 10), size=n_rows)
-
-    event = pd.to_datetime("2024-03-01") + pd.to_timedelta(
-        rng.integers(0, 120, size=n_rows), unit="D"
-    )
-    apply = event + pd.to_timedelta(rng.integers(1, 15, size=n_rows), unit="D")
-
-    # Базовые фильтры: почти все строки проходят; чуть шума.
-    auto_obj = np.ones(n_rows, dtype=int)
-    auto_obj[rng.choice(n_rows, size=max(1, n_rows // 25), replace=False)] = 0
-    loss_status = np.array(["Первичный"] * n_rows, dtype=object)
-    loss_status[rng.choice(n_rows, size=max(1, n_rows // 30), replace=False)] = "Повторный"
-
-    forms = np.array(
-        rng.choice(
-            ["Денежная", "Ремонт", "Соглашение", "Отказ"],
-            size=n_rows,
-            p=[0.45, 0.30, 0.18, 0.07],
-        )
-    )
-
-    # I: вызов модели + выплата по модели (на разрешённых строках)
-    n_model = max(2, int(round(n_rows * intervention_rate * 1.8)))
-    model_call = np.zeros(n_rows, dtype=int)
-    model_pay = np.zeros(n_rows, dtype=int)
-    result = np.zeros(n_rows, dtype=int)
-    candidate = np.array(
-        [
-            (f in allowed_filials)
-            and (a == 1)
-            and str(s).casefold().startswith("первич")
-            and any(x in str(form).casefold() for x in ("денежн", "ремонт", "соглашен"))
-            for f, a, s, form in zip(filial, auto_obj, loss_status, forms)
-        ]
-    )
-    cand_idx = np.where(candidate)[0]
-    if len(cand_idx) == 0:
-        cand_idx = np.arange(n_rows)
-    pick = rng.choice(cand_idx, size=min(n_model, len(cand_idx)), replace=False)
-    model_call[pick] = 1
-    model_pay[pick] = 1
-    result[pick] = 1
-    # часть — вызвали модель, но без выплаты по модели
-    extra_call = rng.choice(
-        np.where((model_call == 0) & candidate)[0],
-        size=min(max(len(pick), 1), int(((model_call == 0) & candidate).sum()) or 1),
-        replace=False,
-    ) if ((model_call == 0) & candidate).any() else np.array([], dtype=int)
-    model_call[extra_call] = 1
-    # ручеёк: 0/1 в модели; -100 вне модели; на пилоте (Арх/Марий) почти всё в модели
-    result[:] = RESULT_OUT_OF_MODEL
-    in_stream = (model_call == 1) | (rng.random(n_rows) < 0.45)
-    result[in_stream] = rng.choice([0, 1], size=int(in_stream.sum()), p=[0.55, 0.45])
-    result[pick] = 1
-    pilot = np.array(
-        ["Архангельск" in str(f) or "Марийск" in str(f) for f in filial]
-    )
-    if pilot.any():
-        result[pilot] = rng.choice([0, 1], size=int(pilot.sum()), p=[0.35, 0.65])
-        model_call[pilot] = 1
-        model_pay[pilot & (rng.random(n_rows) < 0.85)] = 1
-
-    with_model = (model_call == 1) & (model_pay == 1)
-    is_i = with_model & candidate
-    agreement = np.zeros(n_rows, dtype=int)
-    agreement[with_model] = (rng.random(int(with_model.sum())) < 0.55).astype(int)
-    agreement_extra = (model_call == 1) & ~with_model & (rng.random(n_rows) < 0.20)
-    agreement = np.where(agreement | agreement_extra, 1, agreement)
-
-    pret = (rng.random(n_rows) < np.where(model_call == 1, 0.08, 0.03)).astype(int)
-    fu_flag = (rng.random(n_rows) < np.where(pret == 1, 0.25, 0.02)).astype(int)
-    court_flag = (rng.random(n_rows) < np.where(fu_flag == 1, 0.35, 0.01)).astype(int)
-
-    recommended = np.zeros(n_rows, dtype=float)
-    recommended[with_model] = rng.uniform(15_000, 120_000, size=int(with_model.sum()))
-
-    wear = rng.uniform(5_000, 200_000, size=n_rows)
-    other = np.where(rng.random(n_rows) < 0.15, rng.uniform(1_000, 40_000, size=n_rows), 0.0)
-    to_pay = wear + other
-    payment = to_pay.copy()
-
-    claimed_od = rng.uniform(10_000, 250_000, size=n_rows)
-    claimed_uts = np.where(rng.random(n_rows) < 0.2, rng.uniform(1_000, 30_000, size=n_rows), 0.0)
-    claimed_evac = np.zeros(n_rows)
-    claimed_storage = np.zeros(n_rows)
-    od_claimed = claimed_od + claimed_uts + claimed_evac + claimed_storage
-    od_to_pay = claimed_od * rng.uniform(0.4, 1.0, size=n_rows)
-
-    payment[is_i] = recommended[is_i]
-    od_to_pay[is_i] = recommended[is_i]
-    to_pay[is_i] = recommended[is_i]
-    od_claimed[is_i] = recommended[is_i] * rng.uniform(0.9, 1.3, size=int(is_i.sum()))
-    wear[is_i] = recommended[is_i] * 0.85
-    other[is_i] = recommended[is_i] * 0.15
-    forms[is_i] = rng.choice(["Денежная", "Ремонт", "Соглашение"], size=int(is_i.sum()))
-
-    products = rng.choice(
-        ["Традиционное ОСАГО", "Прямое ОСАГО (с 1 марта 2009)"],
-        size=n_rows,
-    )
-    applicants = rng.choice(
-        [
-            "Потерпевший",
-            "Юрист с потерпевшим",
-            "Опытный юрист",
-            "Представитель (не автоюрист)",
-            "Выгодоприобретатель",
-        ],
-        size=n_rows,
-    )
-
-    df = pd.DataFrame(
+    result = rng.choice([RESULT_OUT_OF_MODEL, 0, 1], size=n_rows)
+    payout = (result == 1) & (rng.random(n_rows) < 0.6)
+    agreement = (result == 1) & (rng.random(n_rows) < 0.5)
+    today = pd.Timestamp.today().normalize()
+    psr = np.where(rng.random(n_rows) < 0.08, rng.uniform(1_000, 30_000, n_rows), 0.0)
+    frame = pd.DataFrame(
         {
-            "НомерИнцидент": incident,
-            "ЗонаУрегулирования": zones,
-            "Филиал": filial,
-            "ДатаЗаявления": apply,
-            "ДатаСобытия": event,
-            "Дата вызова модели сутяжности": np.where(
-                model_call == 1,
-                apply - pd.to_timedelta(rng.integers(0, 5, size=n_rows), unit="D"),
-                pd.NaT,
-            ),
-            "Продукт": products,
-            "Тип заявителя": applicants,
-            "ВозрастЗаявителя": rng.integers(18, 75, size=n_rows),
-            "СпособПолученияЗаявления": rng.choice(
-                ["Лично", "Электронное обращение"], size=n_rows
-            ),
-            "ОформленоГИБДД": rng.integers(0, 2, size=n_rows),
-            "Категория ТС потерпевшего": rng.choice(
-                ["Автомобили легковые", "Мотоциклы", "Микроавтобусы"], size=n_rows
-            ),
-            "Тип владельца транспортного средства": rng.choice(
-                ["Физ. Лицо", "Юр. Лицо"], size=n_rows, p=[0.85, 0.15]
-            ),
-            "ФормаВозмещения": forms,
-            "УбытокСтатус": loss_status,
-            "ТипОбъектаАвтотранспорт": auto_obj,
+            "Убыток": [f"SYN-{index:06d}" for index in range(n_rows)],
+            "НомерИнцидент": [f"INC-{index // 2:06d}" for index in range(n_rows)],
+            "Филиал": rng.choice(PILOT_FILIALS, size=n_rows),
+            "ФормаВозмещения": np.where(agreement, "Соглашение", "Денежная"),
+            "УбытокСтатус": "Первичный",
+            "ТипОбъектаАвтотранспорт": 1,
             "РезультатПроверки": result,
-            "ВызовМодельСутяжность": model_call,
-            "Заключено соглашение": agreement,
-            "Выплата по модели": model_pay,
-            "Выплата по модели в Инциденте": model_pay,
-            "ЕстьПретензияВИнциденте": pret,
-            "Обращение к ФУ": fu_flag,
-            "Обращение к суду": court_flag,
-            "Сумма рекомендованная к доплате по модулю": recommended,
-            "СуммаОсновногоДолгаЗаявлено": od_claimed,
-            "СуммаОсновногоДолгаКВыплате": od_to_pay,
-            "СтоимостьСУчетомИзноса": wear,
-            "Иные затраты": other,
-            "СуммаКВыплате": to_pay,
-            "СуммаПлатежа": payment,
-            "СуммаОД": od_to_pay,
-            "СуммаОУ": payment,
-            "Сумма выплаты по претензии": 0.0,
-            "Кол-во претензий": pret,
+            "СуммаПлатежа": rng.uniform(30_000, 250_000, n_rows),
+            "СуммаКВыплате": rng.uniform(30_000, 250_000, n_rows),
+            "СуммаОсновногоДолгаЗаявлено": rng.uniform(
+                20_000,
+                300_000,
+                n_rows,
+            ),
+            "Сумма рекомендованная к доплате по модулю": np.where(
+                result == 1,
+                rng.uniform(10_000, 80_000, n_rows),
+                0.0,
+            ),
+            "Выплата по модели": payout.astype(int),
+            "Заключено соглашение": agreement.astype(int),
+            "Дата вызова модели сутяжности": today - pd.to_timedelta(
+                rng.integers(0, 120, n_rows),
+                unit="D",
+            ),
+            "ДатаЗаявления": today - pd.to_timedelta(
+                rng.integers(0, 120, n_rows),
+                unit="D",
+            ),
+            "Cумма выплаты по претензии": psr,
             "Сумма выплат по ФУ": 0.0,
             "Сумма выплаты по суду": 0.0,
-            "ОсновныеВыплатыЗаявлено_Основной долг": claimed_od,
-            "ОсновныеВыплатыЗаявлено_Утрата товарной стоимости": claimed_uts,
-            "ОсновныеВыплатыЗаявлено_Затраты на эвакуацию ТС": claimed_evac,
-            "ОсновныеВыплатыЗаявлено_Затраты на хранение": claimed_storage,
-            "ОсновныеВыплатыСуммаОплаченоДолиВыплата": od_to_pay,
         }
     )
-    return enrich_incident_path_flags(df)
+    frame["СуммаКВыплате"] = frame["СуммаПлатежа"]
+    return frame
 
 
-def write_synthetic_claims_excel(
-    path: str | Path,
-    *,
-    n_rows: int = 300,
-    seed: int = 42,
-) -> Path:
-    """Сгенерировать и сохранить синтетический xlsx."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df = build_synthetic_claims_excel(n_rows=n_rows, seed=seed)
-    df.to_excel(path, index=False, engine="openpyxl")
-    return path
-
-
-# Реэкспорт для тетрадок
 __all__ = [
-    "COLUMN_ALIASES",
+    "build_synthetic_claims_excel",
     "COURT_FEE_DEFAULT",
     "FU_FEE_DEFAULT",
-    "INCIDENT_COURT_COL",
-    "INCIDENT_FU_COL",
+    "GroupRetroPriors",
+    "HORIZONS",
     "MonitoringEffectResult",
-    "RESULT_OUT_OF_MODEL",
+    "PILOT_FILIALS",
     "RETRO_AS_OF_DEFAULT",
-    "RETRO_DATE_CANDIDATES",
-    "RetroPriors",
+    "RESULT_OUT_OF_MODEL",
+    "TerminalRetroPriors",
     "VITRINA_TABLE_DEFAULT",
-    "agreement_mask",
-    "analytics_base_mask",
-    "build_extended_monitoring_analytics",
-    "build_synthetic_claims_excel",
-    "compare_agreement_pretension_by_model",
-    "compute_retro_priors",
-    "court_mask",
-    "default_demo_priors",
-    "enrich_incident_path_flags",
+    "compute_terminal_priors",
     "estimate_monitoring_effect",
-    "extrapolate_to_year",
-    "filial_model_usage_stats",
-    "filial_path_shares_by_model",
     "filter_retro_lookback",
     "format_money",
-    "format_sensitivity_table",
-    "format_summary_dict",
-    "fu_mask",
-    "infer_model_start",
-    "intervention_mask",
-    "load_excel",
     "load_monitoring_frame",
-    "load_retro_priors",
-    "load_vitrina_mssql",
-    "model_called_not_used_stats",
-    "model_positive_mask",
-    "model_used_mask",
-    "payment_stats_by_model",
-    "pretension_mask",
-    "reconcile_cost_candidates_on_i",
-    "resolve_paid_column",
-    "resolve_retro_date_column",
-    "result_check_bucket",
-    "result_check_distribution",
-    "save_retro_priors",
-    "sensitivity_table",
-    "write_synthetic_claims_excel",
 ]

@@ -1,4 +1,4 @@
-"""HTML-отчёты мониторинга: вариант 1 (ручеёк vs контроль) и вариант 2 (кейсы)."""
+"""Единый подробный HTML-отчёт по ITT-оценке финансового эффекта."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,917 +8,204 @@ from typing import Any
 
 import pandas as pd
 
-from querulus.fin_effect.excel_monitoring import (
-    MonitoringEffectResult,
-    format_money,
-)
-from querulus.fin_effect.monitoring_analytics import VARIANT2_LABELS
+from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_money
 
+REPORT_FILENAME = "fin_effect_report.html"
+FORMULA_VERSION = "ITT-U-2026-09-09-v1"
 
 _CSS = """
 :root {
-  --bg: #f6f4ef; --surface: #fff; --ink: #1c1c1c; --muted: #5a5a5a;
-  --line: #ddd6c8; --accent: #0b5f66; --soft: #e7f3f4; --code: #f0ece4;
-  --example: #fff8e8; --example-line: #e6d7a8;
+  --bg:#f5f3ee; --surface:#fff; --ink:#1d2526; --muted:#5f696a;
+  --line:#d9d4c9; --accent:#075f66; --soft:#e7f3f4; --warn:#fff4da;
 }
-* { box-sizing: border-box; }
+* { box-sizing:border-box; }
 body {
-  margin: 0;
-  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  font-size: 15px;
-  line-height: 1.45;
-  color: var(--ink);
-  background: var(--bg);
+  margin:0; color:var(--ink); background:var(--bg);
+  font:15px/1.48 "Segoe UI", Arial, sans-serif;
 }
-.page { max-width: 1180px; margin: 0 auto; padding: 1.2rem 1.1rem 2rem; }
-h1 { margin: 0 0 0.3rem; font-size: 1.45rem; color: var(--accent); }
-h2 { margin: 1.35rem 0 0.4rem; font-size: 1.12rem; color: var(--accent); }
-h3 { margin: 0.85rem 0 0.3rem; font-size: 0.98rem; color: #2a4f53; }
-.sub { color: var(--muted); margin: 0 0 0.85rem; font-size: 0.92rem; }
+.page { max-width:1240px; margin:auto; padding:1.2rem 1rem 2.5rem; }
+h1 { color:var(--accent); margin:0 0 .25rem; font-size:1.55rem; }
+h2 { color:var(--accent); margin:1.4rem 0 .45rem; font-size:1.18rem; }
+h3 { color:#244f53; margin:1rem 0 .35rem; font-size:1rem; }
+p { margin:.35rem 0; }
+.sub,.muted { color:var(--muted); }
 .card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0.75rem 0.95rem;
-  margin: 0.45rem 0;
+  background:var(--surface); border:1px solid var(--line);
+  border-radius:9px; padding:.85rem 1rem; margin:.45rem 0;
 }
 .grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 0.45rem;
-  margin: 0.5rem 0 0.7rem;
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+  gap:.5rem; margin:.55rem 0;
 }
-.stat {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.5rem 0.6rem;
-}
-.stat span { display: block; color: var(--muted); font-size: 0.76rem; }
-.stat b { font-variant-numeric: tabular-nums; }
-table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  font-size: 0.82rem;
-  margin: 0.35rem 0 0.5rem;
-}
-.scroll { overflow-x: auto; margin: 0.35rem 0 0.5rem; }
-th, td {
-  border: 1px solid var(--line);
-  padding: 0.35rem 0.45rem;
-  text-align: left;
-  vertical-align: top;
-}
-th { background: var(--soft); color: var(--accent); }
-code {
-  font-family: Consolas, "Courier New", monospace;
-  font-size: 0.82rem;
-}
+.stat { background:#fbfbf9; border:1px solid var(--line); padding:.6rem; border-radius:7px; }
+.stat span { display:block; color:var(--muted); font-size:.78rem; }
+.stat b { font-size:1.05rem; font-variant-numeric:tabular-nums; }
 .formula {
-  background: linear-gradient(135deg, var(--soft), #f7fbfb);
-  border: 1px solid #c7dfe1;
-  border-left: 4px solid var(--accent);
-  border-radius: 0 8px 8px 0;
-  padding: 0.75rem 0.9rem;
-  margin: 0.55rem 0;
-  overflow-x: auto;
+  background:linear-gradient(135deg,var(--soft),#f7fbfb);
+  border:1px solid #c7dfe1; border-left:4px solid var(--accent);
+  border-radius:0 8px 8px 0; padding:.7rem .85rem; margin:.5rem 0;
+  overflow-x:auto;
 }
-.formula-title {
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  margin-bottom: 0.35rem;
-  text-transform: uppercase;
+.formula b { color:var(--accent); }
+.eq { font:1.02rem/1.65 Cambria, "Times New Roman", serif; white-space:nowrap; }
+.note { color:var(--muted); border-top:1px solid #d4e6e7; margin-top:.35rem; padding-top:.35rem; }
+.warning {
+  background:var(--warn); border:1px solid #e5c66e; border-left:4px solid #9b7100;
+  border-radius:0 8px 8px 0; padding:.65rem .8rem; margin:.4rem 0;
 }
-.equation {
-  color: #153f43;
-  font-family: Cambria, "Times New Roman", serif;
-  font-size: 1.05rem;
-  line-height: 1.65;
-  white-space: nowrap;
-}
-.equation strong { color: var(--accent); }
-.equation .op { padding: 0 0.2em; }
-.equation-note {
-  border-top: 1px solid #d4e6e7;
-  color: var(--muted);
-  font-size: 0.82rem;
-  margin-top: 0.45rem;
-  padding-top: 0.4rem;
-}
-.example {
-  background: var(--example);
-  border: 1px solid var(--example-line);
-  border-left: 4px solid #b08900;
-  border-radius: 0 8px 8px 0;
-  padding: 0.7rem 0.85rem;
-  margin: 0.45rem 0 0.7rem;
-}
-.example-title {
-  color: #7a5c00;
-  font-size: 0.76rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  margin-bottom: 0.3rem;
-  text-transform: uppercase;
-}
-.filters {
-  display: grid;
-  gap: 0.35rem;
-}
-.filter-row {
-  display: grid;
-  gap: 0.55rem;
-  grid-template-columns: minmax(120px, auto) 1fr;
-  align-items: baseline;
-}
-.filter-row b { color: var(--accent); font-family: Consolas, monospace; }
-.legend {
-  background: #faf9f6;
-  border: 1px dashed var(--line);
-  border-radius: 6px;
-  padding: 0.55rem 0.7rem;
-  margin: 0.35rem 0 0.55rem;
-  font-size: 0.86rem;
-}
-.legend ul { margin: 0.2rem 0 0 1.1rem; padding: 0; }
-.legend li { margin: 0.12rem 0; }
-.muted { color: var(--muted); font-size: 0.9rem; }
-.calc-pair {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.75rem;
-  margin: 0.55rem 0 0.7rem;
-}
-.calc-panel {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0.7rem 0.8rem;
-}
-.calc-panel.model { border-top: 4px solid var(--accent); }
-.calc-panel.control { border-top: 4px solid #6b5b4b; }
-.calc-panel h3 { margin: 0 0 0.25rem; }
-.calc-panel .panel-sub {
-  color: var(--muted);
-  font-size: 0.82rem;
-  margin: 0 0 0.55rem;
-}
-.calc-panel .equation { white-space: normal; font-size: 0.98rem; }
-.compare-box {
-  background: linear-gradient(135deg, #eef6f0, #f7fbf8);
-  border: 1px solid #c5dcc9;
-  border-left: 4px solid #2f6b3a;
-  border-radius: 0 8px 8px 0;
-  padding: 0.7rem 0.85rem;
-  margin: 0.35rem 0 0.55rem;
-}
-@media (max-width: 820px) {
-  .calc-pair { grid-template-columns: 1fr; }
-}
-@media (max-width: 620px) {
-  .filter-row { grid-template-columns: 1fr; gap: 0; }
-  .equation { font-size: 0.95rem; white-space: normal; }
-}
+.scroll { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:.82rem; background:#fff; }
+th,td { border:1px solid var(--line); padding:.35rem .45rem; text-align:left; vertical-align:top; }
+th { background:var(--soft); color:var(--accent); position:sticky; top:0; }
+code { background:#efede7; padding:.05rem .2rem; border-radius:3px; font-family:Consolas,monospace; }
+ul,ol { margin:.3rem 0 .3rem 1.25rem; padding:0; }
+li { margin:.18rem 0; }
+.good { color:#20612d; } .bad { color:#8a2d21; }
+@media (max-width:650px) { .eq { white-space:normal; } }
 """
 
 
-def _pct(x: float) -> str:
-    return f"{100.0 * float(x):.2f}%"
-
-
-def _money(x: float) -> str:
-    return format_money(float(x))
-
-
-def _df_to_html_table(df: pd.DataFrame) -> str:
-    if df is None or getattr(df, "empty", True):
+def _table(frame: pd.DataFrame | None) -> str:
+    if frame is None or frame.empty:
         return "<p class='muted'>(нет данных)</p>"
-    try:
-        return f'<div class="scroll">{df.to_html(index=False, border=0, escape=True)}</div>'
-    except Exception:
-        return f"<pre>{escape(str(df))}</pre>"
-
-
-def _block_filters(title: str, rows: list[tuple[str, str]]) -> str:
-    body = "".join(
-        f'<div class="filter-row"><b>{escape(k)}</b><span>{v}</span></div>'
-        for k, v in rows
-    )
-    return f"""
-    <div class="formula">
-      <div class="formula-title">{escape(title)}</div>
-      <div class="filters">{body}</div>
-    </div>
-    """
-
-
-def _block_formula(title: str, equations: list[str], note: str = "") -> str:
-    eqs = "".join(f'<div class="equation">{eq}</div>' for eq in equations)
-    note_html = f'<div class="equation-note">{note}</div>' if note else ""
-    return f"""
-    <div class="formula">
-      <div class="formula-title">{escape(title)}</div>
-      {eqs}
-      {note_html}
-    </div>
-    """
-
-
-def _block_example(title: str, text: str) -> str:
-    return f"""
-    <div class="example">
-      <div class="example-title">{escape(title)}</div>
-      <div>{text}</div>
-    </div>
-    """
-
-
-def _block_legend(rows: str, cols: str) -> str:
-    return f"""
-    <div class="legend">
-      <b>Легенда строк</b>
-      <ul>{rows}</ul>
-      <b>Легенда колонок</b>
-      <ul>{cols}</ul>
-    </div>
-    """
-
-
-def _table_section(
-    heading: str,
-    filters_html: str,
-    formula_html: str,
-    example_html: str,
-    legend_html: str,
-    table: Any,
-) -> str:
-    return f"""
-  <h2>{escape(heading)}</h2>
-  <div class="card">
-    {filters_html}
-    {formula_html}
-    {example_html}
-    {legend_html}
-    {_df_to_html_table(table) if table is not None else ""}
-  </div>
-"""
-
-
-def _fin_example(effect: MonitoringEffectResult) -> str:
-    p = effect.priors
-    n = effect.n_intervention
-    fees_total = n * effect.e_fee
-    od_term = effect.sum_od * p.k
-    raw = od_term + fees_total
+    shown = frame.copy()
+    numeric = shown.select_dtypes(include="number").columns
+    shown[numeric] = shown[numeric].round(4)
     return (
-        f"сегмент 111: n={n}; "
-        f"e<sub>fee</sub>={_money(effect.e_fee)} "
-        f"(= {_pct(p.p_fu)}×{_money(p.fu_fee)} + {_pct(p.p_court)}×{_money(p.court_fee)}); "
-        f"Σ OD×k = {_money(od_term)}; Σ e<sub>fee</sub> = {_money(fees_total)}; "
-        f"expected_psr = {p.precision:.2f}×{_money(raw)} = {_money(effect.expected_psr)}; "
-        f"cost = {_money(effect.cost)}; "
-        f"net = {_money(effect.net)}"
-    )
-
-
-def _group_fin_calc_panel(
-    *,
-    title: str,
-    css_class: str,
-    scope: str,
-    stats: dict[str, Any],
-    effect: MonitoringEffectResult,
-) -> str:
-    """Отдельная карточка расчёта value(G) с цифрами прогона."""
-    p = effect.priors
-    n = int(stats.get("n", 0) or 0)
-    n_agr = int(stats.get("n_agreement", 0) or 0)
-    n_open = int(stats.get("n_open", 0) or 0)
-    sum_od_agr = float(stats.get("sum_od_agreement", 0) or 0)
-    sum_od_open = float(stats.get("sum_od_open", 0) or 0)
-    od_k_agr = sum_od_agr * p.k
-    od_k_open = sum_od_open * p.k
-    fees_agr = n_agr * effect.e_fee
-    fees_open = n_open * effect.e_fee
-    avoided = float(stats.get("avoided", 0) or 0)
-    open_psr = float(stats.get("open_psr", 0) or 0)
-    cost = float(stats.get("cost", 0) or 0)
-    value = float(stats.get("value", 0) or 0)
-    value_pc = float(stats.get("value_per_case", 0) or 0)
-    return f"""
-    <div class="calc-panel {css_class}">
-      <h3>{escape(title)}</h3>
-      <p class="panel-sub">{escape(scope)}</p>
-      <div class="equation">n = {n}; n<sub>agr</sub> = {n_agr}; n<sub>open</sub> = {n_open}</div>
-      <div class="equation">
-        Σ<sub>agr</sub> OD×k = {_money(od_k_agr)};
-        n<sub>agr</sub>×e<sub>fee</sub> = {_money(fees_agr)}
-      </div>
-      <div class="equation">
-        <strong>avoided</strong> <span class="op">=</span>
-        {p.precision:.2f} × {_money(od_k_agr + fees_agr)}
-        <span class="op">=</span> {_money(avoided)}
-      </div>
-      <div class="equation">
-        Σ<sub>open</sub> OD×k = {_money(od_k_open)};
-        n<sub>open</sub>×e<sub>fee</sub> = {_money(fees_open)}
-      </div>
-      <div class="equation">
-        <strong>open_psr</strong> <span class="op">=</span>
-        {_pct(float(p.psr_share))} × {_money(od_k_open + fees_open)}
-        <span class="op">=</span> {_money(open_psr)}
-      </div>
-      <div class="equation">
-        <strong>cost</strong> <span class="op">=</span> {_money(cost)}
-        <span class="muted">({escape(effect.cost_column)})</span>
-      </div>
-      <div class="equation">
-        <strong>value</strong> <span class="op">=</span>
-        {_money(avoided)} <span class="op">−</span> {_money(cost)}
-        <span class="op">−</span> {_money(open_psr)}
-        <span class="op">=</span> {_money(value)}
-      </div>
-      <div class="equation">
-        value / case <span class="op">=</span> {_money(value_pc)}
-      </div>
-    </div>
-"""
-
-
-def _variant1_fin_numbers(effect: MonitoringEffectResult) -> str:
-    """Общие константы + два отдельных расчёта model/control + сравнение."""
-    p = effect.priors
-    d = effect.details or {}
-    m = d.get("model") or {}
-    c = d.get("control") or {}
-    shared = _block_example(
-        "Общие параметры этого прогона",
-        (
-            f"precision={p.precision:.2f}; k={p.k:.4f}; "
-            f"psr_share={_pct(float(d.get('psr_share', p.psr_share)))}; "
-            f"e<sub>fee</sub>={_money(effect.e_fee)} "
-            f"(= {_pct(p.p_fu)}×{_money(p.fu_fee)} + {_pct(p.p_court)}×{_money(p.court_fee)}); "
-            f"OD = <code>{escape(effect.od_column)}</code>"
-        ),
-    )
-    panels = (
-        '<div class="calc-pair">'
-        + _group_fin_calc_panel(
-            title="Расчёт model",
-            css_class="model",
-            scope="РезультатПроверки ∈ {0, 1}",
-            stats=m,
-            effect=effect,
-        )
-        + _group_fin_calc_panel(
-            title="Расчёт control",
-            css_class="control",
-            scope="РезультатПроверки = −100",
-            stats=c,
-            effect=effect,
-        )
+        '<div class="scroll">'
+        + shown.to_html(index=False, border=0, escape=True)
         + "</div>"
     )
-    compare = f"""
-    <div class="compare-box">
-      <div class="formula-title">Сравнение групп</div>
-      <div class="equation">
-        <strong>net</strong> <span class="op">=</span>
-        value(model) <span class="op">−</span> value(control)
-        <span class="op">=</span> {_money(float(d.get('model_value', 0)))}
-        <span class="op">−</span> {_money(float(d.get('control_value', 0)))}
-        <span class="op">=</span> {_money(effect.net)}
-      </div>
-      <div class="equation">
-        <strong>net / case</strong> <span class="op">=</span>
-        {_money(float(d.get('model_value_per_case', 0)))}
-        <span class="op">−</span> {_money(float(d.get('control_value_per_case', 0)))}
-        <span class="op">=</span> {_money(float(d.get('net_per_case', 0)))}
-      </div>
-    </div>
+
+
+def _formula(title: str, equations: list[str], note: str = "") -> str:
+    body = "".join(f'<div class="eq">{equation}</div>' for equation in equations)
+    note_html = f'<div class="note">{note}</div>' if note else ""
+    return f'<div class="formula"><b>{title}</b>{body}{note_html}</div>'
+
+
+def _warnings(items: list[str]) -> str:
+    if not items:
+        return "<p class='good'>Расчёт завершён без методологических предупреждений.</p>"
+    return "".join(
+        f"<div class='warning'>{escape(item)}</div>" for item in items
+    )
+
+
+def _contract_table(result: MonitoringEffectResult) -> pd.DataFrame:
+    meaning = {
+        "loss": "Единица анализа; строки не схлопываются и не dedupe",
+        "incident": "Кластер bootstrap; не единица итогового ITT",
+        "result": "model={0,1}; control=−100",
+        "filial": "Страта рандомизации и ITT-взвешивания",
+        "payment": "paid_to_date; единственный источник фактических расходов",
+        "to_pay_diagnostic_only": "Только сверка качества; в Y не прибавляется",
+        "od": "OD для k_U×OD; при пропуске используется m_U",
+        "recommended_extra": "Доплата в сценарии 100% compliance",
+        "payout_by_model": "Признак исполнения рекомендации",
+        "agreement": "При соглашении остаток ПСР равен 7%",
+        "t0_primary": "Основная дата старта возраста убытка",
+        "t0_fallback": "Fallback для t0",
+        "psr_pretension": "Наблюдаемый ПСР; только вычитается из хвоста",
+        "psr_fu": "Наблюдаемый ПСР; только вычитается из хвоста",
+        "psr_court": "Наблюдаемый ПСР; только вычитается из хвоста",
+    }
+    return pd.DataFrame(
+        [
+            {
+                "entity": key,
+                "source_column": value,
+                "meaning": meaning.get(key, ""),
+            }
+            for key, value in result.contract.items()
+        ]
+    )
+
+
+def _headline(result: MonitoringEffectResult) -> str:
+    effects = result.effect_summary.set_index("horizon")
+    annual = result.annual_summary.set_index("horizon")
+    cells = []
+    for horizon in ("fact", "365", "1095"):
+        effect = float(effects.loc[horizon, "effect_per_case"])
+        low = float(effects.loc[horizon, "ci_low"])
+        high = float(effects.loc[horizon, "ci_high"])
+        cells.append(
+            "<div class='stat'>"
+            f"<span>ITT эффект / убыток, Y{escape(horizon)}</span>"
+            f"<b>{format_money(effect)}</b>"
+            f"<small>95% CI: {format_money(low)} … {format_money(high)}</small>"
+            "</div>"
+        )
+    cells.append(
+        "<div class='stat'>"
+        "<span>Годовой эффект сети, full rollout, Y1095</span>"
+        f"<b>{format_money(float(annual.loc['1095', 'annual_network_full']))}</b>"
+        "</div>"
+    )
+    return '<div class="grid">' + "".join(cells) + "</div>"
+
+
+def _plan_section() -> str:
+    return """
+<h2>2. План, по которому реализован расчёт</h2>
+<div class="card">
+  <h3>Зафиксированные решения</h3>
+  <ul>
+    <li>Единица расчёта — строка убытка; incident-collapse и dedupe запрещены.</li>
+    <li>ITT-популяция — только result∈{0,1,−100}; соглашение и compliance
+    не являются фильтрами.</li>
+    <li>Фактический outcome состоит только из <code>СуммаПлатежа</code>;
+    OD — <code>СуммаОсновногоДолгаЗаявлено</code>; остаток после соглашения — 7%.</li>
+    <li>Один terminal-набор priors применяется к 365/1095; сеть переносится
+    по фактическому объёму и риску, без множителя 84/10.</li>
+  </ul>
+  <h3>Этапы build</h3>
+  <ol>
+    <li>Зафиксировать единицу анализа «убыток», ITT-группы model/control,
+    денежные колонки и запрет dedupe.</li>
+    <li>На финальном incident-level ретро-датасете рассчитать терминальные
+    коэффициенты <code>p_U</code>, <code>k_U</code>, <code>m_U</code>,
+    <code>e_U</code> отдельно для pilot/nonpilot.</li>
+    <li>Построить <code>Yfact</code>, <code>Y365</code>, <code>Y1095</code>:
+    фактическая выплата плюс дисконтированный непрореализованный хвост ПСР.</li>
+    <li>Оценить ITT как стратифицированную по филиалу разность
+    <code>mean(control) − mean(model)</code> и двухчастный bootstrap CI.</li>
+    <li>Показать non-compliance отдельно: описательное as-complied сравнение
+    и механический сценарий 100% исполнения рекомендаций.</li>
+    <li>Годовой поток восстановить через сезонные доли ретро, затем отдельно
+    показать pilot current share, pilot full rollout и full network.</li>
+    <li>Собрать расчёт, формулы, легенду, допущения, качество данных и
+    ограничения в одном HTML; notebook остаётся только генератором.</li>
+  </ol>
+  <h3>Критерии готовности</h3>
+  <ul>
+    <li>Yfact основан только на кассе; observed ПСР не прибавляется повторно.</li>
+    <li>ITT включает non-compliance; compliance A/B показаны отдельно.</li>
+    <li>NPV приведён к t_calc; сезонность масштабирует поток новых убытков,
+    а не горизонт дозревания.</li>
+    <li>Один HTML содержит цифры, формулы, легенды, предупреждения,
+    ограничения и шпаргалку; одна notebook только формирует его.</li>
+  </ul>
+  <p class="muted">Полные формулы и легенды этапов находятся непосредственно
+  в разделах 4–9 этого самодостаточного отчёта.</p>
+</div>
 """
-    return shared + panels + compare
-
-
-def _share_example(segments: Any) -> str:
-    if not isinstance(segments, pd.DataFrame) or segments.empty:
-        return "нет данных по сегментам"
-    parts = []
-    for _, row in segments.iterrows():
-        seg = str(row.get("segment", ""))
-        if seg.startswith("lift_"):
-            continue
-        n = row.get("n", "—")
-        parts.append(
-            f"<code>{escape(seg)}</code>: n={n}, "
-            f"agreement={row.get('agreement_share', '—')}%, "
-            f"pretension={row.get('pretension_share', '—')}%, "
-            f"fu={row.get('fu_incident_share', '—')}%, "
-            f"court={row.get('court_incident_share', '—')}%"
-        )
-    return "<br/>".join(parts) if parts else "нет данных"
-
-
-def _base_glossary() -> str:
-    return _block_filters(
-        "Термины",
-        [
-            ("Bpilot", "пилот OISUU без Архангельского и Марийского (~50% ручеёк / ~50% контроль)"),
-            ("Bam", "только Архангельский и Марийский (~100% модель)"),
-            ("ручеёк / model", "<code>РезультатПроверки ∈ {0, 1}</code> — модель работала"),
-            ("контроль / control", "<code>РезультатПроверки = −100</code> — модель не работала"),
-            ("ВызовМодельСутяжность", "неинформативен для сегментации; не используем как критерий «модель работала»"),
-        ],
-    )
-
-
-def _base_filters_block() -> str:
-    return _block_filters(
-        "Базовые фильтры (для всех слоёв, если не сказано иное)",
-        [
-            ("форма", "ФормаВозмещения ∈ {денежная, ремонт, соглашение}"),
-            ("статус", "УбытокСтатус = первичный"),
-            ("объект", "ТипОбъектаАвтотранспорт = 1"),
-            ("филиал", "задаётся слоем: Bpilot или Bam"),
-        ],
-    )
-
-
-def _filters_overview_table(
-    variant: int,
-    effect: MonitoringEffectResult,
-) -> str:
-    """Сводная карта фильтров и показателей по слоям отчёта."""
-    if variant == 1:
-        fin_effect_filter = (
-            "model: result∈{0,1}; control: result=−100; "
-            "внутри: agreement=1 → избежанный ПСР−cost; "
-            "agreement=0 → psr_share×(OD×k+e_fee); "
-            "net = value(model) − value(control)"
-        )
-        comparison_filter = "model: result∈{0,1}; control: result=−100"
-        segment_filter = "model / control"
-        fin_metrics = (
-            "value(model); value(control); net; net/case; "
-            "avoided / open_psr / cost по группам; экстраполяция net на 365 дней"
-        )
-    else:
-        fin_effect_filter = (
-            "сегмент 111: РезультатПроверки=1 ∧ выплата по модели=1 ∧ соглашение=1"
-        )
-        comparison_filter = (
-            "4 кейса: applied_one_paid, ignored_zero_paid, "
-            "out_of_model_paid, recommended_unpaid"
-        )
-        segment_filter = "четыре кейса call/result/payout"
-        fin_metrics = (
-            f"n_111; expected_psr; cost ({effect.cost_column}); net; "
-            "экстраполяция на 365 дней"
-        )
-
-    rows = [
-        {
-            "Слой расчёта": "Финэффект",
-            "Контур": "Bpilot",
-            "Базовые фильтры": "форма; первичный убыток; автотранспорт=1",
-            "Фильтр сегмента": fin_effect_filter,
-            "Показатели": fin_metrics,
-        },
-        {
-            "Слой расчёта": "Соглашения / претензии / ФУ / суд",
-            "Контур": "Bpilot",
-            "Базовые фильтры": "форма; первичный убыток; автотранспорт=1",
-            "Фильтр сегмента": comparison_filter,
-            "Показатели": (
-                "agreement_share; pretension_share; "
-                "fu_incident_share; court_incident_share; lift_pp; lift_rel"
-            ),
-        },
-        {
-            "Слой расчёта": "Использование модели по филиалам",
-            "Контур": "все филиалы",
-            "Базовые фильтры": "форма; первичный убыток; автотранспорт=1",
-            "Фильтр сегмента": "result=0 / result=1 / result=−100",
-            "Показатели": (
-                "число и доля ручейка; число и доля контроля; "
-                "доли result 0/1/−100"
-            ),
-        },
-        {
-            "Слой расчёта": "Доли путей по филиалам",
-            "Контур": "Bpilot, отдельно каждый филиал",
-            "Базовые фильтры": "форма; первичный убыток; автотранспорт=1",
-            "Фильтр сегмента": segment_filter,
-            "Показатели": (
-                "agreement_share; pretension_share; "
-                "fu_incident_share; court_incident_share"
-            ),
-        },
-        {
-            "Слой расчёта": "Распределение убытков и выплаты",
-            "Контур": "Bpilot",
-            "Базовые фильтры": "форма; первичный убыток; автотранспорт=1",
-            "Фильтр сегмента": "result=0 / result=1 / result∈{0,1} / result=−100",
-            "Показатели": (
-                "n; share_of_base; sum; mean; median; p25; p75; min; max"
-            ),
-        },
-        {
-            "Слой расчёта": "Выплаты по сегментам",
-            "Контур": "Bpilot",
-            "Базовые фильтры": "форма; первичный убыток; автотранспорт=1",
-            "Фильтр сегмента": segment_filter,
-            "Показатели": "n; n_amount; sum; mean; median; p25; p75; min; max",
-        },
-        {
-            "Слой расчёта": "Диагностика применения модели",
-            "Контур": "Bpilot",
-            "Базовые фильтры": "форма; первичный убыток; автотранспорт=1",
-            "Фильтр сегмента": "4 кейса call/result/payout",
-            "Показатели": "число каждого кейса всего и по филиалам",
-        },
-        {
-            "Слой расчёта": "Архангельский / Марийский",
-            "Контур": "Bam",
-            "Базовые фильтры": "форма; первичный убыток; автотранспорт=1",
-            "Фильтр сегмента": segment_filter,
-            "Показатели": (
-                "те же доли, выплаты и кейсы; контроль ожидается почти пустым"
-            ),
-        },
-    ]
-    return _df_to_html_table(pd.DataFrame(rows))
 
 
 def build_monitoring_html(
-    effect: MonitoringEffectResult,
+    result: MonitoringEffectResult,
     *,
-    variant: int = 1,
-    annual: dict[str, Any] | None = None,
-    analytics: dict[str, Any] | None = None,
     source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
-    title: str | None = None,
+    title: str = "Querulus — единая методика финансового эффекта",
 ) -> str:
-    """Собрать HTML для варианта 1 или 2."""
-    analytics = analytics or {}
-    p = effect.priors
+    """Собрать самодостаточный HTML со всеми расчётами и допущениями."""
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
-    window = (
-        f"{p.window_start or '?'} … {p.window_end or '?'}"
-        if p.window_start or p.window_end
-        else "окно не задано"
+    pilot = result.priors.pilot
+    retro_window = (
+        f"{result.priors.window_start or '?'} … {result.priors.window_end or '?'}"
     )
-    if title is None:
-        title = (
-            "Querulus — вариант 1: ручеёк vs контроль"
-            if variant == 1
-            else "Querulus — вариант 2: сегмент 111 (result×payout×agreement)"
-        )
-
-    annual_line = ""
-    if annual:
-        annual_line = (
-            f"<p class='muted'>Экстраполяция: "
-            f"net/день={escape(str(annual.get('net_per_day', '—')))}, "
-            f"net_365={escape(str(annual.get('net_annual_365', '—')))}, "
-            f"sample_days={escape(str(annual.get('sample_days', '—')))}."
-            f"</p>"
-        )
-
-    if variant == 1:
-        fin_filters = _block_filters(
-            "Фильтры слоя финэффекта (Bpilot)",
-            [
-                ("база", "базовые фильтры + филиал ∉ {Архангельский, Марийский}"),
-                ("model", "РезультатПроверки ∈ {0, 1} — все сегменты *×*×* с 0/1"),
-                ("control", "РезультатПроверки = −100 — та же логика, отдельная группа"),
-                ("agreement=1", "избежанный ПСР (стандарт) − cost доплат/выплат"),
-                ("agreement=0", "ожидаемый открытый ПСР ≈ psr_share × (OD×k + e_fee)"),
-            ],
-        )
-        share_filters = _block_filters(
-            "Фильтры слоя долей путей (Bpilot)",
-            [
-                ("база", "базовые фильтры + Bpilot"),
-                ("model", "РезультатПроверки ∈ {0, 1}"),
-                ("control", "РезультатПроверки = −100"),
-                ("события", "agreement / pretension / FU_incident / court_incident"),
-            ],
-        )
-        fin_formula = _block_formula(
-            "Общие формулы (одинаковые для model и control)",
-            [
-                "<strong>e<sub>fee</sub></strong> <span class='op'>=</span> "
-                "p<sub>fu</sub> × 100 000 <span class='op'>+</span> p<sub>court</sub> × 15 000",
-                "<strong>avoided(G)</strong> <span class='op'>=</span> "
-                "precision × (Σ<sub>agreement=1∩G</sub> OD × k <span class='op'>+</span> "
-                "n<sub>agr</sub> × e<sub>fee</sub>)",
-                "<strong>open_psr(G)</strong> <span class='op'>=</span> "
-                "psr_share × (Σ<sub>agreement=0∩G</sub> OD × k <span class='op'>+</span> "
-                "n<sub>open</sub> × e<sub>fee</sub>)",
-                f"<strong>cost(G)</strong> <span class='op'>=</span> "
-                f"Σ<sub>agreement=1∩G</sub> {escape(effect.cost_column)}",
-                "<strong>value(G)</strong> <span class='op'>=</span> "
-                "avoided(G) <span class='op'>−</span> cost(G) <span class='op'>−</span> open_psr(G)",
-                "<strong>net</strong> <span class='op'>=</span> "
-                "value(model) <span class='op'>−</span> value(control)",
-            ],
-            note="G ∈ {model, control}. Сначала считаем value отдельно для каждой группы, "
-            "потом сравниваем. psr_share — доля ПСР в ретро; к OD×k добавлен e_fee. "
-            f"OD = <code>{escape(effect.od_column)}</code>.",
-        )
-        share_formula = _block_formula(
-            "Формулы долей путей",
-            [
-                "<strong>share<sub>event</sub>(S)</strong> <span class='op'>=</span> "
-                "100% × n(event=1 ∩ S) / n(S)",
-                "<strong>lift<sub>pp</sub></strong> <span class='op'>=</span> "
-                "share(model) <span class='op'>−</span> share(control)  (п.п.)",
-                "<strong>lift<sub>rel</sub></strong> <span class='op'>=</span> "
-                "share(model)/share(control) <span class='op'>−</span> 1  (%)",
-            ],
-            note="S ∈ {model, control}. Доли показывают, как часто после выплаты "
-            "возникают соглашение / претензия / ФУ / суд.",
-        )
-    else:
-        fin_filters = _block_filters(
-            "Фильтры слоя финэффекта (Bpilot, вариант 2)",
-            [
-                ("база", "базовые фильтры + Bpilot"),
-                ("сегмент 111", "РезультатПроверки=1 ∧ выплата по модели=1 ∧ соглашение=1"),
-                ("остальное", "в финэффект не входит; только аналитика долей/кейсов"),
-            ],
-        )
-        share_filters = _block_filters(
-            "Фильтры слоя долей (Bpilot, вариант 2)",
-            [
-                ("база", "базовые фильтры + Bpilot"),
-                ("applied_one_paid", "вызов=1, result=1, выплата=1 — модель работала"),
-                ("ignored_zero_paid", "вызов=1, result=0, выплата=1 — результат проигнорирован"),
-                ("out_of_model_paid", "вызов=1, result=−100, выплата=1 — вне модели"),
-                ("recommended_unpaid", "вызов=1, result=1, выплата=0 — рекомендация без доплаты"),
-            ],
-        )
-        fin_formula = _block_formula(
-            "Формулы финэффекта",
-            [
-                "<strong>e<sub>fee</sub></strong> <span class='op'>=</span> "
-                "p<sub>fu</sub> × 100 000 <span class='op'>+</span> p<sub>court</sub> × 15 000",
-                "<strong>expected_psr</strong> <span class='op'>=</span> "
-                "precision × (Σ<sub>i∈111</sub> OD<sub>i</sub> × k <span class='op'>+</span> "
-                "n<sub>111</sub> × e<sub>fee</sub>)",
-                "<strong>cost</strong> <span class='op'>=</span> "
-                f"Σ<sub>i∈111</sub> {escape(effect.cost_column)}<sub>i</sub>",
-                "<strong>net</strong> <span class='op'>=</span> expected_psr <span class='op'>−</span> cost",
-            ],
-            note="Только сегмент 111. OD = "
-            f"<code>{escape(effect.od_column)}</code>.",
-        )
-        case_lines = "".join(
-            f"<div class='equation'><strong>{escape(k)}</strong> "
-            f"<span class='op'>—</span> {escape(v)}</div>"
-            for k, v in VARIANT2_LABELS.items()
-        )
-        share_formula = f"""
-        <div class="formula">
-          <div class="formula-title">Кейсы и доли</div>
-          {case_lines}
-          <div class="equation"><strong>share<sub>event</sub>(S)</strong>
-          <span class="op">=</span> 100% × n(event=1 ∩ S) / n(S)</div>
-          <div class="equation-note">model_worked = applied_one_paid;
-          model_not_worked = остальные три кейса.</div>
-        </div>
-        """
-
-    if variant == 1:
-        numbers_html = _variant1_fin_numbers(effect)
-        fin_section = f"""
-  <h2>2. Финэффект</h2>
-  <div class="card">
-    {fin_filters}
-    {fin_formula}
-    {numbers_html}
-    {annual_line}
-  </div>
-"""
-    else:
-        stats_html = f"""
-    <div class="grid">
-      <div class="stat"><span>n_111</span><b>{effect.n_intervention}</b></div>
-      <div class="stat"><span>expected_psr</span><b>{_money(effect.expected_psr)}</b></div>
-      <div class="stat"><span>cost</span><b>{_money(effect.cost)}</b></div>
-      <div class="stat"><span>net</span><b>{_money(effect.net)}</b></div>
-    </div>
-"""
-        fin_section = f"""
-  <h2>2. Финэффект</h2>
-  <div class="card">
-    {fin_filters}
-    {fin_formula}
-    {_block_example("Численный пример этого прогона", _fin_example(effect))}
-    {stats_html}
-    {annual_line}
-  </div>
-"""
-
-    seg = analytics.get("segments_bpilot")
-    share_section = _table_section(
-        "3. Доли соглашений / претензий / ФУ / суда (Bpilot)",
-        share_filters,
-        share_formula,
-        _block_example("Численный пример сегментов", _share_example(seg)),
-        _block_legend(
-            "<li><code>model</code> / <code>control</code> или кейсы варианта 2</li>"
-            "<li><code>lift_pp</code> — разница долей в процентных пунктах</li>"
-            "<li><code>lift_rel</code> — относительный рост доли, %</li>",
-            "<li><code>n</code> — число строк сегмента</li>"
-            "<li><code>*_share</code> — доля события в сегменте, %</li>",
-        ),
-        seg,
-    )
-
-    usage = analytics.get("filial_usage_all")
-    usage_section = _table_section(
-        "4. Филиалы: ручеёк / контроль",
-        _block_filters(
-            "Фильтры",
-            [
-                ("база", "базовые фильтры"),
-                ("филиал", "все, включая Bam"),
-                ("сегментация", "только по РезультатПроверки"),
-            ],
-        ),
-        _block_formula(
-            "Доли",
-            [
-                "<strong>model_rucheek_share</strong> = 100% × n(result∈{0,1}) / n",
-                "<strong>control_share</strong> = 100% × n(result=−100) / n",
-                "<strong>applied_share</strong> = 100% × n(result=1 ∧ выплата=1) / n",
-            ],
-        ),
-        _block_example(
-            "Как читать",
-            "Высокий <code>model_rucheek_share</code> ≈ попадание в 50% ручеёк; "
-            "в Bam ожидаем ~100%.",
-        ),
-        _block_legend(
-            "<li>строка = филиал</li>",
-            "<li><code>share_result_0/1</code> — доли решений модели, %</li>"
-            "<li><code>share_out_of_model</code> — доля −100, %</li>",
-        ),
-        usage,
-    )
-
-    filial_shares = analytics.get("filial_shares_bpilot")
-    filial_share_section = _table_section(
-        "5. Филиалы Bpilot: доли путей",
-        _block_filters(
-            "Фильтры",
-            [
-                ("база", "базовые фильтры + Bpilot"),
-                ("сегменты", "как в разделе 3, но по каждому филиалу"),
-            ],
-        ),
-        _block_formula(
-            "Смысл",
-            [
-                "Сравниваем частоты agreement / pretension / FU / court "
-                "внутри model vs control (или кейсов) <em>по филиалу</em>.",
-            ],
-        ),
-        _block_example("Чтение", "Смотрите пары строк одного филиала с разными segment."),
-        _block_legend(
-            "<li><code>filial</code> + <code>segment</code></li>",
-            "<li><code>*_share</code> в %</li>",
-        ),
-        filial_shares,
-    )
-
-    dist = analytics.get("result_distribution_bpilot")
-    dist_section = _table_section(
-        "6. Распределение РезультатПроверки + выплаты (Bpilot)",
-        _block_filters(
-            "Фильтры",
-            [("база", "базовые фильтры + Bpilot")],
-        ),
-        _block_formula(
-            "Корзины",
-            [
-                "<strong>model_0 / model_1</strong> — решения модели",
-                "<strong>model_rucheek</strong> — 0 ∪ 1",
-                "<strong>control</strong> — −100",
-                "<strong>other / missing</strong> — прочие / пустые значения",
-            ],
-        ),
-        _block_example(
-            "Чтение",
-            "<code>share_of_base</code> — доля корзины от Bpilot; "
-            "money-колонки — по выбранной amount_col.",
-        ),
-        _block_legend(
-            "<li><code>other</code> — число ≠ {−100,0,1}</li>"
-            "<li><code>missing</code> — пусто / не число</li>",
-            "<li><code>n</code> — строк</li>"
-            "<li><code>share_of_base</code> — % от базы</li>"
-            "<li><code>n_amount</code> — непустых денежных значений</li>"
-            "<li><code>sum/mean/median/…</code> — статистики выплаты</li>",
-        ),
-        dist,
-    )
-
-    pay = analytics.get("payments_bpilot")
-    pay_section = _table_section(
-        "7. Выплаты по сегментам (Bpilot)",
-        _block_filters(
-            "Фильтры",
-            [
-                ("база", "базовые фильтры + Bpilot"),
-                ("сегменты", "вариант 1: model/control; вариант 2: 4 кейса"),
-            ],
-        ),
-        _block_formula(
-            "Метрики",
-            ["sum, mean, median, p25, p75, min, max по amount_col сегмента"],
-        ),
-        _block_example("Чтение", "Сравнивайте типичный размер выплаты model vs control."),
-        _block_legend(
-            "<li>строка = сегмент</li>",
-            "<li><code>n</code> — строк сегмента</li>"
-            "<li><code>n_amount</code> — непустых сумм</li>",
-        ),
-        pay,
-    )
-
-    cases = analytics.get("cases_bpilot")
-    cases_section = _table_section(
-        "8. Диагностика кейсов call/result/payout (Bpilot)",
-        _block_filters(
-            "Фильтры",
-            [("база", "базовые фильтры + Bpilot")],
-        ),
-        _block_formula(
-            "Счётчики",
-            [
-                "n_applied_one_paid / n_ignored_zero_paid / "
-                "n_out_of_model_paid / n_recommended_unpaid"
-            ],
-        ),
-        _block_example(
-            "Зачем",
-            "Показывает, насколько часто рекомендация модели игнорируется "
-            "или выплата возникает вне ручейка.",
-        ),
-        _block_legend(
-            "<li><code>total</code> и строки по филиалам</li>",
-            "<li>колонки — счётчики четырёх кейсов</li>",
-        ),
-        cases,
-    )
-
-    bam_seg = analytics.get("segments_bam")
-    bam_section = _table_section(
-        "9. Контур Bam (Архангельский / Марийский)",
-        _block_filters(
-            "Фильтры Bam",
-            [
-                ("база", "базовые фильтры + филиал ∈ {Архангельский, Марийский}"),
-                ("ожидание", "~100% РезультатПроверки ∈ {0,1}, контроль почти пуст"),
-            ],
-        ),
-        _block_formula(
-            "Аналитика",
-            ["Те же доли / кейсы, что и для Bpilot, но на Bam."],
-        ),
-        _block_example("Чтение", _share_example(bam_seg)),
-        _block_legend(
-            "<li>сегменты как в разделе 3</li>",
-            "<li>доли в %</li>",
-        ),
-        bam_seg,
-    )
-
-    extra_bam = ""
-    for key, title_ in (
-        ("filial_usage_bam", "9.1 Bam: usage по филиалам"),
-        ("filial_shares_bam", "9.2 Bam: доли путей по филиалам"),
-        ("result_distribution_bam", "9.3 Bam: распределение РезультатПроверки"),
-        ("payments_bam", "9.4 Bam: выплаты"),
-        ("cases_bam", "9.5 Bam: кейсы"),
-    ):
-        frame = analytics.get(key)
-        if frame is None:
-            continue
-        extra_bam += f"""
-  <h3>{escape(title_)}</h3>
-  <div class="card">
-    {_df_to_html_table(frame)}
-  </div>
-"""
-
+    quality = result.data_quality.set_index("metric")["value"].to_dict()
     return f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -930,29 +217,204 @@ def build_monitoring_html(
 <body>
 <div class="page">
   <h1>{escape(title)}</h1>
-  <p class="sub">{escape(generated)} · источник <code>{escape(source_label)}</code> ·
-  ретро-окно {escape(window)} · precision={p.precision:.2f}, k={p.k:.4f},
-  p_fu={_pct(p.p_fu)}, p_court={_pct(p.p_court)}, e_fee={_money(effect.e_fee)}</p>
+  <p class="sub">Сформировано {escape(generated)} · версия {FORMULA_VERSION} ·
+  t_calc={result.t_calc.date()} · источник <code>{escape(source_label)}</code> ·
+  наблюдения {quality.get("observation_start", "?")} …
+  {quality.get("observation_end", "?")} · ретро-окно {escape(retro_window)}</p>
 
-  <h2>1. База и термины</h2>
+  <h2>1. Главный результат</h2>
   <div class="card">
-    {_base_glossary()}
-    {_base_filters_block()}
-    <h3>Карта расчётов: фильтры и показатели</h3>
-    <p class="muted">Каждая строка показывает, на какой выборке считается слой
-    и какие метрики попадают в таблицу.</p>
-    {_filters_overview_table(variant, effect)}
+    {_headline(result)}
+    {_formula(
+        "Ключевой ITT estimand",
+        [
+            "<b>effect(H)</b> = Σ<sub>f</sub> w<sub>f</sub> × "
+            "[mean(Y<sub>H</sub>|control,f) − mean(Y<sub>H</sub>|model,f)]",
+            "w<sub>f</sub> = N<sub>eligible,f</sub> / Σ<sub>f</sub>N<sub>eligible,f</sub>",
+        ],
+        "Положительное значение означает меньшие ожидаемые расходы в model. "
+        "Филиал — страта исходной рандомизации.",
+    )}
+    {_warnings(result.warnings)}
   </div>
 
-  {fin_section}
-  {share_section}
-  {usage_section}
-  {filial_share_section}
-  {dist_section}
-  {pay_section}
-  {cases_section}
-  {bam_section}
-  {extra_bam}
+  {_plan_section()}
+
+  <h2>3. Контракт данных и выборка</h2>
+  <div class="card">
+    <p><b>Единица:</b> одна строка витрины/убыток. Инциденты не схлопываются.
+    Дубли не удаляются: их влияние явно показано в диагностике.</p>
+    <p><b>ITT:</b> model = <code>РезультатПроверки ∈ {{0,1}}</code>;
+    control = <code>РезультатПроверки = −100</code>. Соглашение и исполнение
+    рекомендации не фильтруют ITT-популяцию, потому что это post-treatment.</p>
+    <p><b>Базовые фильтры:</b> пилотные филиалы без Архангельского/Марийского;
+    форма возмещения содержит «денежная», «ремонт» или «соглашение»;
+    первичный убыток; объект «автотранспорт».</p>
+    {_table(_contract_table(result))}
+    <h3>Диагностика качества</h3>
+    {_table(result.data_quality)}
+    <p class="muted">Выбрано строк без dedupe: {quality.get("n_rows", "—")};
+    пропусков OD: {quality.get("missing_od", "—")};
+    возможное повторное суммирование СуммаПлатежа:
+    {quality.get("payment_possible_inflation", "—")}.</p>
+  </div>
+
+  <h2>4. Терминальные ретро-коэффициенты</h2>
+  <div class="card">
+    {_formula(
+        "Коэффициенты из финального incident-level df",
+        [
+            "<b>p<sub>U,g</sub></b> = count(TARGET_FREQ_AMOUNT &gt; 0) / count(rows)",
+            "<b>k<sub>U,g</sub></b> = Σ TARGET_FREQ_AMOUNT / Σ RECOVEREDMAINDEBT_LAST_INST_SUM "
+            "на положительных строках с OD &gt; 0",
+            "<b>m<sub>U,g</sub></b> = mean(TARGET_FREQ_AMOUNT | TARGET_FREQ_AMOUNT &gt; 0)",
+            "<b>e<sub>U,g</sub></b> = p(FU|PSR)×100 000 + p(court|PSR)×15 000",
+        ],
+        "U = ultimate/терминальный итог: сумма ПСР накоплена до доступного "
+        "финального состояния и не является отдельным Y365 или Y1095. "
+        "g ∈ {pilot, nonpilot}. Суд имеет приоритет; ФУ считается только "
+        "среди положительных ПСР без суда, поэтому пути взаимоисключающие.",
+    )}
+    {_table(result.priors.table())}
+    <p><b>Точные ретро-поля:</b>
+    <code>TARGET_FREQ_AMOUNT</code> (итог claims + pretensions),
+    <code>TARGET_FREQ</code>, <code>RECOVEREDMAINDEBT_LAST_INST_SUM</code>,
+    <code>FILIAL</code>, <code>PAYMENT_ORDER_DATE_TIME</code>,
+    <code>TARGET_FREQ_PRET_AMOUNT</code>,
+    <code>TARGET_FREQ_CLAIMS_AMOUNT</code>,
+    <code>Сумма_взыскано_по_ФУ</code>,
+    <code>Суммы_взыскано_по_иску</code>.</p>
+    <p>Основной расчёт использует pilot:
+    p_U={pilot.p_ultimate:.4f}, k_U={pilot.k_ultimate:.4f},
+    m_U={format_money(pilot.mean_positive_psr)},
+    e_U={format_money(pilot.expected_fee)}.</p>
+  </div>
+
+  <h2>5. Yfact, Y365 и Y1095</h2>
+  <div class="card">
+    {_formula(
+        "Построение исхода каждого убытка i",
+        [
+            "<b>paid_to_date<sub>i</sub></b> = numeric(СуммаПлатежа<sub>i</sub>, missing=0)",
+            "<b>base<sub>i</sub></b> = k<sub>U,pilot</sub>×OD<sub>i</sub>, если OD&gt;0; "
+            "иначе m<sub>U,pilot</sub>",
+            "<b>expected_open_PSR<sub>i</sub></b> = p<sub>U,pilot</sub>×"
+            "(base<sub>i</sub> + e<sub>U,pilot</sub>)",
+            "<b>observed_PSR<sub>i</sub></b> = претензия<sub>i</sub> + "
+            "ФУ<sub>i</sub> + суд<sub>i</sub>",
+            "<b>remaining<sub>i</sub></b> = max(q<sub>i</sub>×expected_open_PSR<sub>i</sub> "
+            "− observed_PSR<sub>i</sub>, 0)",
+            "<b>Yfact<sub>i</sub></b> = paid_to_date<sub>i</sub>",
+            "<b>YH<sub>i</sub></b> = paid_to_date<sub>i</sub> + "
+            "remaining<sub>i</sub>/(1+r)<sup>d<sub>i,H</sub>/365</sup>",
+        ],
+        f"OD = СуммаОсновногоДолгаЗаявлено; q=1 без соглашения и "
+        f"q={result.residual_share:.0%} при соглашении; r={result.discount_rate:.0%}; "
+        "age=(t_calc−t0) в днях; d_i,H=max(H−age_i,0)/2. "
+        "Yfact не дисконтируется. Выплаты ПСР не прибавляются повторно: "
+        "они уже входят в СуммаПлатежа и только уменьшают хвост.",
+    )}
+    <h3>Итоги model/control</h3>
+    {_table(result.group_summary)}
+  </div>
+
+  <h2>6. ITT по филиалам и неопределённость</h2>
+  <div class="card">
+    <p>Веса фиксируются по всей eligible-популяции филиала, а не по размеру
+    model/control. Это сохраняет смысл рандомизированного сравнения.</p>
+    {_table(result.effect_summary)}
+    <h3>Вклад филиалов</h3>
+    {_table(result.filial_effects)}
+    {_formula(
+        "95% CI: двухчастный bootstrap",
+        [
+            "1) ретро incident-level строки resample → пересчёт p_U, k_U, m_U, e_U;",
+            "2) текущая витрина resample кластерами по НомерИнцидент → пересчёт Y и ITT;",
+            "CI = 2.5% и 97.5% квантили bootstrap effect(H).",
+        ],
+        f"Запрошено итераций: {result.bootstrap_iterations}. "
+        "Фактическое число успешных итераций указано в n_bootstrap.",
+    )}
+  </div>
+
+  <h2>7. Non-compliance</h2>
+  <div class="card">
+    <h3>A. As-complied — только описательная диагностика</h3>
+    <p>Сравнение выполняется внутри model и <code>РезультатПроверки=1</code>:
+    исполнено, если <code>Выплата по модели=1</code>. Оно не является причинным:
+    решение сотрудника после рандомизации создаёт selection/post-treatment bias.</p>
+    {_table(result.compliance_a)}
+    <h3>B. Механический сценарий 100% исполнения</h3>
+    {_formula(
+        "Контракт сценария",
+        [
+            "<b>forced_extra<sub>i</sub></b> = рекомендованная доплата, если "
+            "model, result=1 и Выплата по модели≠1; иначе 0",
+            "<b>Yfact_100<sub>i</sub></b> = СуммаПлатежа<sub>i</sub> + forced_extra<sub>i</sub>",
+            "для всех model/result=1: q<sub>i</sub>=7%; затем заново считаются Y365_100 и Y1095_100",
+            "<b>effect_100(H)</b> = stratified mean(control actual) − mean(model scenario)",
+        ],
+        "Это сценарная механика, а не LATE/IV-оценка. Доплата не подменяет "
+        "СуммаПлатежа: она прибавляется только в сценарии.",
+    )}
+    {_table(result.compliance_b)}
+  </div>
+
+  <h2>8. Чувствительность</h2>
+  <div class="card">
+    <p>Полная сетка: ставка дисконтирования r ∈ {{8%,12%,16%}} и остаток
+    после соглашения q ∈ {{0%,7%,15%}}. Ретро-параметры не подгоняются.</p>
+    {_table(result.sensitivity)}
+  </div>
+
+  <h2>9. Сезонный годовой эффект и сеть</h2>
+  <div class="card">
+    {_formula(
+        "Экстраполяция потока",
+        [
+            "<b>s<sub>m,P</sub></b> = средняя доля месяца m в годовом pilot-потоке ретро",
+            "<b>seasonal_exposure</b> = Σ<sub>m</sub> coverage<sub>m</sub>×s<sub>m,P</sub>",
+            "<b>N_pilot_eligible_year</b> = N_observed_pilot_eligible / seasonal_exposure",
+            "<b>N_pilot_model_year_current</b> = share_model×N_pilot_eligible_year",
+            "<b>N_pilot_model_year_full</b> = N_pilot_eligible_year",
+            "<b>network_multiplier</b> = 1 + volume_ratio_NP×risk_ratio_NP",
+        ],
+        "volume_ratio_NP — отношение среднегодового eligible-потока nonpilot/pilot; "
+        "risk_ratio_NP — отношение mean(TARGET_FREQ_AMOUNT) nonpilot/pilot. "
+        "Горизонт Y365/Y1095 не умножается на 365/30: масштабируется число новых убытков.",
+    )}
+    <h3>Сезонные доли и покрытие текущего окна</h3>
+    {_table(result.seasonality)}
+    <h3>Сценарии годового эффекта</h3>
+    {_table(result.annual_summary)}
+  </div>
+
+  <h2>10. Обозначения и ограничения</h2>
+  <div class="card">
+    <ul>
+      <li><b>i</b> — строка/убыток текущей витрины; <b>q</b> — incident-level строка ретро;
+      <b>f</b> — филиал; <b>g</b> — pilot/nonpilot; <b>H</b> — fact/365/1095.</li>
+      <li><b>ITT</b> — эффект назначения в model-поток, включая фактический non-compliance.</li>
+      <li><b>Yfact</b> — наблюдаемые расходы на t_calc; <b>Y365/Y1095</b> —
+      Yfact плюс модельный NPV остатка до горизонта.</li>
+      <li>Рандомизация считается корректной внутри филиала. Balance/covariate adjustment
+      не выполняются из-за отсутствия согласованного pre-treatment набора признаков.</li>
+      <li>Терминальные priors не содержат раздельных 365/1095 таргетов; различие
+      горизонтов возникает только через доступное время и дисконтирование хвоста.</li>
+      <li>В мониторинге OD — <code>СуммаОсновногоДолгаЗаявлено</code>, а k_U
+      калибруется на <code>RECOVEREDMAINDEBT_LAST_INST_SUM</code>. Переносимость
+      между разными бизнес-величинами является допущением.</li>
+      <li>Priors pooled внутри pilot/nonpilot; 7% — экспертное, не оценённое
+      по данным допущение; midpoint означает равномерное распределение будущего
+      хвоста и не является моделью времени наступления ПСР.</li>
+      <li>Terminal-вероятность ПСР не пересчитывается условно на текущий возраст
+      убытка и отсутствие ПСР к t_calc: это упрощённая оценка без модели дозревания.</li>
+      <li>Сценарий сети переносит pilot-эффект через отдельные коэффициенты объёма
+      и риска. Это экстраполяция, а не рандомизированная оценка для nonpilot.</li>
+      <li>Если age≥365, код останавливает расчёт: для зрелых строк нужен
+      наблюдаемый Y365, а его текущий контракт данных не предоставляет.</li>
+    </ul>
+  </div>
 </div>
 </body>
 </html>
@@ -960,59 +422,48 @@ def build_monitoring_html(
 
 
 def write_monitoring_html(
-    effect: MonitoringEffectResult,
+    result: MonitoringEffectResult,
     path: str | Path,
     *,
-    variant: int = 1,
-    annual: dict[str, Any] | None = None,
-    analytics: dict[str, Any] | None = None,
     source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
-    title: str | None = None,
-    **_ignored: Any,
 ) -> Path:
-    """Записать HTML-отчёт варианта 1 или 2."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    html = build_monitoring_html(
-        effect,
-        variant=variant,
-        annual=annual,
-        analytics=analytics,
-        source_label=source_label,
-        title=title,
+    """Записать единый HTML-отчёт."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    html = build_monitoring_html(result, source_label=source_label)
+    destination.write_text(
+        "\n".join(line.rstrip() for line in html.splitlines()) + "\n",
+        encoding="utf-8",
     )
-    html = "\n".join(line.rstrip() for line in html.splitlines()) + "\n"
-    path.write_text(html, encoding="utf-8")
-    return path
+    return destination
 
 
-def write_both_monitoring_htmls(
-    effect_v1: MonitoringEffectResult,
-    effect_v2: MonitoringEffectResult,
-    data_dir: str | Path,
+def write_error_html(
+    error: Exception,
+    path: str | Path,
     *,
-    annual_v1: dict[str, Any] | None = None,
-    annual_v2: dict[str, Any] | None = None,
-    analytics_v1: dict[str, Any] | None = None,
-    analytics_v2: dict[str, Any] | None = None,
-    source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
-) -> tuple[Path, Path]:
-    """Записать оба HTML: variant1 и variant2."""
-    data_dir = Path(data_dir)
-    p1 = write_monitoring_html(
-        effect_v1,
-        data_dir / "fin_effect_report_v1_rucheek.html",
-        variant=1,
-        annual=annual_v1,
-        analytics=analytics_v1,
-        source_label=source_label,
-    )
-    p2 = write_monitoring_html(
-        effect_v2,
-        data_dir / "fin_effect_report_v2_cases.html",
-        variant=2,
-        annual=annual_v2,
-        analytics=analytics_v2,
-        source_label=source_label,
-    )
-    return p1, p2
+    source_label: str,
+) -> Path:
+    """Записать диагностический HTML, если расчёт остановлен guard-проверкой."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    html = f"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8"/><title>Ошибка расчёта</title>
+<style>{_CSS}</style></head><body><div class="page">
+<h1>Финансовый эффект не рассчитан</h1>
+<p class="sub">Источник <code>{escape(source_label)}</code></p>
+<div class="warning"><b>{escape(type(error).__name__)}</b>: {escape(str(error))}</div>
+<p>Guard-проверка остановила расчёт, чтобы HTML не содержал недостоверный эффект.
+Исправьте контракт/данные и сформируйте отчёт повторно.</p>
+</div></body></html>"""
+    destination.write_text(html, encoding="utf-8")
+    return destination
+
+
+__all__ = [
+    "FORMULA_VERSION",
+    "REPORT_FILENAME",
+    "build_monitoring_html",
+    "write_error_html",
+    "write_monitoring_html",
+]
