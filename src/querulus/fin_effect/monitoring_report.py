@@ -14,7 +14,7 @@ from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_
 PLAN_FILENAME = "fin_effect_plan.html"
 REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
-FORMULA_VERSION = "ITT-U-2026-09-10-v3"
+FORMULA_VERSION = "ITT-U-2026-09-10-v4"
 
 _CSS = """
 :root {
@@ -214,7 +214,7 @@ def _nav(active: str) -> str:
 
 def _business_schema() -> str:
     return """
-<div class="card">
+  <div class="card">
   <h3>Как читается финансовый эффект</h3>
   <p>Сравниваем два случайных потока убытков внутри филиала:
   <b>model</b> (модель работала) и <b>control</b> (модель не работала).</p>
@@ -223,15 +223,15 @@ def _business_schema() -> str:
       <h4>Control</h4>
       <p>Обычный процесс урегулирования без рекомендаций модели.
       Считаем средний полный расход на один убыток.</p>
-    </div>
+  </div>
     <div class="mid">−</div>
     <div class="box model">
       <h4>Model</h4>
       <p>Тот же тип убытков, но с назначением в модель.
       Считаем средний полный расход на один убыток, включая случаи,
       где рекомендацию не выполнили.</p>
-    </div>
-  </div>
+      </div>
+      </div>
   <p><b>Эффект на один убыток</b> = средний расход control − средний расход model.
   Плюс означает экономию.</p>
 
@@ -241,39 +241,39 @@ def _business_schema() -> str:
       <h4>Кого сравниваем</h4>
       <p>Только убытки model и control в пилотных филиалах. Соглашения
       и исполнение рекомендаций не выкидывают строки из сравнения.</p>
-    </div>
+      </div>
     <div class="flow-step">
       <div class="num">Шаг 2</div>
       <h4>Что уже заплатили</h4>
       <p><code>Yфакт</code> = фактическая касса
       <code>СуммаПлатежа</code> на дату отчёта.</p>
-    </div>
+      </div>
     <div class="flow-step">
       <div class="num">Шаг 3</div>
       <h4>Что ещё может прийти</h4>
       <p>Хвост претензий / ФУ / суда оцениваем по ретро-коэффициентам.
       После соглашения оставляем экспертно 7%.</p>
-    </div>
+      </div>
     <div class="flow-step">
       <div class="num">Шаг 4</div>
       <h4>Три горизонта</h4>
       <p><code>Yфакт</code> — сейчас; <code>Y365</code> и <code>Y1095</code> —
       тот же хвост, приведённый к сегодняшним деньгам на 1 и 3 года.</p>
-    </div>
+      </div>
     <div class="flow-step">
       <div class="num">Шаг 5</div>
       <h4>Неопределённость</h4>
       <p>95% доверительный интервал показывает, насколько оценка устойчива.
       Если интервал проходит через 0, эффект пока не подтверждён.</p>
-    </div>
+      </div>
     <div class="flow-step">
       <div class="num">Шаг 6</div>
       <h4>На год и сеть</h4>
       <p>Эффект на убыток × ожидаемый годовой поток пилота × поправка
       на объём и риск остальных филиалов. Это сценарий, не факт.</p>
     </div>
-  </div>
-</div>
+      </div>
+    </div>
 """
 
 
@@ -564,7 +564,7 @@ def build_monitoring_html(
     p_U={pilot.p_ultimate:.4f}, k_U={pilot.k_ultimate:.4f},
     m_U={format_money(pilot.mean_positive_psr)},
     e_U={format_money(pilot.expected_fee)}.</p>
-  </div>
+        </div>
 
   <h2>6. Yfact, Y365 и Y1095</h2>
   <div class="card">
@@ -580,14 +580,44 @@ def build_monitoring_html(
             "ФУ<sub>i</sub> + суд<sub>i</sub>",
             "<b>remaining<sub>i</sub></b> = max(q<sub>i</sub>×expected_open_PSR<sub>i</sub> "
             "− observed_PSR<sub>i</sub>, 0)",
+            "<b>remaining_days<sub>i,H</sub></b> = max(H − age<sub>i</sub>, 0)",
+            "<b>midpoint_days<sub>i,H</sub></b> = remaining_days<sub>i,H</sub> / 2",
             "<b>Yfact<sub>i</sub></b> = paid_to_date<sub>i</sub>",
             "<b>YH<sub>i</sub></b> = paid_to_date<sub>i</sub> + "
-            "remaining<sub>i</sub>/(1+r)<sup>d<sub>i,H</sub>/365</sup>",
+            "remaining<sub>i</sub> / (1+r)<sup>midpoint_days<sub>i,H</sub>/365</sup>",
         ],
         f"OD = СуммаОсновногоДолгаЗаявлено; q=1 без соглашения и "
         f"q={result.residual_share:.0%} при соглашении; r={result.discount_rate:.0%}; "
-        "age=(t_calc−t0) в днях; d_i,H=max(H−age_i,0)/2.",
+        "age=(t_calc−t0) в днях.",
     )}
+    <h3>Что означают remaining и midpoint</h3>
+    <p><b>remaining</b> — ещё не проявившийся хвост ПСР (номинал). Это не дисконт,
+    а «сколько ещё может прийти» после вычитания уже видимых претензии/ФУ/суда.</p>
+    <p><b>midpoint</b> — упрощение срока будущего платежа: хвост считается
+    поступившим в середине оставшегося окна до горизонта H.
+    Дисконтирование здесь — NPV (приведение будущих рублей к сегодняшним),
+    а не рост ПСР со временем. Поэтому при одном и том же remaining
+    Y1095 может быть меньше Y365: тот же хвост дальше по времени → ниже
+    сегодняшняя стоимость.</p>
+    <div class="formula">
+      <b>Числовые примеры remaining</b>
+      <div class="eq">Без соглашения: q=1, expected=100 000, observed=20 000 →
+      remaining = max(100 000−20 000, 0) = 80 000</div>
+      <div class="eq">С соглашением: q=0.07, expected=100 000, observed=0 →
+      remaining = max(7 000−0, 0) = 7 000</div>
+      <div class="eq">Уже «перебрали»: expected=100 000, observed=150 000 →
+      remaining = 0</div>
+    </div>
+    <div class="formula">
+      <b>Пример midpoint / NPV</b>
+      <div class="eq">age=184, remaining=80 000, paid=50 000, r=12%</div>
+      <div class="eq">H=365: remaining_days=181, midpoint=90.5,
+      DF≈1.028 → Y365 ≈ 50 000 + 77 821 = 127 821</div>
+      <div class="eq">H=1095: remaining_days=911, midpoint=455.5,
+      DF≈1.154 → Y1095 ≈ 50 000 + 69 324 = 119 324</div>
+      <div class="note">Y365 &gt; Y1095 при одинаковом remaining — ожидаемо для NPV,
+      это не означает, что за 3 года ПСР меньше, чем за 1 год.</div>
+    </div>
     <h3>Итоги control / model</h3>
     {_table(
       result.group_summary,
@@ -641,6 +671,25 @@ def build_monitoring_html(
         "Одна строка на пару горизонт × филиал; в колонках сначала control, затем model.",
       ],
     )}
+    <h3>Филиалы на внимании</h3>
+    <p>Показываем филиалы, где доля соглашений в control выше, чем в model,
+    и/или ITT-эффект control−model отрицательный (model дороже).</p>
+    {_table(
+      result.attention_filials,
+      columns={
+        "filial": "Филиал",
+        "agreement_share_control": "Доля соглашений в control, %",
+        "agreement_share_model": "Доля соглашений в model, %",
+        "agreement_gap_pp": "control − model по соглашениям, п.п.",
+        "negative_effect_horizons": "Горизонты с отрицательным ITT",
+        "min_effect_control_minus_model": "Минимальный эффект по горизонтам, ₽",
+        "flags": "Почему филиал в списке",
+      },
+      rows=[
+        "Пустая таблица означает, что таких филиалов нет.",
+        "flags: agreement_control_gt_model и/или negative_itt.",
+      ],
+    )}
     {_formula(
         "95% CI: двухчастный bootstrap",
         [
@@ -648,23 +697,25 @@ def build_monitoring_html(
             "2) текущая витрина resample кластерами по НомерИнцидент → пересчёт Y и ITT;",
             "CI = 2.5% и 97.5% квантили bootstrap effect(H).",
         ],
-        f"Запрошено итераций: {result.bootstrap_iterations}. "
-        "Фактическое число успешных итераций указано в n_bootstrap.",
+        f"ITT: запрошено {result.bootstrap_iterations} итераций. "
+        f"Сценарий 100% compliance: "
+        f"{result.bootstrap_compliance_iterations} итераций. "
+        "Прогресс bootstrap виден в tqdm при запуске notebook.",
     )}
   </div>
 
   <h2>8. Non-compliance</h2>
   <div class="card">
-    <h3>A. As-complied — только описательная диагностика</h3>
-    <p>Сравнение внутри model и <code>РезультатПроверки=1</code>.
-    Не является причинным эффектом.</p>
+    <h3>A. As-complied — только описательная диагностика (Yfact)</h3>
+    <p>Сравнение внутри model и <code>РезультатПроверки=1</code> только по факту.
+    Не является причинным эффектом; горизонты 365/1095 здесь не считаются.</p>
     {_table(
       result.compliance_a,
       columns={
-        "horizon": "Горизонт",
+        "horizon": "Только fact",
         "compliance": "complied или not_complied",
         "n": "Число убытков",
-        "mean_cost": "Средний YH, ₽",
+        "mean_cost": "Средний Yfact, ₽",
         "descriptive_only": "Признак: только описание, не causal effect",
       },
       rows=[
@@ -682,7 +733,7 @@ def build_monitoring_html(
             "для всех model/result=1: q<sub>i</sub>=7%; затем Y365_100 и Y1095_100",
             "<b>effect_100(H)</b> = stratified mean(control actual) − mean(model scenario)",
         ],
-        "Сценарная механика, не LATE/IV.",
+        "Сценарная механика, не LATE/IV. CI — отдельный bootstrap на Y*_100.",
     )}
     {_table(
       result.compliance_b,
@@ -692,6 +743,9 @@ def build_monitoring_html(
         "unstratified_effect": "Та же разность без стратификации, ₽/убыток",
         "n_weighted": "Сумма весов филиалов",
         "n_filials": "Число филиалов в расчёте",
+        "ci_low": "Нижняя граница 95% CI bootstrap сценария, ₽/убыток",
+        "ci_high": "Верхняя граница 95% CI bootstrap сценария, ₽/убыток",
+        "n_bootstrap": "Число успешных bootstrap-повторений сценария",
         "scenario": "Описание сценария",
       },
       rows=[
@@ -723,8 +777,10 @@ def build_monitoring_html(
         "Экстраполяция потока",
         [
             "<b>s<sub>m,P</sub></b> = средняя доля месяца m в годовом pilot-потоке ретро",
+            "<b>coverage<sub>m</sub></b> = доля дней месяца m, попавших в окно мониторинга",
             "<b>seasonal_exposure</b> = Σ<sub>m</sub> coverage<sub>m</sub>×s<sub>m,P</sub>",
-            "<b>N_pilot_eligible_year</b> = N_observed_pilot_eligible / seasonal_exposure",
+            "<b>N_obs</b> = число eligible-убытков current (model+control)",
+            "<b>N_pilot_eligible_year</b> = N_obs / seasonal_exposure",
             "<b>network_multiplier</b> = 1 + volume_ratio_NP×risk_ratio_NP",
             "<b>annual_network_full</b> = effect_per_case × N_pilot_eligible_year × network_multiplier",
             "<b>annual CI</b> = [ci_low, ci_high] × N_pilot_eligible_year × network_multiplier",
@@ -732,6 +788,27 @@ def build_monitoring_html(
         "Горизонт Y365/Y1095 не умножается на 365/30: масштабируется число новых убытков. "
         "CI годового эффекта — линейный перенос bootstrap CI с уровня убытка.",
     )}
+    <h3>Зачем сезонность и откуда берутся числа</h3>
+    <p>Нужно ответить: «в окне набралось N_obs убытков за неполный год;
+    сколько ждать за полный типичный год?» Это <b>число убытков</b>, не сумма выплат.</p>
+    <ul>
+      <li><b>s<sub>m</sub></b> — из ретро-пилота по дате
+      (<code>PAYMENT_ORDER_DATE_TIME</code> / fallback), доля строк месяца в годе.</li>
+      <li><b>coverage<sub>m</sub></b> — по мониторингу <code>ДатаЗаявления</code>
+      (<code>_application_date</code>): какая часть месяца попала в окно.</li>
+      <li><b>seasonal_exposure</b> — какую долю типичного года мы уже увидели.</li>
+      <li><b>N_pilot_eligible_year</b> — годовой поток eligible = N_obs / exposure.</li>
+      <li><b>risk_ratio</b> — уже по деньгам <code>TARGET_FREQ_AMOUNT</code> (для сети).</li>
+    </ul>
+    <div class="formula">
+      <b>Пример</b>
+      <div class="eq">N_obs = 2 500, seasonal_exposure = 0.25 →
+      N_pilot_eligible_year = 2 500 / 0.25 = 10 000</div>
+      <div class="eq">effect_per_case = 4 694, network_multiplier = 2.5 →
+      annual_network_full ≈ 4 694 × 10 000 × 2.5 = 117 350 000</div>
+      <div class="note">Если окно попало в «лёгкие» месяцы, exposure меньше и
+      годовой поток выше при том же N_obs — поэтому и нужна сезонная поправка.</div>
+    </div>
     <h3>Сезонные доли и покрытие текущего окна</h3>
     {_table(
       result.seasonality,
@@ -884,7 +961,7 @@ def write_conclusion_html(
     return _write(
         Path(path),
         build_conclusion_html(
-            source_label=source_label,
+        source_label=source_label,
             ready=ready,
             body_html=body_html,
         ),

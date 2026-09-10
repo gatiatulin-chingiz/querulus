@@ -150,11 +150,13 @@ class MonitoringEffectResult:
     data_quality: pd.DataFrame
     path_shares: pd.DataFrame
     filial_path_shares: pd.DataFrame
+    attention_filials: pd.DataFrame
     contract: dict[str, str]
     t_calc: pd.Timestamp
     discount_rate: float
     residual_share: float
     bootstrap_iterations: int
+    bootstrap_compliance_iterations: int
     warnings: list[str] = field(default_factory=list)
 
 
@@ -605,12 +607,23 @@ def _bootstrap_ci(
     discount_rate: float,
     iterations: int,
     seed: int,
+    compliance_100: bool = False,
+    progress_desc: str = "bootstrap ITT",
 ) -> pd.DataFrame:
     if iterations <= 0:
         return pd.DataFrame(columns=["horizon", "ci_low", "ci_high", "n_bootstrap"])
+    try:
+        from tqdm.auto import tqdm
+    except ImportError:  # pragma: no cover
+        tqdm = None  # type: ignore[assignment]
+
     rng = np.random.default_rng(seed)
     values: dict[str, list[float]] = {"fact": [], "365": [], "1095": []}
-    for _ in range(iterations):
+    iterator = range(iterations)
+    if tqdm is not None:
+        iterator = tqdm(iterator, total=iterations, desc=progress_desc, leave=True)
+    suffix = "_100" if compliance_100 else ""
+    for _ in iterator:
         retro_sample = retro.iloc[
             rng.integers(0, len(retro), size=len(retro))
         ].reset_index(drop=True)
@@ -627,8 +640,9 @@ def _bootstrap_ci(
                 priors.pilot,
                 residual_share=residual_share,
                 discount_rate=discount_rate,
+                compliance_100=compliance_100,
             )
-            _, _, effects = _summaries(outcomes)
+            _, _, effects = _summaries(outcomes, suffix=suffix)
         except (KeyError, ValueError, ZeroDivisionError):
             continue
         for row in effects.to_dict("records"):
@@ -661,25 +675,120 @@ def _compliance_a(frame: pd.DataFrame) -> pd.DataFrame:
         "not_complied",
     )
     rows: list[dict[str, Any]] = []
-    for horizon, column in (
-        ("fact", "Yfact"),
-        ("365", "Y365"),
-        ("1095", "Y1095"),
-    ):
-        for status in ("complied", "not_complied"):
-            part = model_one.loc[model_one["_compliance"].eq(status)]
-            if part.empty:
-                continue
-            rows.append(
-                {
-                    "horizon": horizon,
-                    "compliance": status,
-                    "n": len(part),
-                    "mean_cost": float(part[column].mean()),
-                    "descriptive_only": True,
-                }
-            )
+    for status in ("complied", "not_complied"):
+        part = model_one.loc[model_one["_compliance"].eq(status)]
+        if part.empty:
+            continue
+        rows.append(
+            {
+                "horizon": "fact",
+                "compliance": status,
+                "n": len(part),
+                "mean_cost": float(part["Yfact"].mean()),
+                "descriptive_only": True,
+            }
+        )
     return pd.DataFrame(rows)
+
+
+def _attention_filials(
+    filial_paths: pd.DataFrame,
+    filial_effects: pd.DataFrame,
+) -> pd.DataFrame:
+    """Филиалы с agreement(control)>agreement(model) или отрицательным ITT."""
+    rows: list[dict[str, Any]] = []
+    agreement_gap: dict[str, float] = {}
+    if (
+        not filial_paths.empty
+        and {"filial", "segment", "agreement_share"}.issubset(filial_paths.columns)
+    ):
+        pivot = (
+            filial_paths.pivot_table(
+                index="filial",
+                columns="segment",
+                values="agreement_share",
+                aggfunc="first",
+            )
+            .rename_axis(None, axis=1)
+            .reset_index()
+        )
+        for row in pivot.to_dict("records"):
+            filial = str(row["filial"])
+            control = row.get("control", np.nan)
+            model = row.get("model", np.nan)
+            if pd.notna(control) and pd.notna(model):
+                agreement_gap[filial] = float(control) - float(model)
+
+    if filial_effects.empty:
+        return pd.DataFrame(
+            columns=[
+                "filial",
+                "agreement_share_control",
+                "agreement_share_model",
+                "agreement_gap_pp",
+                "negative_effect_horizons",
+                "min_effect_control_minus_model",
+                "flags",
+            ]
+        )
+
+    for filial, part in filial_effects.groupby("filial", dropna=False):
+        filial_key = str(filial)
+        gap = agreement_gap.get(filial_key, np.nan)
+        effects = {
+            str(row["horizon"]): float(row["effect_control_minus_model"])
+            for row in part.to_dict("records")
+            if pd.notna(row.get("effect_control_minus_model"))
+        }
+        negative = [h for h, value in effects.items() if value < 0]
+        flags: list[str] = []
+        if pd.notna(gap) and gap > 0:
+            flags.append("agreement_control_gt_model")
+        if negative:
+            flags.append("negative_itt")
+        if not flags:
+            continue
+        control_share = np.nan
+        model_share = np.nan
+        if filial_key in agreement_gap or not filial_paths.empty:
+            match = filial_paths.loc[filial_paths["filial"].astype(str).eq(filial_key)]
+            if not match.empty:
+                control_row = match.loc[match["segment"].astype(str).eq("control")]
+                model_row = match.loc[match["segment"].astype(str).eq("model")]
+                if not control_row.empty:
+                    control_share = float(control_row.iloc[0]["agreement_share"])
+                if not model_row.empty:
+                    model_share = float(model_row.iloc[0]["agreement_share"])
+        rows.append(
+            {
+                "filial": filial_key,
+                "agreement_share_control": control_share,
+                "agreement_share_model": model_share,
+                "agreement_gap_pp": gap,
+                "negative_effect_horizons": ", ".join(negative) if negative else "",
+                "min_effect_control_minus_model": (
+                    min(effects.values()) if effects else np.nan
+                ),
+                "flags": ", ".join(flags),
+            }
+        )
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "filial",
+                "agreement_share_control",
+                "agreement_share_model",
+                "agreement_gap_pp",
+                "negative_effect_horizons",
+                "min_effect_control_minus_model",
+                "flags",
+            ]
+        )
+    return (
+        pd.DataFrame(rows)
+        .sort_values(["flags", "filial"])
+        .reset_index(drop=True)
+    )
 
 
 def _sensitivity(
@@ -933,7 +1042,8 @@ def estimate_monitoring_effect(
     discount_rate: float = 0.12,
     lookback_years: float | None = 2.0,
     retro_as_of: str | pd.Timestamp | None = RETRO_AS_OF_DEFAULT,
-    bootstrap_iterations: int = 200,
+    bootstrap_iterations: int = 1000,
+    bootstrap_compliance_iterations: int = 200,
     bootstrap_seed: int = 42,
 ) -> MonitoringEffectResult:
     """Выполнить ITT, compliance-сценарии, CI и сезонную экстраполяцию."""
@@ -971,6 +1081,7 @@ def estimate_monitoring_effect(
         discount_rate=discount_rate,
         iterations=bootstrap_iterations,
         seed=bootstrap_seed,
+        progress_desc="bootstrap ITT",
     )
     effects = effects.merge(ci, on="horizon", how="left")
 
@@ -984,6 +1095,20 @@ def estimate_monitoring_effect(
     )
     _, _, compliance_b = _summaries(current_100, suffix="_100")
     compliance_b["scenario"] = "100% compliance for model result=1"
+    compliance_ci = _bootstrap_ci(
+        current,
+        retro_df,
+        pilot_filials=pilot_filials,
+        lookback_years=lookback_years,
+        as_of=retro_as_of,
+        residual_share=residual_share,
+        discount_rate=discount_rate,
+        iterations=bootstrap_compliance_iterations,
+        seed=bootstrap_seed + 1,
+        compliance_100=True,
+        progress_desc="bootstrap compliance-100",
+    )
+    compliance_b = compliance_b.merge(compliance_ci, on="horizon", how="left")
 
     sensitivity = _sensitivity(current, priors.pilot)
     annual, seasonality, season_warnings = _seasonal_scaling(
@@ -1034,6 +1159,12 @@ def estimate_monitoring_effect(
     filial_paths = shares_as_percent(
         filial_path_shares(monitoring_df, filial_scope="pilot", variant=1)
     )
+    attention = _attention_filials(filial_paths, filial_effects)
+    if not attention.empty:
+        warnings.append(
+            "Филиалы на внимании (agreement control>model и/или отрицательный ITT): "
+            + ", ".join(attention["filial"].astype(str).tolist())
+        )
 
     calc_date = (
         pd.Timestamp(t_calc).normalize()
@@ -1054,11 +1185,13 @@ def estimate_monitoring_effect(
         data_quality=data_quality,
         path_shares=path_shares,
         filial_path_shares=filial_paths,
+        attention_filials=attention,
         contract=contract,
         t_calc=calc_date,
         discount_rate=discount_rate,
         residual_share=residual_share,
         bootstrap_iterations=bootstrap_iterations,
+        bootstrap_compliance_iterations=bootstrap_compliance_iterations,
         warnings=warnings,
     )
 
