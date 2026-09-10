@@ -14,7 +14,7 @@ from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_
 PLAN_FILENAME = "fin_effect_plan.html"
 REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
-FORMULA_VERSION = "ITT-U-2026-09-10-v4"
+FORMULA_VERSION = "ITT-U-2026-09-10-v5"
 
 _CSS = """
 :root {
@@ -715,12 +715,14 @@ def build_monitoring_html(
         "horizon": "Только fact",
         "compliance": "complied или not_complied",
         "n": "Число убытков",
+        "agreement_share": "Доля соглашений внутри группы, %",
         "mean_cost": "Средний Yfact, ₽",
         "descriptive_only": "Признак: только описание, не causal effect",
       },
       rows=[
-        "complied — рекомендация исполнена",
+        "complied — рекомендация исполнена (Выплата по модели=1)",
         "not_complied — рекомендация не исполнена",
+        "База: model и РезультатПроверки=1.",
       ],
     )}
     <h3>B. Механический сценарий 100% исполнения</h3>

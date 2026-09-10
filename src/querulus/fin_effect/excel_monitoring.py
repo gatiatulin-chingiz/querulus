@@ -679,11 +679,13 @@ def _compliance_a(frame: pd.DataFrame) -> pd.DataFrame:
         part = model_one.loc[model_one["_compliance"].eq(status)]
         if part.empty:
             continue
+        n = len(part)
         rows.append(
             {
                 "horizon": "fact",
                 "compliance": status,
-                "n": len(part),
+                "n": n,
+                "agreement_share": float(part["_agreement"].mean() * 100) if n else np.nan,
                 "mean_cost": float(part["Yfact"].mean()),
                 "descriptive_only": True,
             }
