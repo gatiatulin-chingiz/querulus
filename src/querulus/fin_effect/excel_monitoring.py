@@ -27,7 +27,7 @@ FU_FEE_DEFAULT = 100_000.0
 COURT_FEE_DEFAULT = 15_000.0
 RETRO_AS_OF_DEFAULT = "2025-06-30"
 RESULT_OUT_OF_MODEL = -100
-HORIZONS = (365, 1095)
+HORIZONS = (365,)
 PILOT_FILIALS = (
     "Владимирский",
     "Кемеровский",
@@ -515,7 +515,6 @@ def _summaries(
     outcomes = {
         "fact": f"Yfact{suffix}",
         "365": f"Y365{suffix}",
-        "1095": f"Y1095{suffix}",
     }
     group_rows: list[dict[str, Any]] = []
     filial_rows: list[dict[str, Any]] = []
@@ -618,7 +617,7 @@ def _bootstrap_ci(
         tqdm = None  # type: ignore[assignment]
 
     rng = np.random.default_rng(seed)
-    values: dict[str, list[float]] = {"fact": [], "365": [], "1095": []}
+    values: dict[str, list[float]] = {"fact": [], "365": []}
     iterator = range(iterations)
     if tqdm is not None:
         iterator = tqdm(iterator, total=iterations, desc=progress_desc, leave=True)
@@ -944,7 +943,7 @@ def _seasonal_scaling(
         "effect_per_case"
     ].to_dict()
     annual_rows = []
-    for horizon in ("fact", "365", "1095"):
+    for horizon in ("fact", "365"):
         effect = float(effect_map[horizon])
         effect_100 = float(compliance_map[horizon])
         scale_full = n_model_year_full * network_multiplier

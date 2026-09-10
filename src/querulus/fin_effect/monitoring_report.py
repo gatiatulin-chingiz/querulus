@@ -14,7 +14,7 @@ from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_
 PLAN_FILENAME = "fin_effect_plan.html"
 REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
-FORMULA_VERSION = "ITT-U-2026-09-10-v5"
+FORMULA_VERSION = "ITT-U-2026-09-10-v6"
 
 _CSS = """
 :root {
@@ -256,9 +256,9 @@ def _business_schema() -> str:
       </div>
     <div class="flow-step">
       <div class="num">Шаг 4</div>
-      <h4>Три горизонта</h4>
-      <p><code>Yфакт</code> — сейчас; <code>Y365</code> и <code>Y1095</code> —
-      тот же хвост, приведённый к сегодняшним деньгам на 1 и 3 года.</p>
+      <h4>Два горизонта</h4>
+      <p><code>Yфакт</code> — сейчас; <code>Y365</code> —
+      тот же хвост, приведённый к сегодняшним деньгам на горизонт 1 год.</p>
       </div>
     <div class="flow-step">
       <div class="num">Шаг 5</div>
@@ -323,7 +323,7 @@ def _headline(result: MonitoringEffectResult) -> str:
     effects = result.effect_summary.set_index("horizon")
     annual = result.annual_summary.set_index("horizon")
     cells = []
-    for horizon in ("fact", "365", "1095"):
+    for horizon in ("fact", "365"):
         effect = float(effects.loc[horizon, "effect_per_case"])
         low = float(effects.loc[horizon, "ci_low"])
         high = float(effects.loc[horizon, "ci_high"])
@@ -334,12 +334,12 @@ def _headline(result: MonitoringEffectResult) -> str:
             f"<small>95% CI: {format_money(low)} … {format_money(high)}</small>"
             "</div>"
         )
-    ann = float(annual.loc["1095", "annual_network_full"])
-    ann_low = float(annual.loc["1095", "annual_network_full_ci_low"])
-    ann_high = float(annual.loc["1095", "annual_network_full_ci_high"])
+    ann = float(annual.loc["365", "annual_network_full"])
+    ann_low = float(annual.loc["365", "annual_network_full_ci_low"])
+    ann_high = float(annual.loc["365", "annual_network_full_ci_high"])
     cells.append(
         "<div class='stat'>"
-        "<span>Годовой эффект сети, full rollout, Y1095</span>"
+        "<span>Годовой эффект сети, full rollout, Y365</span>"
         f"<b>{format_money(ann)}</b>"
         f"<small>95% CI: {format_money(ann_low)} … {format_money(ann_high)}</small>"
         "</div>"
@@ -399,7 +399,7 @@ def build_plan_html(
   <div class="card">
     <ul>
       <li>Если 95% CI проходит через 0, экономия пока статистически не подтверждена.</li>
-      <li><code>Y365</code>/<code>Y1095</code> сейчас — прогноз хвоста, а не полностью
+      <li><code>Y365</code> сейчас — прогноз хвоста, а не полностью
       дозревшие фактические расходы.</li>
       <li>Годовой эффект сети — сценарий масштабирования, не измеренный факт.</li>
     </ul>
@@ -566,7 +566,7 @@ def build_monitoring_html(
     e_U={format_money(pilot.expected_fee)}.</p>
         </div>
 
-  <h2>6. Yfact, Y365 и Y1095</h2>
+  <h2>6. Yfact и Y365</h2>
   <div class="card">
     {_formula(
         "Построение исхода каждого убытка i",
@@ -580,25 +580,23 @@ def build_monitoring_html(
             "ФУ<sub>i</sub> + суд<sub>i</sub>",
             "<b>remaining<sub>i</sub></b> = max(q<sub>i</sub>×expected_open_PSR<sub>i</sub> "
             "− observed_PSR<sub>i</sub>, 0)",
-            "<b>remaining_days<sub>i,H</sub></b> = max(H − age<sub>i</sub>, 0)",
-            "<b>midpoint_days<sub>i,H</sub></b> = remaining_days<sub>i,H</sub> / 2",
+            "<b>remaining_days<sub>i</sub></b> = max(365 − age<sub>i</sub>, 0)",
+            "<b>midpoint_days<sub>i</sub></b> = remaining_days<sub>i</sub> / 2",
             "<b>Yfact<sub>i</sub></b> = paid_to_date<sub>i</sub>",
-            "<b>YH<sub>i</sub></b> = paid_to_date<sub>i</sub> + "
-            "remaining<sub>i</sub> / (1+r)<sup>midpoint_days<sub>i,H</sub>/365</sup>",
+            "<b>Y365<sub>i</sub></b> = paid_to_date<sub>i</sub> + "
+            "remaining<sub>i</sub> / (1+r)<sup>midpoint_days<sub>i</sub>/365</sup>",
         ],
         f"OD = СуммаОсновногоДолгаЗаявлено; q=1 без соглашения и "
         f"q={result.residual_share:.0%} при соглашении; r={result.discount_rate:.0%}; "
-        "age=(t_calc−t0) в днях.",
+        "age=(t_calc−t0) в днях. Горизонт расчёта — только 365 дней.",
     )}
     <h3>Что означают remaining и midpoint</h3>
     <p><b>remaining</b> — ещё не проявившийся хвост ПСР (номинал). Это не дисконт,
     а «сколько ещё может прийти» после вычитания уже видимых претензии/ФУ/суда.</p>
     <p><b>midpoint</b> — упрощение срока будущего платежа: хвост считается
-    поступившим в середине оставшегося окна до горизонта H.
+    поступившим в середине оставшегося окна до горизонта 365 дней.
     Дисконтирование здесь — NPV (приведение будущих рублей к сегодняшним),
-    а не рост ПСР со временем. Поэтому при одном и том же remaining
-    Y1095 может быть меньше Y365: тот же хвост дальше по времени → ниже
-    сегодняшняя стоимость.</p>
+    а не рост ПСР со временем.</p>
     <div class="formula">
       <b>Числовые примеры remaining</b>
       <div class="eq">Без соглашения: q=1, expected=100 000, observed=20 000 →
@@ -609,20 +607,16 @@ def build_monitoring_html(
       remaining = 0</div>
     </div>
     <div class="formula">
-      <b>Пример midpoint / NPV</b>
+      <b>Пример midpoint / NPV для Y365</b>
       <div class="eq">age=184, remaining=80 000, paid=50 000, r=12%</div>
-      <div class="eq">H=365: remaining_days=181, midpoint=90.5,
-      DF≈1.028 → Y365 ≈ 50 000 + 77 821 = 127 821</div>
-      <div class="eq">H=1095: remaining_days=911, midpoint=455.5,
-      DF≈1.154 → Y1095 ≈ 50 000 + 69 324 = 119 324</div>
-      <div class="note">Y365 &gt; Y1095 при одинаковом remaining — ожидаемо для NPV,
-      это не означает, что за 3 года ПСР меньше, чем за 1 год.</div>
+      <div class="eq">remaining_days=181, midpoint=90.5, DF≈1.028 →
+      Y365 ≈ 50 000 + 77 821 = 127 821</div>
     </div>
     <h3>Итоги control / model</h3>
     {_table(
       result.group_summary,
       columns={
-        "horizon": "Горизонт: fact / 365 / 1095",
+        "horizon": "Горизонт: fact / 365",
         "group": "Группа: control или model",
         "n": "Число убытков",
         "sum_cost": "Сумма исхода YH по группе, ₽",
@@ -641,7 +635,7 @@ def build_monitoring_html(
     {_table(
       result.effect_summary,
       columns={
-        "horizon": "Горизонт: fact / 365 / 1095",
+        "horizon": "Горизонт: fact / 365",
         "effect_per_case": "ITT: mean(control) − mean(model), взвешенно по филиалам, ₽/убыток",
         "unstratified_effect": "Та же разность без взвешивания по филиалам, ₽/убыток",
         "n_weighted": "Сумма весов филиалов (число eligible-убытков)",
@@ -651,7 +645,7 @@ def build_monitoring_html(
         "n_bootstrap": "Число успешных bootstrap-повторений",
       },
       rows=[
-        "Одна строка на горизонт fact / 365 / 1095.",
+        "Одна строка на горизонт fact / 365.",
       ],
     )}
     <h3>Вклад филиалов</h3>
@@ -708,7 +702,7 @@ def build_monitoring_html(
   <div class="card">
     <h3>A. As-complied — только описательная диагностика (Yfact)</h3>
     <p>Сравнение внутри model и <code>РезультатПроверки=1</code> только по факту.
-    Не является причинным эффектом; горизонты 365/1095 здесь не считаются.</p>
+    Не является причинным эффектом; горизонт 365 здесь не считается.</p>
     {_table(
       result.compliance_a,
       columns={
@@ -732,7 +726,7 @@ def build_monitoring_html(
             "<b>forced_extra<sub>i</sub></b> = рекомендованная доплата, если "
             "model, result=1 и Выплата по модели≠1; иначе 0",
             "<b>Yfact_100<sub>i</sub></b> = СуммаПлатежа<sub>i</sub> + forced_extra<sub>i</sub>",
-            "для всех model/result=1: q<sub>i</sub>=7%; затем Y365_100 и Y1095_100",
+            "для всех model/result=1: q<sub>i</sub>=7%; затем Y365_100",
             "<b>effect_100(H)</b> = stratified mean(control actual) − mean(model scenario)",
         ],
         "Сценарная механика, не LATE/IV. CI — отдельный bootstrap на Y*_100.",
@@ -787,7 +781,7 @@ def build_monitoring_html(
             "<b>annual_network_full</b> = effect_per_case × N_pilot_eligible_year × network_multiplier",
             "<b>annual CI</b> = [ci_low, ci_high] × N_pilot_eligible_year × network_multiplier",
         ],
-        "Горизонт Y365/Y1095 не умножается на 365/30: масштабируется число новых убытков. "
+        "Горизонт Y365 не умножается на 365/30: масштабируется число новых убытков. "
         "CI годового эффекта — линейный перенос bootstrap CI с уровня убытка.",
     )}
     <h3>Зачем сезонность и откуда берутся числа</h3>
@@ -849,7 +843,7 @@ def build_monitoring_html(
         "annual_network_full_compliance": "Годовой эффект сети при 100% compliance, ₽/год",
       },
       rows=[
-        "Одна строка на горизонт fact / 365 / 1095.",
+        "Одна строка на горизонт fact / 365.",
         "CI годового эффекта = CI эффекта на убыток × N_pilot_eligible_year × network_multiplier.",
       ],
     )}
@@ -859,9 +853,9 @@ def build_monitoring_html(
   <div class="card">
     <ul>
       <li><b>ITT</b> — эффект назначения в model-поток, включая фактический non-compliance.</li>
-      <li><b>Y365/Y1095</b> — Yfact плюс модельный NPV остатка; это не полностью
-      дозревшие фактические горизонты.</li>
-      <li>Терминальные priors не содержат раздельных 365/1095 таргетов.</li>
+      <li><b>Y365</b> — Yfact плюс модельный NPV остатка; это не полностью
+      дозревший фактический горизонт.</li>
+      <li>Терминальные priors не содержат отдельного 365-таргета вызревания.</li>
       <li>В мониторинге OD — <code>СуммаОсновногоДолгаЗаявлено</code>, а k_U
       калибруется на <code>RECOVEREDMAINDEBT_LAST_INST_SUM</code>.</li>
       <li>7% — экспертное допущение; midpoint — упрощение времени будущего хвоста.</li>
@@ -894,7 +888,7 @@ def build_conclusion_html(
   как «файл №2» — по нему будет подготовлено краткое бизнес-заключение:</p>
   <ul>
     <li>есть ли подтверждённая экономия;</li>
-    <li>что означают Yфакт / Y365 / Y1095;</li>
+    <li>что означают Yфакт / Y365;</li>
     <li>какой годовой сценарий можно и нельзя обещать;</li>
     <li>какие риски и следующие шаги.</li>
   </ul>
