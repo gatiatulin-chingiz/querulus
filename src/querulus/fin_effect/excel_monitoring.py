@@ -157,6 +157,8 @@ class MonitoringEffectResult:
     residual_share: float
     bootstrap_iterations: int
     bootstrap_compliance_iterations: int
+    bootstrap_samples: pd.DataFrame = field(default_factory=pd.DataFrame)
+    bootstrap_compliance_samples: pd.DataFrame = field(default_factory=pd.DataFrame)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -608,9 +610,11 @@ def _bootstrap_ci(
     seed: int,
     compliance_100: bool = False,
     progress_desc: str = "bootstrap ITT",
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    empty_ci = pd.DataFrame(columns=["horizon", "ci_low", "ci_high", "n_bootstrap"])
+    empty_samples = pd.DataFrame(columns=["horizon", "effect_per_case"])
     if iterations <= 0:
-        return pd.DataFrame(columns=["horizon", "ci_low", "ci_high", "n_bootstrap"])
+        return empty_ci, empty_samples
     try:
         from tqdm.auto import tqdm
     except ImportError:  # pragma: no cover
@@ -648,9 +652,14 @@ def _bootstrap_ci(
             values[str(row["horizon"])].append(float(row["effect_per_case"]))
 
     rows = []
+    sample_rows: list[dict[str, Any]] = []
     for horizon, sample in values.items():
         if sample:
             low, high = np.quantile(sample, [0.025, 0.975])
+            for value in sample:
+                sample_rows.append(
+                    {"horizon": horizon, "effect_per_case": float(value)}
+                )
         else:
             low, high = np.nan, np.nan
         rows.append(
@@ -661,7 +670,7 @@ def _bootstrap_ci(
                 "n_bootstrap": len(sample),
             }
         )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), pd.DataFrame(sample_rows)
 
 
 def _compliance_a(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1072,7 +1081,7 @@ def estimate_monitoring_effect(
     )
     group_summary, filial_effects, effects = _summaries(current)
 
-    ci = _bootstrap_ci(
+    ci, bootstrap_samples = _bootstrap_ci(
         current,
         retro_df,
         pilot_filials=pilot_filials,
@@ -1096,7 +1105,7 @@ def estimate_monitoring_effect(
     )
     _, _, compliance_b = _summaries(current_100, suffix="_100")
     compliance_b["scenario"] = "100% compliance for model result=1"
-    compliance_ci = _bootstrap_ci(
+    compliance_ci, bootstrap_compliance_samples = _bootstrap_ci(
         current,
         retro_df,
         pilot_filials=pilot_filials,
@@ -1193,6 +1202,8 @@ def estimate_monitoring_effect(
         residual_share=residual_share,
         bootstrap_iterations=bootstrap_iterations,
         bootstrap_compliance_iterations=bootstrap_compliance_iterations,
+        bootstrap_samples=bootstrap_samples,
+        bootstrap_compliance_samples=bootstrap_compliance_samples,
         warnings=warnings,
     )
 

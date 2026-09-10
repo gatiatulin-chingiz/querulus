@@ -14,7 +14,7 @@ from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_
 PLAN_FILENAME = "fin_effect_plan.html"
 REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
-FORMULA_VERSION = "ITT-U-2026-09-10-v6"
+FORMULA_VERSION = "ITT-U-2026-09-10-v7"
 
 _CSS = """
 :root {
@@ -41,6 +41,16 @@ p { margin:.35rem 0; }
   display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
   gap:.5rem; margin:.55rem 0;
 }
+.charts {
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr));
+  gap:.75rem; margin:.55rem 0;
+}
+.chart {
+  background:#fff; border:1px solid var(--line); border-radius:8px;
+  padding:.55rem .65rem;
+}
+.chart img { width:100%; height:auto; display:block; }
+.chart .cap { color:var(--muted); font-size:.8rem; margin-top:.35rem; }
 .stat { background:#fbfbf9; border:1px solid var(--line); padding:.6rem; border-radius:7px; }
 .stat span { display:block; color:var(--muted); font-size:.78rem; }
 .stat b { font-size:1.05rem; font-variant-numeric:tabular-nums; }
@@ -131,6 +141,320 @@ def _fmt_number(value: Any) -> str:
     if isinstance(value, pd.Timestamp):
         return value.isoformat()
     return str(value)
+
+
+def _fig_to_img(fig: Any, *, alt: str, caption: str = "") -> str:
+    import base64
+    import io
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="png", dpi=120, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    cap = f'<div class="cap">{escape(caption)}</div>' if caption else ""
+    return (
+        f'<div class="chart"><img alt="{escape(alt)}" '
+        f'src="data:image/png;base64,{encoded}"/>{cap}</div>'
+    )
+
+
+def _style_axes(ax: Any) -> None:
+    ax.set_facecolor("#fbfbf9")
+    ax.grid(True, axis="y", color="#d9d4c9", linewidth=0.7, alpha=0.8)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.tick_params(colors="#5f696a", labelsize=8)
+
+
+def _chart_bootstrap_hist(
+    samples: pd.DataFrame,
+    effects: pd.DataFrame,
+    *,
+    title: str,
+) -> str:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if samples is None or samples.empty:
+        return ""
+    horizons = [h for h in ("fact", "365") if h in set(samples["horizon"].astype(str))]
+    if not horizons:
+        return ""
+    effect_idx = effects.set_index("horizon") if not effects.empty else None
+    fig, axes = plt.subplots(1, len(horizons), figsize=(5.2 * len(horizons), 3.4))
+    if len(horizons) == 1:
+        axes = [axes]
+    for ax, horizon in zip(axes, horizons):
+        part = samples.loc[samples["horizon"].astype(str).eq(horizon), "effect_per_case"]
+        values = pd.to_numeric(part, errors="coerce").dropna().to_numpy(dtype=float)
+        if values.size == 0:
+            ax.set_visible(False)
+            continue
+        ax.hist(
+            values,
+            bins=min(40, max(10, values.size // 20)),
+            color="#075f66",
+            alpha=0.72,
+            edgecolor="white",
+            linewidth=0.4,
+        )
+        ax.axvline(0.0, color="#8a2d21", linestyle="--", linewidth=1.2, label="0")
+        if effect_idx is not None and horizon in effect_idx.index:
+            point = float(effect_idx.loc[horizon, "effect_per_case"])
+            low = float(effect_idx.loc[horizon, "ci_low"])
+            high = float(effect_idx.loc[horizon, "ci_high"])
+            ax.axvline(point, color="#2f6b3a", linewidth=1.6, label="point")
+            if pd.notna(low):
+                ax.axvline(low, color="#6b5b4b", linestyle=":", linewidth=1.2, label="CI")
+            if pd.notna(high):
+                ax.axvline(high, color="#6b5b4b", linestyle=":", linewidth=1.2)
+        ax.set_title(f"Y{horizon}", color="#075f66", fontsize=10)
+        ax.set_xlabel("effect_per_case, ₽")
+        ax.set_ylabel("число bootstrap")
+        _style_axes(ax)
+        ax.legend(fontsize=7, frameon=False, loc="upper right")
+    fig.suptitle(title, color="#075f66", fontsize=11, y=1.02)
+    fig.tight_layout()
+    return _fig_to_img(
+        fig,
+        alt=title,
+        caption="Гистограмма bootstrap effect_per_case; пунктир — 0, "
+        "зелёная линия — точечная оценка, коричневые — границы 95% CI.",
+    )
+
+
+def _chart_filial_effects(filial_effects: pd.DataFrame) -> str:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if filial_effects is None or filial_effects.empty:
+        return ""
+    part = filial_effects.loc[filial_effects["horizon"].astype(str).eq("365")].copy()
+    if part.empty:
+        part = filial_effects.loc[filial_effects["horizon"].astype(str).eq("fact")].copy()
+    if part.empty:
+        return ""
+    part = part.sort_values("effect_control_minus_model")
+    fig, ax = plt.subplots(figsize=(7.2, max(3.2, 0.32 * len(part) + 1.2)))
+    colors = [
+        "#2f6b3a" if float(v) >= 0 else "#8a2d21"
+        for v in part["effect_control_minus_model"]
+    ]
+    ax.barh(
+        part["filial"].astype(str),
+        part["effect_control_minus_model"].astype(float),
+        color=colors,
+        alpha=0.85,
+    )
+    ax.axvline(0.0, color="#5f696a", linewidth=1.0)
+    horizon = str(part["horizon"].iloc[0])
+    ax.set_title(f"ITT по филиалам, Y{horizon}", color="#075f66", fontsize=11)
+    ax.set_xlabel("effect control − model, ₽")
+    _style_axes(ax)
+    fig.tight_layout()
+    return _fig_to_img(
+        fig,
+        alt="ITT по филиалам",
+        caption="Зелёный — экономия (control дороже model), красный — model дороже.",
+    )
+
+
+def _chart_path_shares(path_shares: pd.DataFrame) -> str:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if path_shares is None or path_shares.empty:
+        return ""
+    metrics = [
+        ("agreement_share", "Соглашения"),
+        ("pretension_share", "Претензии"),
+        ("fu_incident_share", "ФУ"),
+        ("court_incident_share", "Суд"),
+    ]
+    base = path_shares.loc[
+        path_shares["segment"].astype(str).isin(["control", "model"])
+    ].copy()
+    if base.empty:
+        return ""
+    labels = [label for _, label in metrics]
+    control_vals = []
+    model_vals = []
+    for col, _ in metrics:
+        control_vals.append(
+            float(
+                pd.to_numeric(
+                    base.loc[base["segment"].eq("control"), col], errors="coerce"
+                ).iloc[0]
+            )
+            if base["segment"].eq("control").any() and col in base.columns
+            else 0.0
+        )
+        model_vals.append(
+            float(
+                pd.to_numeric(
+                    base.loc[base["segment"].eq("model"), col], errors="coerce"
+                ).iloc[0]
+            )
+            if base["segment"].eq("model").any() and col in base.columns
+            else 0.0
+        )
+    x = np.arange(len(labels))
+    width = 0.36
+    fig, ax = plt.subplots(figsize=(6.4, 3.4))
+    ax.bar(x - width / 2, control_vals, width, label="control", color="#6b5b4b")
+    ax.bar(x + width / 2, model_vals, width, label="model", color="#0b5f66")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("%")
+    ax.set_title("Доли путей: control vs model", color="#075f66", fontsize=11)
+    ax.legend(frameon=False, fontsize=8)
+    _style_axes(ax)
+    fig.tight_layout()
+    return _fig_to_img(
+        fig,
+        alt="Доли путей",
+        caption="Доли соглашений / претензий / ФУ / суда в ITT-выборке.",
+    )
+
+
+def _chart_group_means(group_summary: pd.DataFrame) -> str:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if group_summary is None or group_summary.empty:
+        return ""
+    horizons = [
+        h for h in ("fact", "365") if h in set(group_summary["horizon"].astype(str))
+    ]
+    if not horizons:
+        return ""
+    control = []
+    model = []
+    for horizon in horizons:
+        part = group_summary.loc[group_summary["horizon"].astype(str).eq(horizon)]
+        control.append(
+            float(part.loc[part["group"].eq("control"), "mean_cost"].iloc[0])
+            if part["group"].eq("control").any()
+            else np.nan
+        )
+        model.append(
+            float(part.loc[part["group"].eq("model"), "mean_cost"].iloc[0])
+            if part["group"].eq("model").any()
+            else np.nan
+        )
+    x = np.arange(len(horizons))
+    width = 0.36
+    fig, ax = plt.subplots(figsize=(5.8, 3.4))
+    ax.bar(x - width / 2, control, width, label="control", color="#6b5b4b")
+    ax.bar(x + width / 2, model, width, label="model", color="#0b5f66")
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"Y{h}" for h in horizons])
+    ax.set_ylabel("mean cost, ₽")
+    ax.set_title("Средний расход control / model", color="#075f66", fontsize=11)
+    ax.legend(frameon=False, fontsize=8)
+    _style_axes(ax)
+    fig.tight_layout()
+    return _fig_to_img(
+        fig,
+        alt="Средний расход",
+        caption="Сравнение среднего YH: сначала control, затем model.",
+    )
+
+
+def _chart_annual_ci(annual_summary: pd.DataFrame) -> str:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if annual_summary is None or annual_summary.empty:
+        return ""
+    part = annual_summary.loc[annual_summary["horizon"].astype(str).eq("365")]
+    if part.empty:
+        part = annual_summary.iloc[[0]]
+    row = part.iloc[0]
+    point = float(row["annual_network_full"])
+    low = float(row.get("annual_network_full_ci_low", np.nan))
+    high = float(row.get("annual_network_full_ci_high", np.nan))
+    fig, ax = plt.subplots(figsize=(5.8, 2.8))
+    if pd.notna(low) and pd.notna(high):
+        ax.errorbar(
+            [point],
+            [0],
+            xerr=[[max(0.0, point - low)], [max(0.0, high - point)]],
+            fmt="o",
+            color="#075f66",
+            ecolor="#6b5b4b",
+            elinewidth=2,
+            capsize=6,
+            markersize=8,
+        )
+    else:
+        ax.plot([point], [0], "o", color="#075f66", markersize=8)
+    ax.axvline(0.0, color="#8a2d21", linestyle="--", linewidth=1.1)
+    ax.set_yticks([])
+    ax.set_xlabel("₽ / год")
+    ax.set_title(
+        f"Годовой эффект сети, Y{row['horizon']}",
+        color="#075f66",
+        fontsize=11,
+    )
+    _style_axes(ax)
+    fig.tight_layout()
+    return _fig_to_img(
+        fig,
+        alt="Годовой эффект сети",
+        caption="Точка — annual_network_full; усы — 95% CI (линейный перенос с /убыток).",
+    )
+
+
+def _charts_section(result: MonitoringEffectResult) -> str:
+    try:
+        import matplotlib  # noqa: F401
+    except ImportError:
+        return (
+            "<p class='muted'>Графики пропущены: пакет <code>matplotlib</code> "
+            "не установлен в окружении.</p>"
+        )
+    try:
+        blocks = [
+            _chart_bootstrap_hist(
+                result.bootstrap_samples,
+                result.effect_summary,
+                title="Распределение bootstrap ITT",
+            ),
+            _chart_bootstrap_hist(
+                result.bootstrap_compliance_samples,
+                result.compliance_b,
+                title="Распределение bootstrap: 100% compliance",
+            ),
+            _chart_filial_effects(result.filial_effects),
+            _chart_path_shares(result.path_shares),
+            _chart_group_means(result.group_summary),
+            _chart_annual_ci(result.annual_summary),
+        ]
+    except Exception as exc:  # noqa: BLE001
+        return (
+            f"<p class='muted'>Графики не построены: "
+            f"{escape(type(exc).__name__)}: {escape(str(exc))}</p>"
+        )
+    blocks = [block for block in blocks if block]
+    if not blocks:
+        return "<p class='muted'>Графики недоступны: нет данных для отрисовки.</p>"
+    return '<div class="charts">' + "".join(blocks) + "</div>"
 
 
 def _table(
@@ -443,6 +767,8 @@ def build_monitoring_html(
   <h2>1. Главный результат</h2>
   <div class="card">
     {_headline(result)}
+    <h3>Графики</h3>
+    {_charts_section(result)}
     {_formula(
         "Ключевой ITT estimand",
         [
