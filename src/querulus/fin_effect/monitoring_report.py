@@ -1020,7 +1020,7 @@ def build_monitoring_html(
         f"ITT: запрошено {result.bootstrap_iterations} итераций. "
         f"Сценарий 100% compliance: "
         f"{result.bootstrap_compliance_iterations} итераций. "
-        "Прогресс bootstrap виден в tqdm при запуске notebook.",
+        "Bootstrap параллелится (bootstrap_n_jobs); прогресс — в tqdm.",
     )}
   </div>
 

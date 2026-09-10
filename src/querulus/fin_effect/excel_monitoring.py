@@ -212,7 +212,7 @@ def filter_retro_lookback(
         "lookback_years": lookback_years,
     }
     if date_column is None or not lookback_years:
-        return df.copy(), meta
+        return df, meta
 
     dates = pd.to_datetime(df[date_column], errors="coerce")
     end = pd.Timestamp(as_of) if as_of is not None else dates.max()
@@ -230,6 +230,233 @@ def filter_retro_lookback(
         }
     )
     return work, meta
+
+
+def _resolve_n_jobs(n_jobs: int | None) -> int:
+    import os
+
+    cpu = os.cpu_count() or 2
+    if n_jobs is None or n_jobs < 0:
+        return max(1, cpu - 1)
+    return max(1, int(n_jobs))
+
+
+_BOOTSTRAP_WORKER: dict[str, Any] = {}
+
+
+def _bootstrap_worker_init(payload: dict[str, Any]) -> None:
+    """Инициализация процесса/потока: общие данные без pickle на каждую итерацию."""
+    _BOOTSTRAP_WORKER.clear()
+    _BOOTSTRAP_WORKER.update(payload)
+    current = payload["current"]
+    _BOOTSTRAP_WORKER["incident_groups"] = [
+        part for _, part in current.groupby("_incident", dropna=False)
+    ]
+
+
+def _pilot_priors_fast(
+    work: pd.DataFrame,
+    *,
+    pilot_norm: set[str],
+    filial_col: str,
+    amount_col: str,
+    od_col: str,
+    fu_col: str,
+    court_col: str,
+    pilot_names: tuple[str, ...],
+) -> GroupRetroPriors:
+    is_pilot = _normalize_text(work[filial_col]).isin(pilot_norm)
+    pilot_df = work.loc[is_pilot]
+    return _group_retro_priors(
+        pilot_df,
+        group="pilot",
+        filials=pilot_names,
+        amount_col=amount_col,
+        od_col=od_col,
+        fu_col=fu_col,
+        court_col=court_col,
+    )
+
+
+def _bootstrap_one_seed(seed: int) -> dict[str, float] | None:
+    """Одна bootstrap-итерация; использует `_BOOTSTRAP_WORKER`."""
+    ctx = _BOOTSTRAP_WORKER
+    rng = np.random.default_rng(seed)
+    retro = ctx["retro"]
+    groups: list[pd.DataFrame] = ctx["incident_groups"]
+    try:
+        retro_sample = retro.iloc[rng.integers(0, len(retro), size=len(retro))]
+        pilot = _pilot_priors_fast(
+            retro_sample,
+            pilot_norm=ctx["pilot_norm"],
+            filial_col=ctx["filial_col"],
+            amount_col=ctx["amount_col"],
+            od_col=ctx["od_col"],
+            fu_col=ctx["fu_col"],
+            court_col=ctx["court_col"],
+            pilot_names=ctx["pilot_names"],
+        )
+        picks = rng.integers(0, len(groups), size=len(groups))
+        current_sample = pd.concat([groups[index] for index in picks], ignore_index=True)
+        outcomes = _add_outcomes(
+            current_sample,
+            pilot,
+            residual_share=ctx["residual_share"],
+            discount_rate=ctx["discount_rate"],
+            compliance_100=ctx["compliance_100"],
+        )
+        _, _, effects = _summaries(outcomes, suffix=ctx["suffix"])
+    except (KeyError, ValueError, ZeroDivisionError):
+        return None
+    return {
+        str(row["horizon"]): float(row["effect_per_case"])
+        for row in effects.to_dict("records")
+    }
+
+
+def _cluster_resample(
+    frame: pd.DataFrame,
+    rng: np.random.Generator,
+    *,
+    incident_groups: list[pd.DataFrame] | None = None,
+) -> pd.DataFrame:
+    groups = incident_groups or [
+        part for _, part in frame.groupby("_incident", dropna=False)
+    ]
+    picks = rng.integers(0, len(groups), size=len(groups))
+    return pd.concat([groups[index] for index in picks], ignore_index=True)
+
+
+def _bootstrap_ci(
+    current: pd.DataFrame,
+    retro: pd.DataFrame,
+    *,
+    pilot_filials: tuple[str, ...],
+    lookback_years: float | None,
+    as_of: str | pd.Timestamp | None,
+    residual_share: float,
+    discount_rate: float,
+    iterations: int,
+    seed: int,
+    compliance_100: bool = False,
+    progress_desc: str = "bootstrap ITT",
+    n_jobs: int | None = -1,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    empty_ci = pd.DataFrame(columns=["horizon", "ci_low", "ci_high", "n_bootstrap"])
+    empty_samples = pd.DataFrame(columns=["horizon", "effect_per_case"])
+    if iterations <= 0:
+        return empty_ci, empty_samples
+
+    # Ретро уже режем один раз: внутри bootstrap не повторяем lookback.
+    retro_window, _ = filter_retro_lookback(
+        retro,
+        lookback_years=lookback_years,
+        as_of=as_of,
+    )
+    filial_col = _required_existing(retro_window, RETRO_FILIAL_CANDIDATES, "FILIAL")
+    amount_col = _required_existing(
+        retro_window, ("TARGET_FREQ_AMOUNT",), "TARGET_FREQ_AMOUNT"
+    )
+    od_col = _required_existing(
+        retro_window,
+        ("RECOVEREDMAINDEBT_LAST_INST_SUM",),
+        "RECOVEREDMAINDEBT_LAST_INST_SUM",
+    )
+    fu_col = _required_existing(
+        retro_window, ("Сумма_взыскано_по_ФУ",), "Сумма_взыскано_по_ФУ"
+    )
+    court_col = _required_existing(
+        retro_window, ("Суммы_взыскано_по_иску",), "Суммы_взыскано_по_иску"
+    )
+    pilot_names = tuple(sorted({str(value).strip() for value in pilot_filials}))
+    payload = {
+        "current": current,
+        "retro": retro_window,
+        "residual_share": residual_share,
+        "discount_rate": discount_rate,
+        "compliance_100": compliance_100,
+        "suffix": "_100" if compliance_100 else "",
+        "pilot_names": pilot_names,
+        "pilot_norm": {value.casefold() for value in pilot_names},
+        "filial_col": filial_col,
+        "amount_col": amount_col,
+        "od_col": od_col,
+        "fu_col": fu_col,
+        "court_col": court_col,
+    }
+    seeds = [int(seed) + i for i in range(iterations)]
+    workers = _resolve_n_jobs(n_jobs)
+    results: list[dict[str, float] | None]
+
+    try:
+        from tqdm.auto import tqdm
+    except ImportError:  # pragma: no cover
+        tqdm = None  # type: ignore[assignment]
+
+    if workers == 1:
+        _bootstrap_worker_init(payload)
+        iterator: Any = seeds
+        if tqdm is not None:
+            iterator = tqdm(seeds, total=iterations, desc=progress_desc, leave=True)
+        results = [_bootstrap_one_seed(item) for item in iterator]
+    else:
+        from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+
+        def _collect(executor_cls: Any, init: bool) -> list[dict[str, float] | None]:
+            collected: list[dict[str, float] | None] = []
+            kwargs: dict[str, Any] = {"max_workers": workers}
+            if init:
+                kwargs["initializer"] = _bootstrap_worker_init
+                kwargs["initargs"] = (payload,)
+            else:
+                _bootstrap_worker_init(payload)
+            with executor_cls(**kwargs) as pool:
+                futures = [pool.submit(_bootstrap_one_seed, item) for item in seeds]
+                done = as_completed(futures)
+                if tqdm is not None:
+                    done = tqdm(
+                        done,
+                        total=iterations,
+                        desc=f"{progress_desc}×{workers}",
+                        leave=True,
+                    )
+                for future in done:
+                    collected.append(future.result())
+            return collected
+
+        try:
+            # Процессы лучше для pandas (GIL); данные в initializer один раз на worker.
+            results = _collect(ProcessPoolExecutor, init=True)
+        except Exception:
+            results = _collect(ThreadPoolExecutor, init=False)
+
+    values: dict[str, list[float]] = {"fact": [], "365": []}
+    for item in results:
+        if not item:
+            continue
+        for horizon, value in item.items():
+            values.setdefault(horizon, []).append(float(value))
+
+    rows = []
+    sample_rows: list[dict[str, Any]] = []
+    for horizon, sample in values.items():
+        if sample:
+            low, high = np.quantile(sample, [0.025, 0.975])
+            for value in sample:
+                sample_rows.append(
+                    {"horizon": horizon, "effect_per_case": float(value)}
+                )
+        else:
+            low, high = np.nan, np.nan
+        rows.append(
+            {
+                "horizon": horizon,
+                "ci_low": float(low),
+                "ci_high": float(high),
+                "n_bootstrap": len(sample),
+            }
+        )
+    return pd.DataFrame(rows), pd.DataFrame(sample_rows)
 
 
 def _group_retro_priors(
@@ -585,92 +812,6 @@ def _summaries(
         ),
         pd.DataFrame(effect_rows),
     )
-
-
-def _cluster_resample(
-    frame: pd.DataFrame,
-    rng: np.random.Generator,
-) -> pd.DataFrame:
-    groups = [part for _, part in frame.groupby("_incident", dropna=False)]
-    picks = rng.integers(0, len(groups), size=len(groups))
-    sampled = [groups[index].copy() for index in picks]
-    return pd.concat(sampled, ignore_index=True)
-
-
-def _bootstrap_ci(
-    current: pd.DataFrame,
-    retro: pd.DataFrame,
-    *,
-    pilot_filials: tuple[str, ...],
-    lookback_years: float | None,
-    as_of: str | pd.Timestamp | None,
-    residual_share: float,
-    discount_rate: float,
-    iterations: int,
-    seed: int,
-    compliance_100: bool = False,
-    progress_desc: str = "bootstrap ITT",
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    empty_ci = pd.DataFrame(columns=["horizon", "ci_low", "ci_high", "n_bootstrap"])
-    empty_samples = pd.DataFrame(columns=["horizon", "effect_per_case"])
-    if iterations <= 0:
-        return empty_ci, empty_samples
-    try:
-        from tqdm.auto import tqdm
-    except ImportError:  # pragma: no cover
-        tqdm = None  # type: ignore[assignment]
-
-    rng = np.random.default_rng(seed)
-    values: dict[str, list[float]] = {"fact": [], "365": []}
-    iterator = range(iterations)
-    if tqdm is not None:
-        iterator = tqdm(iterator, total=iterations, desc=progress_desc, leave=True)
-    suffix = "_100" if compliance_100 else ""
-    for _ in iterator:
-        retro_sample = retro.iloc[
-            rng.integers(0, len(retro), size=len(retro))
-        ].reset_index(drop=True)
-        try:
-            priors = compute_terminal_priors(
-                retro_sample,
-                pilot_filials=pilot_filials,
-                lookback_years=lookback_years,
-                as_of=as_of,
-            )
-            current_sample = _cluster_resample(current, rng)
-            outcomes = _add_outcomes(
-                current_sample,
-                priors.pilot,
-                residual_share=residual_share,
-                discount_rate=discount_rate,
-                compliance_100=compliance_100,
-            )
-            _, _, effects = _summaries(outcomes, suffix=suffix)
-        except (KeyError, ValueError, ZeroDivisionError):
-            continue
-        for row in effects.to_dict("records"):
-            values[str(row["horizon"])].append(float(row["effect_per_case"]))
-
-    rows = []
-    sample_rows: list[dict[str, Any]] = []
-    for horizon, sample in values.items():
-        if sample:
-            low, high = np.quantile(sample, [0.025, 0.975])
-            for value in sample:
-                sample_rows.append(
-                    {"horizon": horizon, "effect_per_case": float(value)}
-                )
-        else:
-            low, high = np.nan, np.nan
-        rows.append(
-            {
-                "horizon": horizon,
-                "ci_low": float(low),
-                "ci_high": float(high),
-                "n_bootstrap": len(sample),
-            }
-        )
-    return pd.DataFrame(rows), pd.DataFrame(sample_rows)
 
 
 def _compliance_a(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1055,6 +1196,7 @@ def estimate_monitoring_effect(
     bootstrap_iterations: int = 1000,
     bootstrap_compliance_iterations: int = 200,
     bootstrap_seed: int = 42,
+    bootstrap_n_jobs: int | None = -1,
 ) -> MonitoringEffectResult:
     """Выполнить ITT, compliance-сценарии, CI и сезонную экстраполяцию."""
     if not 0 <= residual_share <= 1:
@@ -1092,6 +1234,7 @@ def estimate_monitoring_effect(
         iterations=bootstrap_iterations,
         seed=bootstrap_seed,
         progress_desc="bootstrap ITT",
+        n_jobs=bootstrap_n_jobs,
     )
     effects = effects.merge(ci, on="horizon", how="left")
 
@@ -1117,6 +1260,7 @@ def estimate_monitoring_effect(
         seed=bootstrap_seed + 1,
         compliance_100=True,
         progress_desc="bootstrap compliance-100",
+        n_jobs=bootstrap_n_jobs,
     )
     compliance_b = compliance_b.merge(compliance_ci, on="horizon", how="left")
 
