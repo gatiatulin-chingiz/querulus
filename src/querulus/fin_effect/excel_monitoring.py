@@ -16,7 +16,12 @@ from querulus.fin_effect.excel_explore import (
     resolve_column,
     resolve_model_payout_loss_column,
 )
-from querulus.fin_effect.monitoring_analytics import agreement_mask
+from querulus.fin_effect.monitoring_analytics import (
+    agreement_mask,
+    compare_path_shares,
+    filial_path_shares,
+    shares_as_percent,
+)
 
 FU_FEE_DEFAULT = 100_000.0
 COURT_FEE_DEFAULT = 15_000.0
@@ -143,6 +148,8 @@ class MonitoringEffectResult:
     annual_summary: pd.DataFrame
     seasonality: pd.DataFrame
     data_quality: pd.DataFrame
+    path_shares: pd.DataFrame
+    filial_path_shares: pd.DataFrame
     contract: dict[str, str]
     t_calc: pd.Timestamp
     discount_rate: float
@@ -1010,6 +1017,13 @@ def estimate_monitoring_effect(
             "в outcome используется только СуммаПлатежа."
         )
 
+    path_shares = shares_as_percent(
+        compare_path_shares(monitoring_df, filial_scope="pilot", variant=1)
+    )
+    filial_paths = shares_as_percent(
+        filial_path_shares(monitoring_df, filial_scope="pilot", variant=1)
+    )
+
     calc_date = (
         pd.Timestamp(t_calc).normalize()
         if t_calc is not None
@@ -1027,6 +1041,8 @@ def estimate_monitoring_effect(
         annual_summary=annual,
         seasonality=seasonality,
         data_quality=data_quality,
+        path_shares=path_shares,
+        filial_path_shares=filial_paths,
         contract=contract,
         t_calc=calc_date,
         discount_rate=discount_rate,
