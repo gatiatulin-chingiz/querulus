@@ -263,8 +263,8 @@ def compare_path_shares(
         return path_share_table(
             df,
             [
-                ("model", model_rucheek_mask(df, filial_scope=filial_scope)),
                 ("control", control_mask(df, filial_scope=filial_scope)),
+                ("model", model_rucheek_mask(df, filial_scope=filial_scope)),
             ],
             lift_from="model",
             lift_to="control",
@@ -405,8 +405,8 @@ def filial_path_shares(
         in_f = base & df.index.isin(idx)
         if variant == 1:
             segs = (
-                ("model", in_f & model_rucheek_mask(df, filial_scope=filial_scope)),
                 ("control", in_f & control_mask(df, filial_scope=filial_scope)),
+                ("model", in_f & model_rucheek_mask(df, filial_scope=filial_scope)),
             )
         else:
             cases = variant2_case_masks(df, filial_scope=filial_scope)
@@ -423,7 +423,13 @@ def filial_path_shares(
                 )
             )
     out = pd.DataFrame(rows)
-    return out.sort_values(["filial", "segment"]).reset_index(drop=True) if not out.empty else out
+    if out.empty:
+        return out
+    if variant == 1:
+        segment_order = pd.CategoricalDtype(["control", "model"], ordered=True)
+        out["segment"] = out["segment"].astype(segment_order)
+        return out.sort_values(["filial", "segment"]).reset_index(drop=True)
+    return out.sort_values(["filial", "segment"]).reset_index(drop=True)
 
 
 def result_distribution(

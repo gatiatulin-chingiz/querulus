@@ -6,6 +6,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_money
@@ -13,7 +14,7 @@ from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_
 PLAN_FILENAME = "fin_effect_plan.html"
 REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
-FORMULA_VERSION = "ITT-U-2026-09-10-v2"
+FORMULA_VERSION = "ITT-U-2026-09-10-v3"
 
 _CSS = """
 :root {
@@ -98,6 +99,14 @@ li { margin:.18rem 0; }
   text-decoration:none; color:var(--accent); border:1px solid #b7d4d7;
   background:var(--soft); border-radius:999px; padding:.25rem .7rem; font-size:.86rem;
 }
+.legend {
+  background:#fbfbf9; border:1px solid var(--line); border-radius:7px;
+  padding:.55rem .7rem; margin:.35rem 0 .7rem; font-size:.84rem;
+}
+.legend h4 { margin:0 0 .3rem; color:#244f53; font-size:.9rem; }
+.legend ul { margin:.15rem 0 .15rem 1.1rem; }
+.legend li { margin:.12rem 0; color:var(--muted); }
+.legend code { font-size:.82rem; }
 @media (max-width:820px) {
   .compare { grid-template-columns:1fr; }
   .compare .mid { min-height:auto; }
@@ -106,17 +115,70 @@ li { margin:.18rem 0; }
 """
 
 
-def _table(frame: pd.DataFrame | None) -> str:
+def _fmt_number(value: Any) -> str:
+    """Число без научной нотации."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    if isinstance(value, (bool, np.bool_)):
+        return "true" if bool(value) else "false"
+    if isinstance(value, (int, np.integer)) and not isinstance(value, (bool, np.bool_)):
+        return f"{int(value):,}".replace(",", " ")
+    if isinstance(value, (float, np.floating)):
+        number = float(value)
+        if abs(number) >= 1 or number == 0:
+            return f"{number:,.2f}".replace(",", " ")
+        return f"{number:.8f}".rstrip("0").rstrip(".").replace(",", " ")
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    return str(value)
+
+
+def _table(
+    frame: pd.DataFrame | None,
+    *,
+    columns: dict[str, str] | None = None,
+    rows: list[str] | None = None,
+) -> str:
+    """Таблица + легенда колонок и строк под ней."""
     if frame is None or frame.empty:
         return "<p class='muted'>(нет данных)</p>"
     shown = frame.copy()
-    numeric = shown.select_dtypes(include="number").columns
-    shown[numeric] = shown[numeric].round(4)
-    return (
+    for col in shown.columns:
+        series = shown[col]
+
+        def _cell(value: Any) -> Any:
+            if pd.isna(value):
+                return ""
+            if isinstance(value, (bool, np.bool_)):
+                return "true" if bool(value) else "false"
+            if isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(
+                value, (bool, np.bool_)
+            ):
+                return _fmt_number(value)
+            return value
+
+        shown[col] = series.map(_cell)
+    html = (
         '<div class="scroll">'
         + shown.to_html(index=False, border=0, escape=True)
         + "</div>"
     )
+    legend_parts: list[str] = []
+    if columns:
+        present = set(map(str, frame.columns))
+        items = "".join(
+            f"<li><code>{escape(name)}</code> — {escape(desc)}</li>"
+            for name, desc in columns.items()
+            if name in present
+        )
+        if items:
+            legend_parts.append(f"<h4>Колонки</h4><ul>{items}</ul>")
+    if rows:
+        items = "".join(f"<li>{escape(item)}</li>" for item in rows)
+        legend_parts.append(f"<h4>Строки</h4><ul>{items}</ul>")
+    if legend_parts:
+        html += '<div class="legend">' + "".join(legend_parts) + "</div>"
+    return html
 
 
 def _formula(title: str, equations: list[str], note: str = "") -> str:
@@ -245,83 +307,16 @@ def _contract_table(result: MonitoringEffectResult) -> pd.DataFrame:
     )
 
 
-def _glossary() -> pd.DataFrame:
-    return pd.DataFrame(
-        [
-            {
-                "колонка": "effect_per_case",
-                "смысл": "Экономия на один убыток: mean(control) − mean(model), "
-                "взвешенно по филиалам",
-                "единица": "₽ / убыток",
-            },
-            {
-                "колонка": "unstratified_effect",
-                "смысл": "Та же разность без взвешивания по филиалам",
-                "единица": "₽ / убыток",
-            },
-            {
-                "колонка": "ci_low / ci_high",
-                "смысл": "Границы 95% доверительного интервала bootstrap",
-                "единица": "₽ / убыток",
-            },
-            {
-                "колонка": "n_bootstrap",
-                "смысл": "Число успешных bootstrap-повторений",
-                "единица": "шт.",
-            },
-            {
-                "колонка": "agreement_share",
-                "смысл": "Доля убытков с заключённым соглашением",
-                "единица": "%",
-            },
-            {
-                "колонка": "pretension_share",
-                "смысл": "Доля убытков с претензией",
-                "единица": "%",
-            },
-            {
-                "колонка": "fu_incident_share",
-                "смысл": "Доля убытков с обращением к ФУ на уровне инцидента",
-                "единица": "%",
-            },
-            {
-                "колонка": "court_incident_share",
-                "смысл": "Доля убытков с обращением к суду на уровне инцидента",
-                "единица": "%",
-            },
-            {
-                "колонка": "seasonal_exposure",
-                "смысл": "Какую долю типичного года покрывает текущее окно",
-                "единица": "доля 0–1",
-            },
-            {
-                "колонка": "N_pilot_eligible_year",
-                "смысл": "Ожидаемый годовой поток eligible-убытков пилота",
-                "единица": "убытки / год",
-            },
-            {
-                "колонка": "volume_ratio_nonpilot",
-                "смысл": "Во сколько раз годовой поток непилота больше пилота",
-                "единица": "кратно",
-            },
-            {
-                "колонка": "risk_ratio_nonpilot",
-                "смысл": "Отношение среднего ПСР непилота к пилоту",
-                "единица": "кратно",
-            },
-            {
-                "колонка": "network_multiplier",
-                "смысл": "1 + volume_ratio × risk_ratio; переход от пилота к сети",
-                "единица": "кратно",
-            },
-            {
-                "колонка": "annual_network_full",
-                "смысл": "Сценарный годовой эффект сети при 100% rollout пилота "
-                "и переносе на сеть",
-                "единица": "₽ / год",
-            },
-        ]
-    )
+def _path_share_columns() -> dict[str, str]:
+    return {
+        "segment": "Сегмент: control, model или lift",
+        "filial": "Филиал",
+        "n": "Число убытков в сегменте",
+        "agreement_share": "Доля убытков с соглашением, %",
+        "pretension_share": "Доля убытков с претензией, %",
+        "fu_incident_share": "Доля убытков с ФУ на уровне инцидента, %",
+        "court_incident_share": "Доля убытков с судом на уровне инцидента, %",
+    }
 
 
 def _headline(result: MonitoringEffectResult) -> str:
@@ -339,11 +334,14 @@ def _headline(result: MonitoringEffectResult) -> str:
             f"<small>95% CI: {format_money(low)} … {format_money(high)}</small>"
             "</div>"
         )
+    ann = float(annual.loc["1095", "annual_network_full"])
+    ann_low = float(annual.loc["1095", "annual_network_full_ci_low"])
+    ann_high = float(annual.loc["1095", "annual_network_full_ci_high"])
     cells.append(
         "<div class='stat'>"
         "<span>Годовой эффект сети, full rollout, Y1095</span>"
-        f"<b>{format_money(float(annual.loc['1095', 'annual_network_full']))}</b>"
-        "<small>сценарная оценка без CI</small>"
+        f"<b>{format_money(ann)}</b>"
+        f"<small>95% CI: {format_money(ann_low)} … {format_money(ann_high)}</small>"
         "</div>"
     )
     return '<div class="grid">' + "".join(cells) + "</div>"
@@ -471,9 +469,28 @@ def build_monitoring_html(
     <p><b>Базовые фильтры:</b> пилотные филиалы без Архангельского/Марийского;
     форма возмещения содержит «денежная», «ремонт» или «соглашение»;
     первичный убыток; объект «автотранспорт».</p>
-    {_table(_contract_table(result))}
+    {_table(
+      _contract_table(result),
+      columns={
+        "entity": "Логическая сущность контракта",
+        "source_column": "Исходная колонка витрины/ретро",
+        "meaning": "Как используется в расчёте",
+      },
+      rows=[
+        "Каждая строка — одна сущность контракта данных.",
+      ],
+    )}
     <h3>Диагностика качества</h3>
-    {_table(result.data_quality)}
+    {_table(
+      result.data_quality,
+      columns={
+        "metric": "Метрика качества данных",
+        "value": "Значение метрики",
+      },
+      rows=[
+        "Каждая строка — отдельная проверка качества выборки.",
+      ],
+    )}
     <p class="muted">Выбрано строк без dedupe: {quality.get("n_rows", "—")};
     пропусков OD: {quality.get("missing_od", "—")};
     возможное повторное суммирование СуммаПлатежа:
@@ -482,15 +499,28 @@ def build_monitoring_html(
 
   <h2>4. Доли соглашений / претензий / ФУ / суда</h2>
   <div class="card">
-    <p>Доли считаются на той же ITT-выборке model/control.
+    <p>Доли считаются на той же ITT-выборке. Сначала control, затем model.
     ФУ и суд подняты на уровень инцидента: если хотя бы один убыток инцидента
     имел ФУ/суд, флаг ставится всем строкам инцидента.</p>
-    <h3>Model vs control</h3>
-    {_table(result.path_shares)}
-    <p class="muted">Строки <code>lift_pp</code> — разница долей в процентных пунктах
-    (model − control). <code>lift_rel</code> — относительный рост доли.</p>
+    <h3>Control vs model</h3>
+    {_table(
+      result.path_shares,
+      columns=_path_share_columns(),
+      rows=[
+        "control — группа без модели",
+        "model — группа с назначением в модель",
+        "lift_pp (model - control) — разница долей в процентных пунктах",
+        "lift_rel (model / control - 1) — относительный рост доли model к control",
+      ],
+    )}
     <h3>По филиалам</h3>
-    {_table(result.filial_path_shares)}
+    {_table(
+      result.filial_path_shares,
+      columns=_path_share_columns(),
+      rows=[
+        "Для каждого филиала сначала строка control, затем model.",
+      ],
+    )}
   </div>
 
   <h2>5. Терминальные ретро-коэффициенты</h2>
@@ -507,7 +537,29 @@ def build_monitoring_html(
         "U = ultimate/терминальный итог. g ∈ {pilot, nonpilot}. "
         "Основной расчёт использует pilot.",
     )}
-    {_table(result.priors.table())}
+    {_table(
+      result.priors.table(),
+      columns={
+        "group": "Группа ретро: pilot или nonpilot",
+        "n_filials": "Число филиалов в группе",
+        "filials": "Список филиалов / all other",
+        "n_rows": "Число строк ретро",
+        "n_positive": "Число строк с положительным ПСР",
+        "n_positive_with_od": "Положительный ПСР и OD > 0",
+        "n_positive_without_retro_od": "Положительный ПСР без OD",
+        "p_U": "Доля убытков с ПСР",
+        "k_U": "Коэффициент ПСР к OD",
+        "m_U": "Средний положительный ПСР (₽), fallback",
+        "mean_PSR_all": "Средний ПСР по всем строкам, ₽",
+        "p_FU_given_PSR": "Вероятность ФУ при наличии ПСР",
+        "p_court_given_PSR": "Вероятность суда при наличии ПСР",
+        "e_U": "Ожидаемые издержки ФУ/суда (₽)",
+      },
+      rows=[
+        "pilot — ретро пилотных филиалов (основной расчёт)",
+        "nonpilot — ретро остальных филиалов (для сетевого масштаба)",
+      ],
+    )}
     <p>Основной расчёт использует pilot:
     p_U={pilot.p_ultimate:.4f}, k_U={pilot.k_ultimate:.4f},
     m_U={format_money(pilot.mean_positive_psr)},
@@ -536,17 +588,59 @@ def build_monitoring_html(
         f"q={result.residual_share:.0%} при соглашении; r={result.discount_rate:.0%}; "
         "age=(t_calc−t0) в днях; d_i,H=max(H−age_i,0)/2.",
     )}
-    <h3>Итоги model/control</h3>
-    {_table(result.group_summary)}
+    <h3>Итоги control / model</h3>
+    {_table(
+      result.group_summary,
+      columns={
+        "horizon": "Горизонт: fact / 365 / 1095",
+        "group": "Группа: control или model",
+        "n": "Число убытков",
+        "sum_cost": "Сумма исхода YH по группе, ₽",
+        "mean_cost": "Средний исход YH на убыток, ₽",
+      },
+      rows=[
+        "Для каждого горизонта сначала control, затем model.",
+      ],
+    )}
   </div>
 
   <h2>7. ITT по филиалам и неопределённость</h2>
   <div class="card">
     <p>Веса фиксируются по всей eligible-популяции филиала, а не по размеру
-    model/control.</p>
-    {_table(result.effect_summary)}
+    control/model.</p>
+    {_table(
+      result.effect_summary,
+      columns={
+        "horizon": "Горизонт: fact / 365 / 1095",
+        "effect_per_case": "ITT: mean(control) − mean(model), взвешенно по филиалам, ₽/убыток",
+        "unstratified_effect": "Та же разность без взвешивания по филиалам, ₽/убыток",
+        "n_weighted": "Сумма весов филиалов (число eligible-убытков)",
+        "n_filials": "Число филиалов с парой control и model",
+        "ci_low": "Нижняя граница 95% CI bootstrap, ₽/убыток",
+        "ci_high": "Верхняя граница 95% CI bootstrap, ₽/убыток",
+        "n_bootstrap": "Число успешных bootstrap-повторений",
+      },
+      rows=[
+        "Одна строка на горизонт fact / 365 / 1095.",
+      ],
+    )}
     <h3>Вклад филиалов</h3>
-    {_table(result.filial_effects)}
+    {_table(
+      result.filial_effects,
+      columns={
+        "horizon": "Горизонт",
+        "filial": "Филиал",
+        "n": "Всего убытков в филиале",
+        "n_control": "Число убытков control",
+        "n_model": "Число убытков model",
+        "mean_control": "Средний YH в control, ₽",
+        "mean_model": "Средний YH в model, ₽",
+        "effect_control_minus_model": "Эффект филиала: mean(control) − mean(model), ₽",
+      },
+      rows=[
+        "Одна строка на пару горизонт × филиал; в колонках сначала control, затем model.",
+      ],
+    )}
     {_formula(
         "95% CI: двухчастный bootstrap",
         [
@@ -564,7 +658,20 @@ def build_monitoring_html(
     <h3>A. As-complied — только описательная диагностика</h3>
     <p>Сравнение внутри model и <code>РезультатПроверки=1</code>.
     Не является причинным эффектом.</p>
-    {_table(result.compliance_a)}
+    {_table(
+      result.compliance_a,
+      columns={
+        "horizon": "Горизонт",
+        "compliance": "complied или not_complied",
+        "n": "Число убытков",
+        "mean_cost": "Средний YH, ₽",
+        "descriptive_only": "Признак: только описание, не causal effect",
+      },
+      rows=[
+        "complied — рекомендация исполнена",
+        "not_complied — рекомендация не исполнена",
+      ],
+    )}
     <h3>B. Механический сценарий 100% исполнения</h3>
     {_formula(
         "Контракт сценария",
@@ -577,13 +684,37 @@ def build_monitoring_html(
         ],
         "Сценарная механика, не LATE/IV.",
     )}
-    {_table(result.compliance_b)}
+    {_table(
+      result.compliance_b,
+      columns={
+        "horizon": "Горизонт сценария 100% compliance",
+        "effect_per_case": "Сценарный ITT: control actual − model scenario, ₽/убыток",
+        "unstratified_effect": "Та же разность без стратификации, ₽/убыток",
+        "n_weighted": "Сумма весов филиалов",
+        "n_filials": "Число филиалов в расчёте",
+        "scenario": "Описание сценария",
+      },
+      rows=[
+        "Одна строка на горизонт сценария 100% исполнения.",
+      ],
+    )}
   </div>
 
   <h2>9. Чувствительность</h2>
   <div class="card">
     <p>Сетка: r ∈ {{8%,12%,16%}} и остаток после соглашения q ∈ {{0%,7%,15%}}.</p>
-    {_table(result.sensitivity)}
+    {_table(
+      result.sensitivity,
+      columns={
+        "discount_rate": "Ставка дисконтирования r",
+        "residual_share": "Остаток ПСР после соглашения q",
+        "horizon": "Горизонт",
+        "effect_per_case": "ITT эффект на убыток при этих параметрах, ₽",
+      },
+      rows=[
+        "Каждая строка — одна комбинация (r, q, горизонт).",
+      ],
+    )}
   </div>
 
   <h2>10. Сезонный годовой эффект и сеть</h2>
@@ -595,21 +726,57 @@ def build_monitoring_html(
             "<b>seasonal_exposure</b> = Σ<sub>m</sub> coverage<sub>m</sub>×s<sub>m,P</sub>",
             "<b>N_pilot_eligible_year</b> = N_observed_pilot_eligible / seasonal_exposure",
             "<b>network_multiplier</b> = 1 + volume_ratio_NP×risk_ratio_NP",
+            "<b>annual_network_full</b> = effect_per_case × N_pilot_eligible_year × network_multiplier",
+            "<b>annual CI</b> = [ci_low, ci_high] × N_pilot_eligible_year × network_multiplier",
         ],
-        "Горизонт Y365/Y1095 не умножается на 365/30: масштабируется число новых убытков.",
+        "Горизонт Y365/Y1095 не умножается на 365/30: масштабируется число новых убытков. "
+        "CI годового эффекта — линейный перенос bootstrap CI с уровня убытка.",
     )}
     <h3>Сезонные доли и покрытие текущего окна</h3>
-    {_table(result.seasonality)}
+    {_table(
+      result.seasonality,
+      columns={
+        "month": "Месяц (1–12)",
+        "retro_share": "Средняя доля месяца в годовом pilot-потоке ретро",
+        "observed_coverage": "Покрытие месяца текущим окном наблюдения (0–1+)",
+        "exposure_contribution": "Вклад месяца в seasonal_exposure",
+      },
+      rows=[
+        "Одна строка на календарный месяц.",
+      ],
+    )}
     <h3>Сценарии годового эффекта</h3>
-    {_table(result.annual_summary)}
+    {_table(
+      result.annual_summary,
+      columns={
+        "horizon": "Горизонт",
+        "effect_per_case": "ITT эффект на убыток, ₽",
+        "effect_100_compliance": "Сценарный эффект 100% compliance на убыток, ₽",
+        "seasonal_exposure": "Доля года, покрытая текущим окном",
+        "N_pilot_eligible_year": "Ожидаемый годовой поток eligible-убытков пилота",
+        "N_pilot_model_year_current": "Годовой поток model при текущей доле model",
+        "N_pilot_model_year_full": "Годовой поток при full rollout (= N_pilot_eligible_year)",
+        "volume_ratio_nonpilot": "Отношение годового потока nonpilot/pilot",
+        "risk_ratio_nonpilot": "Отношение среднего ПСР nonpilot/pilot",
+        "network_multiplier": "1 + volume_ratio × risk_ratio",
+        "annual_pilot_current": "Годовой эффект пилота при текущей доле model, ₽/год",
+        "annual_pilot_full": "Годовой эффект пилота при full rollout, ₽/год",
+        "annual_pilot_full_ci_low": "Нижняя граница 95% CI годового эффекта пилота, ₽/год",
+        "annual_pilot_full_ci_high": "Верхняя граница 95% CI годового эффекта пилота, ₽/год",
+        "effect_per_case_nonpilot": "Эффект на убыток × risk_ratio, ₽",
+        "annual_network_full": "Годовой эффект сети full rollout, ₽/год",
+        "annual_network_full_ci_low": "Нижняя граница 95% CI годового эффекта сети, ₽/год",
+        "annual_network_full_ci_high": "Верхняя граница 95% CI годового эффекта сети, ₽/год",
+        "annual_network_full_compliance": "Годовой эффект сети при 100% compliance, ₽/год",
+      },
+      rows=[
+        "Одна строка на горизонт fact / 365 / 1095.",
+        "CI годового эффекта = CI эффекта на убыток × N_pilot_eligible_year × network_multiplier.",
+      ],
+    )}
   </div>
 
-  <h2>11. Словарь колонок</h2>
-  <div class="card">
-    {_table(_glossary())}
-  </div>
-
-  <h2>12. Ограничения</h2>
+  <h2>11. Ограничения</h2>
   <div class="card">
     <ul>
       <li><b>ITT</b> — эффект назначения в model-поток, включая фактический non-compliance.</li>
@@ -620,7 +787,8 @@ def build_monitoring_html(
       калибруется на <code>RECOVEREDMAINDEBT_LAST_INST_SUM</code>.</li>
       <li>7% — экспертное допущение; midpoint — упрощение времени будущего хвоста.</li>
       <li>Сетевой масштаб — сценарий, не рандомизированная оценка для nonpilot.</li>
-      <li>Годовой эффект сети в текущей версии публикуется без собственного CI.</li>
+      <li>CI годового эффекта — линейный перенос CI с уровня убытка; отдельный
+      bootstrap годового масштаба не считается.</li>
     </ul>
   </div>
 </div>

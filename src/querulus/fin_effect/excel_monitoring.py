@@ -520,7 +520,10 @@ def _summaries(
     effect_rows: list[dict[str, Any]] = []
 
     for horizon, column in outcomes.items():
-        for group, part in frame.groupby("_group", observed=True):
+        for group in ("control", "model"):
+            part = frame.loc[frame["_group"].eq(group)]
+            if part.empty:
+                continue
             group_rows.append(
                 {
                     "horizon": horizon,
@@ -538,10 +541,10 @@ def _summaries(
                 "horizon": horizon,
                 "filial": filial,
                 "n": len(part),
-                "n_model": int(part["_group"].eq("model").sum()),
                 "n_control": int(part["_group"].eq("control").sum()),
-                "mean_model": float(means.get("model", np.nan)),
+                "n_model": int(part["_group"].eq("model").sum()),
                 "mean_control": float(means.get("control", np.nan)),
+                "mean_model": float(means.get("model", np.nan)),
             }
             row["effect_control_minus_model"] = (
                 row["mean_control"] - row["mean_model"]
@@ -574,7 +577,9 @@ def _summaries(
 
     return (
         pd.DataFrame(group_rows),
-        pd.DataFrame(filial_rows),
+        pd.DataFrame(filial_rows).sort_values(["horizon", "filial"]).reset_index(
+            drop=True
+        ),
         pd.DataFrame(effect_rows),
     )
 
@@ -661,31 +666,19 @@ def _compliance_a(frame: pd.DataFrame) -> pd.DataFrame:
         ("365", "Y365"),
         ("1095", "Y1095"),
     ):
-        means: dict[str, float] = {}
-        for status, part in model_one.groupby("_compliance", observed=True):
-            mean = float(part[column].mean())
-            means[str(status)] = mean
+        for status in ("complied", "not_complied"):
+            part = model_one.loc[model_one["_compliance"].eq(status)]
+            if part.empty:
+                continue
             rows.append(
                 {
                     "horizon": horizon,
                     "compliance": status,
                     "n": len(part),
-                    "mean_cost": mean,
+                    "mean_cost": float(part[column].mean()),
                     "descriptive_only": True,
                 }
             )
-        rows.append(
-            {
-                "horizon": horizon,
-                "compliance": "gap_not_complied_minus_complied",
-                "n": len(model_one),
-                "mean_cost": (
-                    means.get("not_complied", np.nan)
-                    - means.get("complied", np.nan)
-                ),
-                "descriptive_only": True,
-            }
-        )
     return pd.DataFrame(rows)
 
 
@@ -824,7 +817,18 @@ def _seasonal_scaling(
         }
         for month in range(1, 13)
     ]
-    effect_map = effects.set_index("horizon")["effect_per_case"].to_dict()
+    effect_idx = effects.set_index("horizon")
+    effect_map = effect_idx["effect_per_case"].to_dict()
+    ci_low_map = (
+        effect_idx["ci_low"].to_dict()
+        if "ci_low" in effect_idx.columns
+        else {}
+    )
+    ci_high_map = (
+        effect_idx["ci_high"].to_dict()
+        if "ci_high" in effect_idx.columns
+        else {}
+    )
     compliance_map = compliance_effects.set_index("horizon")[
         "effect_per_case"
     ].to_dict()
@@ -832,6 +836,11 @@ def _seasonal_scaling(
     for horizon in ("fact", "365", "1095"):
         effect = float(effect_map[horizon])
         effect_100 = float(compliance_map[horizon])
+        scale_full = n_model_year_full * network_multiplier
+        scale_pilot_full = n_model_year_full
+        scale_pilot_current = n_model_year_current
+        ci_low = float(ci_low_map.get(horizon, np.nan))
+        ci_high = float(ci_high_map.get(horizon, np.nan))
         annual_rows.append(
             {
                 "horizon": horizon,
@@ -844,14 +853,16 @@ def _seasonal_scaling(
                 "volume_ratio_nonpilot": volume_ratio,
                 "risk_ratio_nonpilot": risk_ratio,
                 "network_multiplier": network_multiplier,
-                "annual_pilot_current": effect * n_model_year_current,
-                "annual_pilot_full": effect * n_model_year_full,
+                "annual_pilot_current": effect * scale_pilot_current,
+                "annual_pilot_full": effect * scale_pilot_full,
+                "annual_pilot_full_ci_low": ci_low * scale_pilot_full,
+                "annual_pilot_full_ci_high": ci_high * scale_pilot_full,
                 "effect_per_case_nonpilot": effect * risk_ratio,
-                "annual_network_full": (
-                    effect * n_model_year_full * network_multiplier
-                ),
+                "annual_network_full": effect * scale_full,
+                "annual_network_full_ci_low": ci_low * scale_full,
+                "annual_network_full_ci_high": ci_high * scale_full,
                 "annual_network_full_compliance": (
-                    effect_100 * n_model_year_full * network_multiplier
+                    effect_100 * scale_full
                 ),
             }
         )
