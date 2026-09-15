@@ -14,7 +14,7 @@ from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_
 PLAN_FILENAME = "fin_effect_plan.html"
 REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
-FORMULA_VERSION = "ITT-U-2026-09-10-v7"
+FORMULA_VERSION = "ITT-U-2026-09-15-v8"
 
 _CSS = """
 :root {
@@ -545,60 +545,97 @@ def _business_schema() -> str:
   <div class="compare">
     <div class="box control">
       <h4>Control</h4>
-      <p>Обычный процесс урегулирования без рекомендаций модели.
-      Считаем средний полный расход на один убыток.</p>
+      <p>Обычный процесс урегулирования <b>без рекомендаций модели</b>,
+      с применением действующих бизнес-правил (в т.ч. доплата из лимита
+      директора филиала, ЕМР +20% и пр.). Считаем средний расход на один
+      первичный убыток (см. определение ниже).</p>
   </div>
     <div class="mid">−</div>
     <div class="box model">
       <h4>Model</h4>
-      <p>Тот же тип убытков, но с назначением в модель.
-      Считаем средний полный расход на один убыток, включая случаи,
-      где рекомендацию не выполнили.</p>
+      <p>Тот же тип убытков, но с <b>назначением в модель</b>
+      (<code>РезультатПроверки ∈ {0,1}</code>). В среднее входят и случаи,
+      где рекомендацию не выполнили (ITT).</p>
       </div>
       </div>
-  <p><b>Эффект на один убыток</b> = средний расход control − средний расход model.
-  Плюс означает экономию.</p>
+
+  <h3>Средний расход на один убыток</h3>
+  <ul>
+    <li><b>Единица</b> — первичный убыток (строка витрины): форма денежная /
+    ремонт / соглашение; статус «первичный»; автотранспорт; пилотные филиалы
+    <b>без</b> Марийского и Архангельского.</li>
+    <li><b>Yfact</b> = только <code>СуммаПлатежа</code> этого первичного убытка
+    (касса на дату отчёта). Это <b>не</b> сумма «первичка + претензия + ФУ +
+    суд»: претензионные/судебные выплаты обычно на других LossID и в Yfact
+    первичной строки не входят.</li>
+    <li><b>observed_PSR</b> на строке =
+    <code>Cумма выплаты по претензии</code> +
+    <code>Cумма выплат по ФУ</code> +
+    <code>Cумма выплаты по суду</code> (на первичных почти всегда 0).
+    Используется только чтобы вычесть уже видимый ПСР из хвоста, не чтобы
+    нарастить Yfact.</li>
+    <li><b>Y365</b> = Yfact + NPV(ожидаемый ещё несозревший хвост ПСР по
+    ретро-коэффициентам). Это оценка «полного» расхода в смысле методики,
+    а не фактический lifecycle по всем убыткам инцидента.</li>
+  </ul>
+
+  <h3>Формула эффекта</h3>
+  <div class="formula">
+    <div class="eq">effect(H) = Σ<sub>f</sub> w<sub>f</sub> ·
+    (Ȳ<sub>H</sub>(control, f) − Ȳ<sub>H</sub>(model, f))</div>
+    <div class="eq">w<sub>f</sub> = N<sub>f</sub> / Σ<sub>g</sub> N<sub>g</sub>,
+    N<sub>f</sub> = число eligible-убытков филиала f (control + model)</div>
+    <div class="note">Плюс = control дороже model = экономия.
+    H ∈ {fact, 365}. Непростая разность глобальных средних: стратификация
+    по филиалу сохраняет дизайн рандомизации.</div>
+  </div>
+  <p><b>Число убытков</b> — сумма N<sub>f</sub> по пилотным филиалам
+  (в отчёте control / model отдельно). Марийский и Архангельский в ITT не
+  входят (там модель ~100%, нет честного control).</p>
+
+  <h3>ITT (intention-to-treat)</h3>
+  <p>Главный результат — эффект <b>назначения</b> в model-поток, а не
+  «эффект идеального исполнения». В model остаются и complied, и
+  not_complied; соглашения / non-compliance строки не выкидывают
+  (это post-treatment). Сценарий «если бы всегда исполняли» — отдельно
+  (compliance B), это уже не ITT.</p>
 
   <div class="flow">
     <div class="flow-step">
       <div class="num">Шаг 1</div>
       <h4>Кого сравниваем</h4>
-      <p>Только убытки model и control в пилотных филиалах. Соглашения
-      и исполнение рекомендаций не выкидывают строки из сравнения.</p>
+      <p>Model и control в пилотных филиалах. Соглашения и исполнение
+      рекомендаций не выкидывают строки из ITT.</p>
       </div>
     <div class="flow-step">
       <div class="num">Шаг 2</div>
       <h4>Что уже заплатили</h4>
-      <p><code>Yфакт</code> = фактическая касса
-      <code>СуммаПлатежа</code> на дату отчёта.</p>
+      <p><code>Yfact</code> = <code>СуммаПлатежа</code> первичного убытка.</p>
       </div>
     <div class="flow-step">
       <div class="num">Шаг 3</div>
       <h4>Что ещё может прийти</h4>
-      <p>Хвост претензий / ФУ / суда оцениваем по ретро-коэффициентам.
-      После соглашения оставляем экспертно 7%.</p>
+      <p>Хвост ПСР по ретро (p_U, k_U, m_U, e_U). После соглашения — 7%.</p>
       </div>
     <div class="flow-step">
       <div class="num">Шаг 4</div>
       <h4>Два горизонта</h4>
-      <p><code>Yфакт</code> — сейчас; <code>Y365</code> —
-      тот же хвост, приведённый к сегодняшним деньгам на горизонт 1 год.</p>
+      <p><code>Yfact</code> — сейчас; <code>Y365</code> — хвост с NPV на 1 год.</p>
       </div>
     <div class="flow-step">
       <div class="num">Шаг 5</div>
       <h4>Неопределённость</h4>
-      <p>95% доверительный интервал показывает, насколько оценка устойчива.
-      Если интервал проходит через 0, эффект пока не подтверждён.</p>
+      <p>95% CI. Если интервал через 0 — эффект статистически не подтверждён.</p>
       </div>
     <div class="flow-step">
       <div class="num">Шаг 6</div>
       <h4>На год и сеть</h4>
-      <p>Эффект на убыток × ожидаемый годовой поток пилота × поправка
-      на объём и риск остальных филиалов. Это сценарий, не факт.</p>
+      <p>Эффект/убыток × годовой поток пилота × множитель сети — сценарий.</p>
     </div>
       </div>
     </div>
 """
+
 
 
 def _contract_table(result: MonitoringEffectResult) -> pd.DataFrame:
@@ -697,14 +734,17 @@ def build_plan_html(
   <div class="card">
     <ul>
       <li>Сравниваем <b>model</b> и <b>control</b> внутри филиала
-      (примерно 50/50).</li>
-      <li>Единица — один убыток. Дубли не удаляем, но показываем их влияние.</li>
-      <li>Фактический расход — только <code>СуммаПлатежа</code>.</li>
-      <li>Будущий ПСР оцениваем по ретро-данным пилотных филиалов.</li>
+      (примерно 50/50). Марийский и Архангельский в ITT не входят.</li>
+      <li>Единица — один <b>первичный</b> убыток. Дубли не удаляем, но
+      показываем их влияние.</li>
+      <li><b>Yfact</b> — только <code>СуммаПлатежа</code> первичного убытка
+      (не сумма претензия+ФУ+суд).</li>
+      <li><b>Y365</b> — Yfact + NPV хвоста ПСР по ретро пилотных филиалов.</li>
       <li>Если заключено соглашение, экспертно оставляем 7% возможного ПСР.</li>
-      <li>Главный результат — эффект назначения модели (ITT), включая случаи
-      неисполнения рекомендаций.</li>
-      <li>Сценарии «если бы всегда исполняли» и «на всю сеть» показываем отдельно.</li>
+      <li>Главный результат — ITT (эффект назначения), включая non-compliance.
+      Сценарий 100% исполнения — отдельно, не ITT.</li>
+      <li>Для сверки цифр — Excel-аудит с формулами
+      (<code>fin_effect_audit.xlsx</code>).</li>
     </ul>
   </div>
 
@@ -1196,6 +1236,244 @@ def build_monitoring_html(
 """
 
 
+
+def _fmt_days(value: Any) -> str:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "—"
+    return f"{float(value):,.0f}".replace(",", " ")
+
+
+def build_conclusion_body_from_result(
+    result: MonitoringEffectResult,
+    *,
+    development_lags: pd.DataFrame | None = None,
+) -> str:
+    """Тело заключения по фактическому расчёту."""
+    effects = result.effect_summary.set_index("horizon")
+    annual = result.annual_summary.set_index("horizon")
+    quality = result.data_quality.set_index("metric")["value"].to_dict()
+    paths = (
+        result.path_shares.set_index("segment")
+        if not result.path_shares.empty
+        else None
+    )
+
+    def _eff(horizon: str) -> tuple[float, float, float]:
+        return (
+            float(effects.loc[horizon, "effect_per_case"]),
+            float(effects.loc[horizon, "ci_low"]),
+            float(effects.loc[horizon, "ci_high"]),
+        )
+
+    e_f, lo_f, hi_f = _eff("fact")
+    e_y, lo_y, hi_y = _eff("365")
+    ann = float(annual.loc["365", "annual_network_full"])
+    ann_lo = float(annual.loc["365", "annual_network_full_ci_low"])
+    ann_hi = float(annual.loc["365", "annual_network_full_ci_high"])
+    confirmed = lo_f > 0 and lo_y > 0
+
+    n_rows = int(quality.get("n_rows", len(result.frame)))
+    n_c = int(quality.get("n_control", 0))
+    n_m = int(quality.get("n_model", 0))
+    n_fil = int(quality.get("n_filials", 0))
+    max_age = int(quality.get("max_age_days", 0))
+    obs_start = quality.get("observation_start", "?")
+    obs_end = quality.get("observation_end", "?")
+
+    path_lines: list[str] = []
+    if paths is not None:
+        for seg in ("control", "model"):
+            if seg not in paths.index:
+                continue
+            row = paths.loc[seg]
+            path_lines.append(
+                f"<li>{escape(seg)}: соглашения "
+                f"{float(row.get('agreement_share', np.nan)):.1f}%, "
+                f"претензии {float(row.get('pretension_share', np.nan)):.1f}%, "
+                f"ФУ {float(row.get('fu_incident_share', np.nan)):.1f}%, "
+                f"суд {float(row.get('court_incident_share', np.nan)):.1f}%.</li>"
+            )
+
+    if result.attention_filials.empty:
+        attention_html = "<p class='muted'>Нет филиалов с флагами внимания.</p>"
+    else:
+        items = []
+        for row in result.attention_filials.to_dict("records"):
+            items.append(
+                f"<li><b>{escape(str(row['filial']))}</b> — "
+                f"{escape(str(row.get('flags', '')))}; "
+                f"горизонты: "
+                f"{escape(str(row.get('negative_effect_horizons', '') or '—'))}</li>"
+            )
+        attention_html = "<ul>" + "".join(items) + "</ul>"
+
+    lag_html = """
+  <p>Эмпирические перцентили лагов T0→претензия/ФУ/суд считаются по
+  ретро pretensions/claims (см. notebook). Без этих файлов — ориентир
+  политики maturity:</p>
+  <ul>
+    <li>тишина по претензиям ≈ <b>6 месяцев</b> (~183 дня) после T0;</li>
+    <li>тишина по ФУ/суду ≈ <b>24 месяца</b> (~730 дней) после T0;</li>
+    <li>охлаждение после события ПСР ≈ <b>24 месяца</b>.</li>
+  </ul>
+  <p>Без претензии ФУ/суд редки: сначала смотрим сроки претензий, затем ФУ/суда.
+  При max age пилота существенно меньше этих горизонтов хвост ещё короткий.</p>
+"""
+    if development_lags is not None and not development_lags.empty:
+        cols = ["stage", "n", "definition"] + [
+            c for c in development_lags.columns if str(c).startswith("p")
+        ]
+        show = development_lags[
+            [c for c in cols if c in development_lags.columns]
+        ].copy()
+        for c in show.columns:
+            if str(c).startswith("p"):
+                show[c] = show[c].map(_fmt_days)
+        lag_html = (
+            "<p>Перцентили лагов (дни) на ретро. Без претензии ФУ/суд обычно "
+            "не начинаются — стадии идут цепочкой.</p>"
+            + _table(
+                show,
+                columns={
+                    "stage": "Стадия",
+                    "n": "N событий",
+                    "definition": "Определение лага",
+                    "p50": "p50, дни",
+                    "p70": "p70, дни",
+                    "p80": "p80, дни",
+                    "p90": "p90, дни",
+                    "p95": "p95, дни",
+                },
+                rows=["Каждая строка — одна стадия развития ПСР."],
+            )
+            + """
+  <p class="muted">Политика maturity дополнительно: тишина претензий ~6 мес.,
+  ФУ/суд и cooloff ~24 мес.</p>
+"""
+        )
+
+    half_y = (
+        (hi_y - lo_y) / 2.0
+        if np.isfinite(hi_y) and np.isfinite(lo_y)
+        else np.nan
+    )
+    target = abs(e_y) if abs(e_y) > 1 else 5000.0
+    scale = (
+        (half_y / target) ** 2
+        if half_y and half_y > 0 and target > 0
+        else np.nan
+    )
+    n_need = int(round(n_rows * scale)) if np.isfinite(scale) else None
+    scale_txt = f"{scale:.0f}" if np.isfinite(scale) else "—"
+    half_txt = format_money(half_y) if np.isfinite(half_y) else "—"
+    ratio_txt = f"{(half_y / target):.1f}" if np.isfinite(half_y) else "—"
+    need_txt = str(n_need) if n_need is not None else "—"
+
+    verdict = (
+        "<b>Статистически подтверждённая экономия</b> (оба CI выше 0)."
+        if confirmed
+        else (
+            "<b>Точечная оценка показывает экономию</b>, но "
+            "<b>95% CI проходит через 0</b> — статистически подтверждённой "
+            "экономии пока нет."
+        )
+    )
+
+    return f"""
+<div class="card">
+  <h3>Вердикт</h3>
+  <p>{verdict}
+  Годовой эффект сети — сценарная точка; его CI тоже нужно читать вместе
+  с точечной оценкой.</p>
+</div>
+
+<div class="grid">
+  <div class="stat">
+    <span>ITT / убыток, Yfact</span>
+    <b>{format_money(e_f)}</b>
+    <small>95% CI: {format_money(lo_f)} … {format_money(hi_f)}</small>
+  </div>
+  <div class="stat">
+    <span>ITT / убыток, Y365</span>
+    <b>{format_money(e_y)}</b>
+    <small>95% CI: {format_money(lo_y)} … {format_money(hi_y)}</small>
+  </div>
+  <div class="stat">
+    <span>Сеть full rollout, Y365</span>
+    <b>{format_money(ann)}</b>
+    <small>95% CI: {format_money(ann_lo)} … {format_money(ann_hi)}</small>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Что означают горизонты</h3>
+  <ul>
+    <li><b>Yfact</b> — только <code>СуммаПлатежа</code> первичного убытка.</li>
+    <li><b>Y365</b> — Yfact + NPV ultimate-хвоста ПСР на 1 год (не lifecycle
+    по всем LossID инцидента).</li>
+    <li>Плюс = средний расход control выше, чем у model (экономия).</li>
+    <li>ITT включает non-compliance; сценарий 100% исполнения — отдельно.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>Выборка и пути</h3>
+  <ul>
+    <li>Окно: {escape(str(obs_start))} … {escape(str(obs_end))};
+    <b>{n_rows}</b> строк (control {n_c} / model {n_m}),
+    {n_fil} пилотных филиалов (без Марийского/Архангельского).</li>
+    {"".join(path_lines)}
+    <li>Максимальный возраст убытка <b>{max_age}</b> дней — хвост ещё короткий
+    относительно типичного развития претензий/ФУ/суда.</li>
+    <li>Bootstrap ITT: {result.bootstrap_iterations}; compliance:
+    {result.bootstrap_compliance_iterations}.</li>
+  </ul>
+  <h4>Сроки развития ПСР (ретро)</h4>
+  {lag_html}
+</div>
+
+<div class="card">
+  <h3>Сколько ещё статистики нужно</h3>
+  <ul>
+    <li>Сейчас полуширина CI по Y365 ≈ {half_txt}
+    при точечном эффекте ≈ {format_money(e_y)}.</li>
+    <li>Чтобы при том же эффекте CI перестал включать 0, шум нужно сжать
+    примерно в {ratio_txt}× → объём порядка
+    <b>×{scale_txt}</b> (~{need_txt} убытков)
+    при том же составе — грубая оценка.</li>
+    <li>До декабря на текущих 10 филиалах одного ожидания, скорее всего,
+    не хватит. Имеет смысл добавить крупные филиалы с честной рандомизацией
+    ~50/50 (не Марийка/Архангельск в режиме 100% model) и параллельно
+    дозревать хвост.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>Филиалы на внимании</h3>
+  {attention_html}
+</div>
+
+<div class="card">
+  <h3>Что можно и нельзя обещать</h3>
+  <ul>
+    <li><b>Можно:</b> направление точечной оценки и сценарий сети как гипотезу.</li>
+    <li><b>Нельзя:</b> утверждать статистически подтверждённую экономию,
+    пока CI включают 0.</li>
+    <li><b>Нельзя:</b> трактовать годовой сетевой эффект как измеренный факт.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h3>Риски и следующие шаги</h3>
+  <ul>
+    <li>Набрать дозревание и объём; пересчитать с Excel-аудитом.</li>
+    <li>Разобрать филиалы с отрицательным ITT / расхождением соглашений.</li>
+    <li>Проверить «Выплата по модели» и расхождения СуммаПлатежа / СуммаКВыплате.</li>
+  </ul>
+</div>
+"""
+
+
 def build_conclusion_html(
     *,
     source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
@@ -1295,6 +1573,7 @@ def write_all_monitoring_htmls(
     data_dir: str | Path,
     *,
     source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
+    development_lags: pd.DataFrame | None = None,
 ) -> tuple[Path, Path, Path]:
     """Записать все три HTML в каталог data."""
     data_dir = Path(data_dir)
@@ -1307,6 +1586,11 @@ def write_all_monitoring_htmls(
     conclusion = write_conclusion_html(
         data_dir / CONCLUSION_FILENAME,
         source_label=source_label,
+        ready=True,
+        body_html=build_conclusion_body_from_result(
+            result,
+            development_lags=development_lags,
+        ),
     )
     return plan, report, conclusion
 
@@ -1338,6 +1622,7 @@ __all__ = [
     "FORMULA_VERSION",
     "PLAN_FILENAME",
     "REPORT_FILENAME",
+    "build_conclusion_body_from_result",
     "build_conclusion_html",
     "build_monitoring_html",
     "build_plan_html",
