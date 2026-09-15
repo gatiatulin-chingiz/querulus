@@ -16,6 +16,28 @@ REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
 FORMULA_VERSION = "ITT-U-2026-09-15-v8"
 
+
+def report_export_stamp(
+    when: datetime | pd.Timestamp | str | None = None,
+) -> str:
+    """Метка выгрузки для имён файлов: YYYY-MM-DD_HHMM."""
+    ts = pd.Timestamp(when) if when is not None else pd.Timestamp.now()
+    return ts.strftime("%Y-%m-%d_%H%M")
+
+
+def dated_artifact_names(stamp: str) -> dict[str, str]:
+    """Имена plan/report/conclusion/audit/weekly с датой выгрузки."""
+    return {
+        "plan": f"fin_effect_plan_{stamp}.html",
+        "report": f"fin_effect_report_{stamp}.html",
+        "conclusion": f"fin_effect_conclusion_{stamp}.html",
+        "audit": f"fin_effect_audit_{stamp}.xlsx",
+        "weekly_html": f"fin_effect_weekly_{stamp}.html",
+        "weekly_csv": f"fin_effect_weekly_{stamp}.csv",
+        "weekly_filial_csv": f"fin_effect_weekly_filial_{stamp}.csv",
+        "error": f"fin_effect_error_{stamp}.html",
+    }
+
 _CSS = """
 :root {
   --bg:#f5f3ee; --surface:#fff; --ink:#1d2526; --muted:#5f696a;
@@ -519,11 +541,17 @@ def _warnings(items: list[str]) -> str:
     )
 
 
-def _nav(active: str) -> str:
+def _nav(
+    active: str,
+    *,
+    plan_name: str = PLAN_FILENAME,
+    report_name: str = REPORT_FILENAME,
+    conclusion_name: str = CONCLUSION_FILENAME,
+) -> str:
     items = (
-        (PLAN_FILENAME, "1. План"),
-        (REPORT_FILENAME, "2. Расчёт"),
-        (CONCLUSION_FILENAME, "3. Заключение"),
+        (plan_name, "1. План"),
+        (report_name, "2. Расчёт"),
+        (conclusion_name, "3. Заключение"),
     )
     links = []
     for filename, label in items:
@@ -549,7 +577,7 @@ def _business_schema() -> str:
       с применением действующих бизнес-правил (в т.ч. доплата из лимита
       директора филиала, ЕМР +20% и пр.). Считаем средний расход на один
       первичный убыток (см. определение ниже).</p>
-  </div>
+      </div>
     <div class="mid">−</div>
     <div class="box model">
       <h4>Model</h4>
@@ -588,7 +616,7 @@ def _business_schema() -> str:
     <div class="note">Плюс = control дороже model = экономия.
     H ∈ {fact, 365}. Непростая разность глобальных средних: стратификация
     по филиалу сохраняет дизайн рандомизации.</div>
-  </div>
+      </div>
   <p><b>Число убытков</b> — сумма N<sub>f</sub> по пилотным филиалам
   (в отчёте control / model отдельно). Марийский и Архангельский в ITT не
   входят (там модель ~100%, нет честного control).</p>
@@ -621,7 +649,7 @@ def _business_schema() -> str:
       <div class="num">Шаг 4</div>
       <h4>Два горизонта</h4>
       <p><code>Yfact</code> — сейчас; <code>Y365</code> — хвост с NPV на 1 год.</p>
-      </div>
+    </div>
     <div class="flow-step">
       <div class="num">Шаг 5</div>
       <h4>Неопределённость</h4>
@@ -711,6 +739,9 @@ def _headline(result: MonitoringEffectResult) -> str:
 def build_plan_html(
     *,
     source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
+    plan_name: str = PLAN_FILENAME,
+    report_name: str = REPORT_FILENAME,
+    conclusion_name: str = CONCLUSION_FILENAME,
 ) -> str:
     """HTML №1: план методики для бизнеса."""
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -726,8 +757,13 @@ def build_plan_html(
 <div class="page">
   <h1>План расчёта финансового эффекта</h1>
   <p class="sub">Сформировано {escape(generated)} · версия {FORMULA_VERSION} ·
-  источник <code>{escape(source_label)}</code></p>
-  {_nav(PLAN_FILENAME)}
+  источник <code>{escape(source_label)}</code> · файл <code>{escape(plan_name)}</code></p>
+  {_nav(
+    plan_name,
+    plan_name=plan_name,
+    report_name=report_name,
+    conclusion_name=conclusion_name,
+  )}
   {_business_schema()}
 
   <h2>Что фиксируем до расчёта</h2>
@@ -779,6 +815,9 @@ def build_monitoring_html(
     *,
     source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
     title: str = "Querulus — расчёт финансового эффекта",
+    plan_name: str = PLAN_FILENAME,
+    report_name: str = REPORT_FILENAME,
+    conclusion_name: str = CONCLUSION_FILENAME,
 ) -> str:
     """HTML №2: подробный расчёт."""
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -801,8 +840,14 @@ def build_monitoring_html(
   <p class="sub">Сформировано {escape(generated)} · версия {FORMULA_VERSION} ·
   t_calc={result.t_calc.date()} · источник <code>{escape(source_label)}</code> ·
   наблюдения {quality.get("observation_start", "?")} …
-  {quality.get("observation_end", "?")} · ретро-окно {escape(retro_window)}</p>
-  {_nav(REPORT_FILENAME)}
+  {quality.get("observation_end", "?")} · ретро-окно {escape(retro_window)} ·
+  файл <code>{escape(report_name)}</code></p>
+  {_nav(
+    report_name,
+    plan_name=plan_name,
+    report_name=report_name,
+    conclusion_name=conclusion_name,
+  )}
 
   <h2>1. Главный результат</h2>
   <div class="card">
@@ -1162,7 +1207,7 @@ def build_monitoring_html(
       <li><b>N_pilot_eligible_year</b> — годовой поток eligible = N_obs / exposure.</li>
       <li><b>risk_ratio</b> — уже по деньгам <code>TARGET_FREQ_AMOUNT</code> (для сети).</li>
     </ul>
-    <div class="formula">
+        <div class="formula">
       <b>Пример</b>
       <div class="eq">N_obs = 2 500, seasonal_exposure = 0.25 →
       N_pilot_eligible_year = 2 500 / 0.25 = 10 000</div>
@@ -1170,7 +1215,7 @@ def build_monitoring_html(
       annual_network_full ≈ 4 694 × 10 000 × 2.5 = 117 350 000</div>
       <div class="note">Если окно попало в «лёгкие» месяцы, exposure меньше и
       годовой поток выше при том же N_obs — поэтому и нужна сезонная поправка.</div>
-    </div>
+        </div>
     <h3>Сезонные доли и покрытие текущего окна</h3>
     {_table(
       result.seasonality,
@@ -1230,7 +1275,7 @@ def build_monitoring_html(
       bootstrap годового масштаба не считается.</li>
     </ul>
   </div>
-</div>
+    </div>
 </body>
 </html>
 """
@@ -1380,7 +1425,7 @@ def build_conclusion_body_from_result(
     )
 
     return f"""
-<div class="card">
+  <div class="card">
   <h3>Вердикт</h3>
   <p>{verdict}
   Годовой эффект сети — сценарная точка; его CI тоже нужно читать вместе
@@ -1470,7 +1515,7 @@ def build_conclusion_body_from_result(
     <li>Разобрать филиалы с отрицательным ITT / расхождением соглашений.</li>
     <li>Проверить «Выплата по модели» и расхождения СуммаПлатежа / СуммаКВыплате.</li>
   </ul>
-</div>
+  </div>
 """
 
 
@@ -1479,16 +1524,19 @@ def build_conclusion_html(
     source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
     ready: bool = False,
     body_html: str | None = None,
+    plan_name: str = PLAN_FILENAME,
+    report_name: str = REPORT_FILENAME,
+    conclusion_name: str = CONCLUSION_FILENAME,
 ) -> str:
     """HTML №3: заключение. Пока заготовка, пока не прислан файл №2."""
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
     if ready and body_html:
         content = body_html
     else:
-        content = """
+        content = f"""
 <div class="card">
   <div class="warning">Заключение ещё не заполнено.</div>
-  <p>После проверки файла <code>fin_effect_report.html</code> пришлите его
+  <p>После проверки файла <code>{escape(report_name)}</code> пришлите его
   как «файл №2» — по нему будет подготовлено краткое бизнес-заключение:</p>
   <ul>
     <li>есть ли подтверждённая экономия;</li>
@@ -1510,8 +1558,14 @@ def build_conclusion_html(
 <div class="page">
   <h1>Заключение по финансовому эффекту</h1>
   <p class="sub">Сформировано {escape(generated)} · версия {FORMULA_VERSION} ·
-  источник <code>{escape(source_label)}</code></p>
-  {_nav(CONCLUSION_FILENAME)}
+  источник <code>{escape(source_label)}</code> ·
+  файл <code>{escape(conclusion_name)}</code></p>
+  {_nav(
+    conclusion_name,
+    plan_name=plan_name,
+    report_name=report_name,
+    conclusion_name=conclusion_name,
+  )}
   {content}
 </div>
 </body>
@@ -1533,11 +1587,20 @@ def write_monitoring_html(
     path: str | Path,
     *,
     source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
+    plan_name: str = PLAN_FILENAME,
+    report_name: str = REPORT_FILENAME,
+    conclusion_name: str = CONCLUSION_FILENAME,
 ) -> Path:
     """Записать HTML №2 расчёта."""
     return _write(
         Path(path),
-        build_monitoring_html(result, source_label=source_label),
+        build_monitoring_html(
+            result,
+            source_label=source_label,
+            plan_name=plan_name,
+            report_name=report_name,
+            conclusion_name=conclusion_name,
+        ),
     )
 
 
@@ -1545,9 +1608,20 @@ def write_plan_html(
     path: str | Path,
     *,
     source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
+    plan_name: str = PLAN_FILENAME,
+    report_name: str = REPORT_FILENAME,
+    conclusion_name: str = CONCLUSION_FILENAME,
 ) -> Path:
     """Записать HTML №1 плана."""
-    return _write(Path(path), build_plan_html(source_label=source_label))
+    return _write(
+        Path(path),
+        build_plan_html(
+            source_label=source_label,
+            plan_name=plan_name,
+            report_name=report_name,
+            conclusion_name=conclusion_name,
+        ),
+    )
 
 
 def write_conclusion_html(
@@ -1556,14 +1630,20 @@ def write_conclusion_html(
     source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
     ready: bool = False,
     body_html: str | None = None,
+    plan_name: str = PLAN_FILENAME,
+    report_name: str = REPORT_FILENAME,
+    conclusion_name: str = CONCLUSION_FILENAME,
 ) -> Path:
     """Записать HTML №3 заключения."""
     return _write(
         Path(path),
         build_conclusion_html(
-        source_label=source_label,
+            source_label=source_label,
             ready=ready,
             body_html=body_html,
+            plan_name=plan_name,
+            report_name=report_name,
+            conclusion_name=conclusion_name,
         ),
     )
 
@@ -1574,25 +1654,43 @@ def write_all_monitoring_htmls(
     *,
     source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
     development_lags: pd.DataFrame | None = None,
-) -> tuple[Path, Path, Path]:
-    """Записать все три HTML в каталог data."""
+    stamp: str | None = None,
+) -> tuple[Path, Path, Path, dict[str, str]]:
+    """Записать три HTML с датой выгрузки в имени (не затирают прошлые).
+
+    Возвращает (plan, report, conclusion, names).
+    """
     data_dir = Path(data_dir)
-    plan = write_plan_html(data_dir / PLAN_FILENAME, source_label=source_label)
+    export_stamp = stamp or report_export_stamp()
+    names = dated_artifact_names(export_stamp)
+    plan = write_plan_html(
+        data_dir / names["plan"],
+        source_label=source_label,
+        plan_name=names["plan"],
+        report_name=names["report"],
+        conclusion_name=names["conclusion"],
+    )
     report = write_monitoring_html(
         result,
-        data_dir / REPORT_FILENAME,
+        data_dir / names["report"],
         source_label=source_label,
+        plan_name=names["plan"],
+        report_name=names["report"],
+        conclusion_name=names["conclusion"],
     )
     conclusion = write_conclusion_html(
-        data_dir / CONCLUSION_FILENAME,
+        data_dir / names["conclusion"],
         source_label=source_label,
         ready=True,
         body_html=build_conclusion_body_from_result(
             result,
             development_lags=development_lags,
         ),
+        plan_name=names["plan"],
+        report_name=names["report"],
+        conclusion_name=names["conclusion"],
     )
-    return plan, report, conclusion
+    return plan, report, conclusion, names
 
 
 def write_error_html(
@@ -1600,6 +1698,9 @@ def write_error_html(
     path: str | Path,
     *,
     source_label: str,
+    plan_name: str = PLAN_FILENAME,
+    report_name: str = REPORT_FILENAME,
+    conclusion_name: str = CONCLUSION_FILENAME,
 ) -> Path:
     """Записать диагностический HTML, если расчёт остановлен guard-проверкой."""
     destination = Path(path)
@@ -1608,7 +1709,12 @@ def write_error_html(
 <html lang="ru"><head><meta charset="utf-8"/><title>Ошибка расчёта</title>
 <style>{_CSS}</style></head><body><div class="page">
 <h1>Финансовый эффект не рассчитан</h1>
-{_nav(REPORT_FILENAME)}
+{_nav(
+    report_name,
+    plan_name=plan_name,
+    report_name=report_name,
+    conclusion_name=conclusion_name,
+)}
 <p class="sub">Источник <code>{escape(source_label)}</code></p>
 <div class="warning"><b>{escape(type(error).__name__)}</b>: {escape(str(error))}</div>
 <p>Guard-проверка остановила расчёт, чтобы HTML не содержал недостоверный эффект.
@@ -1626,6 +1732,8 @@ __all__ = [
     "build_conclusion_html",
     "build_monitoring_html",
     "build_plan_html",
+    "dated_artifact_names",
+    "report_export_stamp",
     "write_all_monitoring_htmls",
     "write_conclusion_html",
     "write_error_html",
