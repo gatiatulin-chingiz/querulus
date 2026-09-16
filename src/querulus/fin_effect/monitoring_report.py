@@ -497,11 +497,14 @@ def _table(
     *,
     columns: dict[str, str] | None = None,
     rows: list[str] | None = None,
+    formulas: list[str] | None = None,
+    notes: list[str] | None = None,
 ) -> str:
-    """Таблица + легенда колонок и строк под ней.
+    """Таблица + легенда колонок/строк + формулы расчёта.
 
     Если передан ``columns``, заголовки таблицы показывают русские подписи,
     а в легенде остаётся соответствие ``код → смысл``.
+    ``formulas`` — HTML-фрагменты уравнений (как в ``_formula``).
     """
     if frame is None or frame.empty:
         return "<p class='muted'>(нет данных)</p>"
@@ -524,6 +527,10 @@ def _table(
     legend_parts: list[str] = []
     if columns:
         present = set(map(str, frame.columns))
+        ordered = [name for name in columns if name in present]
+        rest = [c for c in shown.columns if c not in ordered]
+        if ordered:
+            shown = shown.loc[:, ordered + rest]
         rename = {
             name: desc for name, desc in columns.items() if name in present
         }
@@ -543,6 +550,12 @@ def _table(
     if rows:
         items = "".join(f"<li>{escape(item)}</li>" for item in rows)
         legend_parts.append(f"<h4>Строки</h4><ul>{items}</ul>")
+    if formulas:
+        eqs = "".join(f'<div class="eq">{equation}</div>' for equation in formulas)
+        legend_parts.append(f"<h4>Как считается</h4>{eqs}")
+    if notes:
+        items = "".join(f"<li>{escape(item)}</li>" for item in notes)
+        legend_parts.append(f"<h4>Пояснения</h4><ul>{items}</ul>")
     if legend_parts:
         html += '<div class="legend">' + "".join(legend_parts) + "</div>"
     return html
@@ -1056,14 +1069,20 @@ def build_monitoring_html(
     {_table(
       result.group_summary,
       columns={
-        "horizon": "Горизонт: fact / 365",
-        "group": "Группа: control или model",
-        "n": "Число убытков",
-        "sum_cost": "Сумма исхода YH по группе, ₽",
-        "mean_cost": "Средний исход YH на убыток, ₽",
+        "horizon": "Горизонт: fact (=Yfact) / 365 (=Y365)",
+        "group": "Группа: control (Result=−100) или model (Result∈{{0,1}})",
+        "n": "Число инцидентов в группе",
+        "sum_cost": "Σ YH по группе, ₽",
+        "mean_cost": "mean(YH) = sum_cost / n, ₽/инцидент",
       },
       rows=[
         "Для каждого горизонта сначала control, затем model.",
+        "Единица строки после дедупа/схлопывания — инцидент.",
+      ],
+      formulas=[
+        "<b>mean_cost</b> = (1/n) Σ<sub>i∈group</sub> Y<sub>H,i</sub>",
+        "Y<sub>fact</sub> = сумма СуммаПлатежа по убыткам инцидента",
+        "Y<sub>365</sub> = Yfact + NPV(remaining ПСР)",
       ],
     )}
   </div>
@@ -1076,16 +1095,25 @@ def build_monitoring_html(
       result.effect_summary,
       columns={
         "horizon": "Горизонт: fact / 365",
-        "effect_per_case": "ITT: mean(control) − mean(model), взвешенно по филиалам, ₽/убыток",
-        "unstratified_effect": "Та же разность без взвешивания по филиалам, ₽/убыток",
-        "n_weighted": "Сумма весов филиалов (число eligible-убытков)",
+        "effect_per_case": "ITT стратифицированный, ₽/инцидент",
+        "unstratified_effect": "mean(control)−mean(model) без весов филиалов, ₽",
+        "n_weighted": "Σ N<sub>f</sub> = число eligible-инцидентов",
         "n_filials": "Число филиалов с парой control и model",
-        "ci_low": "Нижняя граница 95% CI bootstrap, ₽/убыток",
-        "ci_high": "Верхняя граница 95% CI bootstrap, ₽/убыток",
+        "ci_low": "2.5% квантиль bootstrap ITT, ₽",
+        "ci_high": "97.5% квантиль bootstrap ITT, ₽",
         "n_bootstrap": "Число успешных bootstrap-повторений",
       },
       rows=[
         "Одна строка на горизонт fact / 365.",
+      ],
+      formulas=[
+        "<b>effect_f</b> = mean(Y<sub>H</sub>|control,f) − mean(Y<sub>H</sub>|model,f)",
+        "<b>w_f</b> = N<sub>f</sub> / Σ<sub>g</sub> N<sub>g</sub>",
+        "<b>effect_per_case</b> = Σ<sub>f</sub> w<sub>f</sub>·effect_f",
+        "<b>unstratified_effect</b> = mean(Y|control) − mean(Y|model)",
+      ],
+      notes=[
+        "Плюс = control дороже model = экономия модели (ITT).",
       ],
     )}
     <h3>Вклад филиалов</h3>
@@ -1094,15 +1122,19 @@ def build_monitoring_html(
       columns={
         "horizon": "Горизонт",
         "filial": "Филиал",
-        "n": "Всего убытков в филиале",
-        "n_control": "Число убытков control",
-        "n_model": "Число убытков model",
+        "n": "Всего инцидентов в филиале (control+model)",
+        "n_control": "Число инцидентов control",
+        "n_model": "Число инцидентов model",
         "mean_control": "Средний YH в control, ₽",
         "mean_model": "Средний YH в model, ₽",
-        "effect_control_minus_model": "Эффект филиала: mean(control) − mean(model), ₽",
+        "effect_control_minus_model": "effect_f = mean_control − mean_model, ₽",
       },
       rows=[
-        "Одна строка на пару горизонт × филиал; в колонках сначала control, затем model.",
+        "Одна строка на пару горизонт × филиал.",
+      ],
+      formulas=[
+        "<b>contribution_f</b> = w_f × effect_f  (входит в effect_per_case)",
+        "Филиал без control или без model в стратифицированный ITT не входит.",
       ],
     )}
     <h3>Филиалы на внимании</h3>
@@ -1114,14 +1146,17 @@ def build_monitoring_html(
         "filial": "Филиал",
         "agreement_share_control": "Доля соглашений в control, %",
         "agreement_share_model": "Доля соглашений в model, %",
-        "agreement_gap_pp": "control − model по соглашениям, п.п.",
-        "negative_effect_horizons": "Горизонты с отрицательным ITT",
-        "min_effect_control_minus_model": "Минимальный эффект по горизонтам, ₽",
-        "flags": "Почему филиал в списке",
+        "agreement_gap_pp": "agreement_share_control − agreement_share_model, п.п.",
+        "negative_effect_horizons": "Горизонты с effect_f &lt; 0",
+        "min_effect_control_minus_model": "min_f effect_f по горизонтам, ₽",
+        "flags": "agreement_control_gt_model и/или negative_itt",
       },
       rows=[
         "Пустая таблица означает, что таких филиалов нет.",
-        "flags: agreement_control_gt_model и/или negative_itt.",
+      ],
+      formulas=[
+        "Флаг agreement_control_gt_model: gap_pp &gt; 0",
+        "Флаг negative_itt: effect_f &lt; 0 хотя бы на одном горизонте",
       ],
     )}
     {_formula(
@@ -1263,28 +1298,36 @@ def build_monitoring_html(
       result.annual_summary,
       columns={
         "horizon": "Горизонт",
-        "effect_per_case": "ITT эффект на убыток, ₽",
-        "effect_100_compliance": "Сценарный эффект 100% compliance на убыток, ₽",
-        "seasonal_exposure": "Доля года, покрытая текущим окном",
-        "N_pilot_eligible_year": "Ожидаемый годовой поток eligible-убытков пилота",
+        "effect_per_case": "ITT на инцидент, ₽",
+        "effect_100_compliance": "Сценарный эффект 100% compliance на инцидент, ₽",
+        "seasonal_exposure": "Σ_m coverage_m × s_m,P — доля года в окне",
+        "N_pilot_eligible_year": "N_obs / seasonal_exposure",
         "N_pilot_model_year_current": "Годовой поток model при текущей доле model",
-        "N_pilot_model_year_full": "Годовой поток при full rollout (= N_pilot_eligible_year)",
-        "volume_ratio_nonpilot": "Отношение годового потока nonpilot/pilot",
-        "risk_ratio_nonpilot": "Отношение среднего ПСР nonpilot/pilot",
+        "N_pilot_model_year_full": "= N_pilot_eligible_year (full rollout)",
+        "volume_ratio_nonpilot": "Годовой поток nonpilot / pilot (ретро)",
+        "risk_ratio_nonpilot": "Средний ПСР nonpilot / pilot (ретро)",
         "network_multiplier": "1 + volume_ratio × risk_ratio",
-        "annual_pilot_current": "Годовой эффект пилота при текущей доле model, ₽/год",
-        "annual_pilot_full": "Годовой эффект пилота при full rollout, ₽/год",
-        "annual_pilot_full_ci_low": "Нижняя граница 95% CI годового эффекта пилота, ₽/год",
-        "annual_pilot_full_ci_high": "Верхняя граница 95% CI годового эффекта пилота, ₽/год",
-        "effect_per_case_nonpilot": "Эффект на убыток × risk_ratio, ₽",
-        "annual_network_full": "Годовой эффект сети full rollout, ₽/год",
-        "annual_network_full_ci_low": "Нижняя граница 95% CI годового эффекта сети, ₽/год",
-        "annual_network_full_ci_high": "Верхняя граница 95% CI годового эффекта сети, ₽/год",
-        "annual_network_full_compliance": "Годовой эффект сети при 100% compliance, ₽/год",
+        "annual_pilot_current": "effect × N_model_year_current, ₽/год",
+        "annual_pilot_full": "effect × N_pilot_eligible_year, ₽/год",
+        "annual_pilot_full_ci_low": "ci_low × N_pilot_eligible_year, ₽/год",
+        "annual_pilot_full_ci_high": "ci_high × N_pilot_eligible_year, ₽/год",
+        "effect_per_case_nonpilot": "effect_per_case × risk_ratio, ₽",
+        "annual_network_full": "annual_pilot_full × network_multiplier, ₽/год",
+        "annual_network_full_ci_low": "ci_low × N × network_multiplier, ₽/год",
+        "annual_network_full_ci_high": "ci_high × N × network_multiplier, ₽/год",
+        "annual_network_full_compliance": "То же для сценария 100% compliance, ₽/год",
       },
       rows=[
         "Одна строка на горизонт fact / 365.",
-        "CI годового эффекта = CI эффекта на убыток × N_pilot_eligible_year × network_multiplier.",
+      ],
+      formulas=[
+        "<b>N_pilot_eligible_year</b> = N_obs / seasonal_exposure",
+        "<b>annual_pilot_full</b> = effect_per_case × N_pilot_eligible_year",
+        "<b>annual_network_full</b> = annual_pilot_full × (1 + volume_ratio × risk_ratio)",
+        "CI годового = CI на инцидент × те же множители (линейный перенос)",
+      ],
+      notes=[
+        "Full rollout = все eligible идут в model-поток; это сценарий, не факт.",
       ],
     )}
   </div>
