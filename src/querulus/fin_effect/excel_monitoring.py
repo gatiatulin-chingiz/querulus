@@ -245,11 +245,33 @@ def _aggregate_row_group(
     group: pd.DataFrame,
     *,
     result_col: str,
+    incident_col: str,
+    loss_col: str,
 ) -> pd.Series:
-    """Схлопывание строк: текст/категории — мода, числа — сумма, даты — min."""
+    """Схлопывание строк: текст/категории — мода, числа — сумма, даты — min.
+
+    Номера инцидента/убытка — идентификаторы: не сумма и не «взять один» наугад.
+    Инцидент = ключ группы; убытки = список уникальных номеров через «; ».
+    """
     out: dict[str, Any] = {}
+    id_cols = {incident_col, loss_col}
     for column in group.columns:
         series = group[column]
+        if column == incident_col:
+            vals = series.dropna().astype("string").str.strip()
+            vals = vals[vals.ne("") & vals.str.casefold().ne("nan")]
+            out[column] = vals.iloc[0] if not vals.empty else np.nan
+            continue
+        if column == loss_col:
+            vals = (
+                series.dropna()
+                .astype("string")
+                .str.strip()
+            )
+            vals = vals[vals.ne("") & vals.str.casefold().ne("nan")]
+            uniq = list(dict.fromkeys(vals.tolist()))
+            out[column] = "; ".join(uniq) if uniq else np.nan
+            continue
         if column == result_col:
             out[column] = _collapse_result_check(series)
             continue
@@ -263,15 +285,17 @@ def _aggregate_row_group(
             out[column] = series.sum(min_count=1)
             continue
         # object/string и смешанные: пробуем числовую сумму, иначе мода
+        # (идентификаторы уже обработаны выше)
         as_num = pd.to_numeric(series, errors="coerce")
         if as_num.notna().any() and as_num.isna().sum() <= series.isna().sum():
-            # большинство значений числоподобные
             non_null_raw = series.dropna()
             if not non_null_raw.empty and as_num.notna().mean() >= 0.8:
                 out[column] = as_num.sum(min_count=1)
                 continue
         out[column] = _series_mode(series)
     out["_n_rows_collapsed"] = len(group)
+    out["_loss_ids"] = out.get(loss_col, np.nan)
+    _ = id_cols
     return pd.Series(out)
 
 
@@ -332,10 +356,22 @@ def collapse_monitoring_to_incident(
         work.loc[multi.gt(1), incident_col].nunique(dropna=False)
     )
     parts = [
-        _aggregate_row_group(part, result_col=result_col)
-        for _, part in work.groupby(incident_col, dropna=False, sort=False)
+        _aggregate_row_group(
+            part,
+            result_col=result_col,
+            incident_col=incident_col,
+            loss_col=loss_col,
+        )
+        for incident_key, part in work.groupby(incident_col, dropna=False, sort=False)
     ]
     out = pd.DataFrame(parts).reset_index(drop=True)
+    # ключ группы надёжнее любой агрегации колонки
+    if not out.empty:
+        keys = [
+            key
+            for key, _ in work.groupby(incident_col, dropna=False, sort=False)
+        ]
+        out[incident_col] = keys
     stats["n_incidents_after_collapse"] = len(out)
     return out, stats
 
@@ -815,9 +851,9 @@ def _prepare_monitoring_contract(
         "model",
     )
     work["_filial"] = work[filial_col].astype("string").fillna("(пусто)")
-    # единица анализа — инцидент; _loss = представительский номер убытка (мода)
-    work["_incident"] = work[incident_col]
-    work["_loss"] = work[loss_col]
+    # единица анализа — инцидент; _loss хранит список LossID через «; »
+    work["_incident"] = work[incident_col].astype("string")
+    work["_loss"] = work[loss_col].astype("string")
     work["_n_losses_collapsed"] = (
         _to_numeric(work["_n_rows_collapsed"]).fillna(1).astype(int)
         if "_n_rows_collapsed" in work.columns

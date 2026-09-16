@@ -251,12 +251,13 @@ def _group_means_fact(result: MonitoringEffectResult) -> dict[str, float]:
     return out
 
 
-def _loss_level_table(frame: pd.DataFrame) -> pd.DataFrame:
-    """Одна строка на убыток: группа, Yfact, флаги «тяжести»."""
+def _unit_level_table(frame: pd.DataFrame) -> pd.DataFrame:
+    """Одна строка на инцидент (единица ITT): группа, Yfact, флаги."""
     if frame.empty:
         return pd.DataFrame(
             columns=[
-                "loss_id",
+                "incident_id",
+                "loss_ids",
                 "group",
                 "filial",
                 "yfact",
@@ -274,30 +275,27 @@ def _loss_level_table(frame: pd.DataFrame) -> pd.DataFrame:
     work["_has_pretension"] = work["_psr_pretension"].fillna(0).gt(0)
     work["_has_fu"] = work["_psr_fu"].fillna(0).gt(0)
     work["_has_court"] = work["_psr_court"].fillna(0).gt(0)
-    agg = (
-        work.groupby("_loss", dropna=False)
-        .agg(
-            group=("_group", "first"),
-            filial=("_filial", "first"),
-            yfact=("Yfact", "mean"),
-            paid=("_paid_to_date", "mean"),
-            od=("_od", "mean"),
-            age_days=("_age_days", "max"),
-            agreement=("_agreement", "max"),
-            has_pretension=("_has_pretension", "max"),
-            has_fu=("_has_fu", "max"),
-            has_court=("_has_court", "max"),
-            application_date=("_application_date", "min"),
-        )
-        .reset_index()
-        .rename(columns={"_loss": "loss_id"})
+    # после схлопывания строка уже = инцидент
+    out = pd.DataFrame(
+        {
+            "incident_id": work["_incident"].astype("string"),
+            "loss_ids": work["_loss"].astype("string"),
+            "group": work["_group"],
+            "filial": work["_filial"],
+            "yfact": work["Yfact"],
+            "paid": work["_paid_to_date"],
+            "od": work["_od"],
+            "age_days": work["_age_days"],
+            "agreement": work["_agreement"].fillna(False).astype(bool),
+            "has_pretension": work["_has_pretension"].fillna(False).astype(bool),
+            "has_fu": work["_has_fu"].fillna(False).astype(bool),
+            "has_court": work["_has_court"].fillna(False).astype(bool),
+            "application_date": pd.to_datetime(
+                work["_application_date"], errors="coerce"
+            ).dt.date.astype("string"),
+        }
     )
-    agg["application_date"] = pd.to_datetime(
-        agg["application_date"], errors="coerce"
-    ).dt.date.astype("string")
-    for flag in ("agreement", "has_pretension", "has_fu", "has_court"):
-        agg[flag] = agg[flag].fillna(False).astype(bool)
-    return agg
+    return out.reset_index(drop=True)
 
 
 def _severity_flags(row: pd.Series) -> str:
@@ -424,7 +422,7 @@ def _loss_drivers_table(
     *,
     top_n: int = TOP_LOSS_DRIVERS_PER_KIND,
 ) -> pd.DataFrame:
-    """Топ новых убытков и топ shared с Δ оплаты по вкладу в Δ ITT."""
+    """Топ новых инцидентов и топ shared с Δ оплаты по вкладу в Δ ITT."""
     rows: list[dict[str, Any]] = []
     ok_weeks = (
         weekly.loc[weekly["status"].eq("ok"), "week_end"].astype(str).tolist()
@@ -438,18 +436,20 @@ def _loss_drivers_table(
         cur_means = group_means_by_week.get(key)
         if cur_tbl is None or prev_tbl is None or prev_means is None or cur_means is None:
             continue
-        if cur_tbl.empty:
+        if cur_tbl.empty or "incident_id" not in cur_tbl.columns:
             continue
-        prev_ids = set(prev_tbl["loss_id"].tolist())
-        cur_ids = set(cur_tbl["loss_id"].tolist())
+        prev_ids = set(prev_tbl["incident_id"].astype(str).tolist())
+        cur_ids = set(cur_tbl["incident_id"].astype(str).tolist())
         new_ids = cur_ids - prev_ids
         shared_ids = cur_ids & prev_ids
-        prev_paid = prev_tbl.set_index("loss_id")["paid"]
-        cur_indexed = cur_tbl.set_index("loss_id")
+        prev_paid = prev_tbl.set_index(
+            prev_tbl["incident_id"].astype(str)
+        )["paid"]
+        cur_indexed = cur_tbl.set_index(cur_tbl["incident_id"].astype(str))
 
         week_rows: list[dict[str, Any]] = []
-        for loss_id in new_ids:
-            rec = cur_indexed.loc[loss_id]
+        for incident_id in new_ids:
+            rec = cur_indexed.loc[incident_id]
             if isinstance(rec, pd.DataFrame):
                 rec = rec.iloc[0]
             group = str(rec["group"])
@@ -466,8 +466,9 @@ def _loss_drivers_table(
                 {
                     "week_end": key,
                     "prev_week_end": prev_key,
-                    "driver_kind": "new_loss",
-                    "loss_id": loss_id,
+                    "driver_kind": "new_incident",
+                    "incident_id": incident_id,
+                    "loss_ids": rec.get("loss_ids"),
                     "group": group,
                     "filial": rec["filial"],
                     "application_date": rec.get("application_date"),
@@ -480,14 +481,14 @@ def _loss_drivers_table(
                 }
             )
 
-        for loss_id in shared_ids:
-            rec = cur_indexed.loc[loss_id]
+        for incident_id in shared_ids:
+            rec = cur_indexed.loc[incident_id]
             if isinstance(rec, pd.DataFrame):
                 rec = rec.iloc[0]
-            if loss_id not in prev_paid.index:
+            if incident_id not in prev_paid.index:
                 continue
             paid_cur = float(rec["paid"]) if pd.notna(rec["paid"]) else np.nan
-            paid_prev_v = prev_paid.loc[loss_id]
+            paid_prev_v = prev_paid.loc[incident_id]
             paid_prev_f = float(paid_prev_v) if pd.notna(paid_prev_v) else np.nan
             if pd.isna(paid_cur) or pd.isna(paid_prev_f):
                 continue
@@ -506,7 +507,8 @@ def _loss_drivers_table(
                     "week_end": key,
                     "prev_week_end": prev_key,
                     "driver_kind": "payment_update",
-                    "loss_id": loss_id,
+                    "incident_id": incident_id,
+                    "loss_ids": rec.get("loss_ids"),
                     "group": group,
                     "filial": rec["filial"],
                     "application_date": rec.get("application_date"),
@@ -522,7 +524,7 @@ def _loss_drivers_table(
         if not week_rows:
             continue
         frame = pd.DataFrame(week_rows)
-        for kind in ("new_loss", "payment_update"):
+        for kind in ("new_incident", "payment_update"):
             part = frame.loc[frame["driver_kind"].eq(kind)].copy()
             if part.empty:
                 continue
@@ -635,11 +637,13 @@ def run_weekly_monitoring_series(
         weekly_rows.append(snap)
 
         contrib_by_week[key] = _filial_contributions(result.filial_effects, "fact")
-        loss_level = _loss_level_table(result.frame)
+        loss_level = _unit_level_table(result.frame)
         loss_by_week[key] = loss_level
         group_means_by_week[key] = _group_means_fact(result)
-        loss_sets[key] = set(loss_level["loss_id"].tolist())
-        paid_by_week[key] = loss_level.set_index("loss_id")["paid"]
+        loss_sets[key] = set(loss_level["incident_id"].astype(str).tolist())
+        paid_by_week[key] = loss_level.set_index(
+            loss_level["incident_id"].astype(str)
+        )["paid"]
 
     weekly = pd.DataFrame(weekly_rows)
     empty = WeeklySeriesResult(
@@ -942,9 +946,9 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
       ],
     )}
   </div>
-  <h2>Топ убытков по вкладу в Δ ITT</h2>
+  <h2>Топ инцидентов по вкладу в Δ ITT</h2>
   <div class="card">
-    <p>Диагностика: до {TOP_LOSS_DRIVERS_PER_KIND} новых убытков и до
+    <p>Диагностика: до {TOP_LOSS_DRIVERS_PER_KIND} новых инцидентов и до
     {TOP_LOSS_DRIVERS_PER_KIND} обновлений оплаты с наибольшим
     |estimated_itt_pull|. Знак: control «+» увеличивает ITT при росте
     расхода; model «+» увеличивает ITT при падении расхода model.</p>
@@ -954,18 +958,19 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
         "week_end": "Конец текущей недели",
         "prev_week_end": "Конец предыдущей недели",
         "driver_kind": (
-            "Тип драйвера: new_loss (новый убыток) или payment_update (Δ оплаты)"
+            "Тип драйвера: new_incident (новый инцидент) или payment_update (Δ оплаты)"
         ),
-        "loss_id": "Номер убытка",
+        "incident_id": "Номер инцидента",
+        "loss_ids": "Номера убытков внутри инцидента (через «; »)",
         "group": "Группа: control или model",
         "filial": "Филиал",
         "application_date": "Дата заявления",
-        "yfact": "Yfact убытка на текущем срезе, ₽",
+        "yfact": "Yfact инцидента на текущем срезе, ₽",
         "paid_prev": "СуммаПлатежа на прошлой неделе, ₽ (только payment_update)",
         "paid_cur": "СуммаПлатежа на текущей неделе, ₽",
         "delta_paid": "Изменение СуммаПлатежа, ₽",
         "estimated_itt_pull": (
-            "Оценка вклада в Δ ITT, ₽: для new_loss — sign×(Yfact−mean_group)/(N+1); "
+            "Оценка вклада в Δ ITT, ₽: для new_incident — sign×(Yfact−mean_group)/(N+1); "
             "для payment_update — sign×Δpaid/N"
         ),
         "severity": (
@@ -973,7 +978,7 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
         ),
       },
       rows=[
-        "До 5 new_loss и до 5 payment_update с наибольшим |вкладом| на пару недель.",
+        "До 5 new_incident и до 5 payment_update с наибольшим |вкладом| на пару недель.",
       ],
     )}
   </div>

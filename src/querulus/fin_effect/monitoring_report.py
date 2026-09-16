@@ -687,8 +687,8 @@ def _business_schema() -> str:
 def _contract_table(result: MonitoringEffectResult) -> pd.DataFrame:
     meaning = {
         "unit": "Единица ITT — инцидент после дедупа убытков и схлопывания",
-        "loss": "Представительский номер убытка (мода) внутри инцидента",
-        "incident": "Единица анализа; bootstrap-кластер совпадает с единицей",
+        "loss": "Список LossID инцидента через «; » (не единица ITT)",
+        "incident": "Единица анализа (= ключ группы; не сумма и не мода)",
         "result": (
             "model={0,1}; control=−100; Null на убытке размазывается "
             "с непустого Result инцидента"
