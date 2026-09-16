@@ -19,10 +19,6 @@ from querulus.fin_effect.monitoring_report import FORMULA_VERSION, _CSS, _table
 
 PILOT_START_DEFAULT = "2026-04-20"
 SNAPSHOT_FILENAME = "fin_effect_snapshots.csv"
-WEEKLY_FILENAME = "fin_effect_weekly.csv"
-WEEKLY_FILIAL_FILENAME = "fin_effect_weekly_filial.csv"
-WEEKLY_GROUP_FILENAME = "fin_effect_weekly_group.csv"
-WEEKLY_LOSS_FILENAME = "fin_effect_weekly_loss_drivers.csv"
 WEEKLY_HTML_FILENAME = "fin_effect_weekly.html"
 TOP_LOSS_DRIVERS_PER_KIND = 5
 
@@ -820,31 +816,14 @@ def save_weekly_outputs(
     series: WeeklySeriesResult,
     data_dir: str | Path,
     *,
-    weekly_csv_name: str | None = None,
-    filial_csv_name: str | None = None,
-    group_csv_name: str | None = None,
-    loss_csv_name: str | None = None,
     weekly_html_name: str | None = None,
-) -> dict[str, Path]:
-    """Сохранить CSV + HTML понедельного ряда (включая group/loss drivers)."""
+) -> Path:
+    """Записать общий ``fin_effect_weekly.html`` в ``data_dir`` (без CSV)."""
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
-    paths = {
-        "weekly_csv": data_dir / (weekly_csv_name or WEEKLY_FILENAME),
-        "filial_csv": data_dir / (filial_csv_name or WEEKLY_FILIAL_FILENAME),
-        "group_csv": data_dir / (group_csv_name or WEEKLY_GROUP_FILENAME),
-        "loss_csv": data_dir / (loss_csv_name or WEEKLY_LOSS_FILENAME),
-        "weekly_html": data_dir / (weekly_html_name or WEEKLY_HTML_FILENAME),
-    }
-    series.weekly.to_csv(paths["weekly_csv"], index=False)
-    series.filial_deltas.to_csv(paths["filial_csv"], index=False)
-    series.group_deltas.to_csv(paths["group_csv"], index=False)
-    series.loss_drivers.to_csv(paths["loss_csv"], index=False)
-    paths["weekly_html"].write_text(
-        build_weekly_html(series),
-        encoding="utf-8",
-    )
-    return paths
+    html_path = data_dir / (weekly_html_name or WEEKLY_HTML_FILENAME)
+    html_path.write_text(build_weekly_html(series), encoding="utf-8")
+    return html_path
 
 
 def build_weekly_html(series: WeeklySeriesResult) -> str:
@@ -1038,10 +1017,6 @@ __all__ = [
     "PILOT_START_DEFAULT",
     "SNAPSHOT_FILENAME",
     "TOP_LOSS_DRIVERS_PER_KIND",
-    "WEEKLY_FILENAME",
-    "WEEKLY_FILIAL_FILENAME",
-    "WEEKLY_GROUP_FILENAME",
-    "WEEKLY_LOSS_FILENAME",
     "WEEKLY_HTML_FILENAME",
     "WeeklySeriesResult",
     "append_snapshot_log",

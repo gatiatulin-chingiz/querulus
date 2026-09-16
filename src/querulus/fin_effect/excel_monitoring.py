@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from querulus.fin_effect.excel_explore import (
+    ALLOWED_REFUND_FORM_NEEDLES,
     VITRINA_TABLE_DEFAULT,
     _to_numeric,
     analytics_base_mask,
@@ -27,6 +28,8 @@ FU_FEE_DEFAULT = 100_000.0
 COURT_FEE_DEFAULT = 15_000.0
 RETRO_AS_OF_DEFAULT = "2025-06-30"
 RESULT_OUT_OF_MODEL = -100
+RESULT_ELIGIBLE = (0, 1, RESULT_OUT_OF_MODEL)
+WRITEOFF_REFUND_NEEDLES = ("списан",)
 HORIZONS = (365,)
 PILOT_FILIALS = (
     "Владимирский",
@@ -187,6 +190,154 @@ def _required_alias(df: pd.DataFrame, alias: str, label: str) -> str:
     if column is None:
         raise KeyError(f"Не найдена колонка {label} (alias={alias})")
     return column
+
+
+def _series_mode(series: pd.Series) -> Any:
+    """Мода; при ничьей — первое из самых частых значений."""
+    clean = series.dropna()
+    if clean.empty:
+        return np.nan
+    if pd.api.types.is_string_dtype(clean) or clean.dtype == object:
+        text = clean.astype("string").str.strip()
+        text = text[text.notna() & text.ne("") & text.str.casefold().ne("nan")]
+        if text.empty:
+            return np.nan
+        return text.value_counts().index[0]
+    return clean.value_counts().index[0]
+
+
+def _collapse_result_check(series: pd.Series) -> float:
+    """РезультатПроверки на инцидент: Null игнорируем, непустой 0/1/−100 размазываем.
+
+    Если в инциденте есть −100 и Null → −100 (control на весь инцидент).
+    Аналогично для 0/1. При конфликте нескольких непустых — мода,
+    ничья: −100, затем 1, затем 0.
+    """
+    num = pd.to_numeric(series, errors="coerce")
+    valid = num[num.isin(RESULT_ELIGIBLE)]
+    if valid.empty:
+        return np.nan
+    counts = valid.value_counts()
+    top = counts[counts == counts.max()].index.astype(float).tolist()
+    for preferred in (float(RESULT_OUT_OF_MODEL), 1.0, 0.0):
+        if preferred in top:
+            return preferred
+    return float(top[0])
+
+
+def _is_writeoff_refund(series: pd.Series) -> pd.Series:
+    text = series.fillna("").astype(str).str.casefold()
+    mask = pd.Series(False, index=series.index)
+    for needle in WRITEOFF_REFUND_NEEDLES:
+        mask = mask | text.str.contains(needle, na=False)
+    return mask
+
+
+def _is_allowed_refund(series: pd.Series) -> pd.Series:
+    text = series.fillna("").astype(str).str.casefold()
+    mask = pd.Series(False, index=series.index)
+    for needle in ALLOWED_REFUND_FORM_NEEDLES:
+        mask = mask | text.str.contains(needle, na=False)
+    return mask
+
+
+def _aggregate_row_group(
+    group: pd.DataFrame,
+    *,
+    result_col: str,
+) -> pd.Series:
+    """Схлопывание строк: текст/категории — мода, числа — сумма, даты — min."""
+    out: dict[str, Any] = {}
+    for column in group.columns:
+        series = group[column]
+        if column == result_col:
+            out[column] = _collapse_result_check(series)
+            continue
+        if pd.api.types.is_datetime64_any_dtype(series):
+            out[column] = series.min()
+            continue
+        if pd.api.types.is_bool_dtype(series):
+            out[column] = bool(series.fillna(False).any())
+            continue
+        if pd.api.types.is_numeric_dtype(series):
+            out[column] = series.sum(min_count=1)
+            continue
+        # object/string и смешанные: пробуем числовую сумму, иначе мода
+        as_num = pd.to_numeric(series, errors="coerce")
+        if as_num.notna().any() and as_num.isna().sum() <= series.isna().sum():
+            # большинство значений числоподобные
+            non_null_raw = series.dropna()
+            if not non_null_raw.empty and as_num.notna().mean() >= 0.8:
+                out[column] = as_num.sum(min_count=1)
+                continue
+        out[column] = _series_mode(series)
+    out["_n_rows_collapsed"] = len(group)
+    return pd.Series(out)
+
+
+def dedupe_monitoring_by_loss(
+    df: pd.DataFrame,
+    *,
+    loss_col: str,
+    result_col: str,
+) -> tuple[pd.DataFrame, int]:
+    """Одна строка на номер убытка (keep first; без суммирования дублей)."""
+    _ = result_col  # совместимость сигнатуры / будущие правила конфликта
+    if loss_col not in df.columns:
+        raise KeyError(f"Нет колонки убытка: {loss_col}")
+    n_before = len(df)
+    out = df.drop_duplicates(subset=[loss_col], keep="first").copy()
+    out = out.reset_index(drop=True)
+    out["_n_rows_collapsed"] = 1
+    return out, n_before - len(out)
+
+
+def collapse_monitoring_to_incident(
+    df: pd.DataFrame,
+    *,
+    incident_col: str,
+    loss_col: str,
+    result_col: str,
+    refund_col: str | None,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Схлопнуть убытки в инцидент.
+
+    Списанные по форме возмещения не входят в схлопывание (исключаются).
+    Остальные: ResultПроверки размазывается с непустых 0/1/−100; числа — sum,
+    текст — mode.
+    """
+    work = df.copy()
+    stats = {
+        "n_before_incident_collapse": len(work),
+        "n_writeoff_excluded": 0,
+        "n_incidents_after_collapse": 0,
+        "n_multi_loss_incidents": 0,
+    }
+    if refund_col is not None and refund_col in work.columns:
+        writeoff = _is_writeoff_refund(work[refund_col])
+        stats["n_writeoff_excluded"] = int(writeoff.sum())
+        # списанные не схлопываем и не оставляем в ITT-популяции
+        work = work.loc[~writeoff].copy()
+        # на всякий случай оставляем только разрешённые формы
+        allowed = _is_allowed_refund(work[refund_col])
+        work = work.loc[allowed].copy()
+
+    if work.empty:
+        return work, stats
+
+    multi = work.groupby(incident_col, dropna=False)[loss_col].transform(
+        "nunique"
+    )
+    stats["n_multi_loss_incidents"] = int(
+        work.loc[multi.gt(1), incident_col].nunique(dropna=False)
+    )
+    parts = [
+        _aggregate_row_group(part, result_col=result_col)
+        for _, part in work.groupby(incident_col, dropna=False, sort=False)
+    ]
+    out = pd.DataFrame(parts).reset_index(drop=True)
+    stats["n_incidents_after_collapse"] = len(out)
+    return out, stats
 
 
 def _normalize_text(series: pd.Series) -> pd.Series:
@@ -598,27 +749,80 @@ def _prepare_monitoring_contract(
         "Дата вызова модели сутяжности",
     )
     application_col = _required_alias(df, "application_date", "ДатаЗаявления")
+    refund_col = resolve_column(df, "refund_form")
     psr_columns = {
         key: _required_existing(df, candidates, f"ПСР: {key}")
         for key, candidates in PSR_AMOUNT_CANDIDATES.items()
     }
+    warnings: list[str] = []
 
-    base = analytics_base_mask(df, filial_scope="pilot")
-    result = _to_numeric(df[result_col])
-    eligible = base & result.isin([0, 1, RESULT_OUT_OF_MODEL])
-    work = df.loc[eligible].copy()
+    # 1) дедуп по номеру убытка
+    work, n_dup_rows = dedupe_monitoring_by_loss(
+        df, loss_col=loss_col, result_col=result_col
+    )
+    if n_dup_rows:
+        warnings.append(
+            f"Дедупликация по убытку: убрано/схлопнуто {n_dup_rows} лишних строк."
+        )
+
+    # даты до фильтров — иначе groupby может оставить object
+    work[call_date_col] = pd.to_datetime(work[call_date_col], errors="coerce")
+    work[application_col] = pd.to_datetime(work[application_col], errors="coerce")
+
+    # 2) базовые фильтры без Result (Null оставляем — размажется с соседей по инциденту)
+    base = analytics_base_mask(work, filial_scope="pilot")
+    work = work.loc[base].copy()
     if work.empty:
-        raise ValueError("После model/control и базовых фильтров нет строк")
+        raise ValueError("После базовых фильтров нет строк")
 
+    # 3) схлоп на инцидент; списанные по форме возмещения не входят
+    work, collapse_stats = collapse_monitoring_to_incident(
+        work,
+        incident_col=incident_col,
+        loss_col=loss_col,
+        result_col=result_col,
+        refund_col=refund_col,
+    )
+    if collapse_stats["n_writeoff_excluded"]:
+        warnings.append(
+            "Списанные по форме возмещения не схлопывались и исключены: "
+            f"{collapse_stats['n_writeoff_excluded']} убытков."
+        )
+    if collapse_stats["n_multi_loss_incidents"]:
+        warnings.append(
+            "Инцидентов с >1 убытком до схлопывания: "
+            f"{collapse_stats['n_multi_loss_incidents']}."
+        )
+    if work.empty:
+        raise ValueError("После схлопывания на инцидент нет строк")
+
+    # 4) только model/control после размазывания Result
     work["_result"] = _to_numeric(work[result_col])
+    eligible = work["_result"].isin(list(RESULT_ELIGIBLE))
+    n_dropped_null_result = int((~eligible).sum())
+    work = work.loc[eligible].copy()
+    if n_dropped_null_result:
+        warnings.append(
+            "Инцидентов без Result∈{0,1,−100} после схлопывания (все Null/прочее): "
+            f"{n_dropped_null_result}."
+        )
+    if work.empty:
+        raise ValueError("После model/control нет строк (нет Result 0/1/−100)")
+
     work["_group"] = np.where(
         work["_result"].eq(RESULT_OUT_OF_MODEL),
         "control",
         "model",
     )
     work["_filial"] = work[filial_col].astype("string").fillna("(пусто)")
-    work["_loss"] = work[loss_col]
+    # единица анализа — инцидент; _loss = представительский номер убытка (мода)
     work["_incident"] = work[incident_col]
+    work["_loss"] = work[loss_col]
+    work["_n_losses_collapsed"] = (
+        _to_numeric(work["_n_rows_collapsed"]).fillna(1).astype(int)
+        if "_n_rows_collapsed" in work.columns
+        else pd.Series(1, index=work.index, dtype=int)
+    )
     work["_paid_missing"] = _to_numeric(work[payment_col]).isna()
     work["_od_missing"] = _to_numeric(work[od_col]).isna()
     work["_paid_to_date"] = _to_numeric(work[payment_col]).fillna(0.0).clip(lower=0.0)
@@ -627,9 +831,7 @@ def _prepare_monitoring_contract(
     work["_recommended_extra"] = (
         _to_numeric(work[recommended_col]).fillna(0.0).clip(lower=0.0)
     )
-    work["_payout_by_model"] = (
-        _to_numeric(work[payout_col]).fillna(0.0).eq(1)
-    )
+    work["_payout_by_model"] = _to_numeric(work[payout_col]).fillna(0.0).gt(0)
     work["_agreement"] = agreement_mask(work)
     for key, column in psr_columns.items():
         work[f"_psr_{key}"] = _to_numeric(work[column]).fillna(0.0).clip(lower=0.0)
@@ -650,7 +852,6 @@ def _prepare_monitoring_contract(
         else pd.Timestamp.today().normalize()
     )
     work["_age_days"] = (calc_date - work["_t0"].dt.normalize()).dt.days
-    warnings: list[str] = []
     if work["_age_days"].lt(0).any():
         warnings.append("Есть t0 позже t_calc; age_days для них ограничен нулём.")
         work["_age_days"] = work["_age_days"].clip(lower=0)
@@ -662,6 +863,7 @@ def _prepare_monitoring_contract(
         )
 
     contract = {
+        "unit": "incident_after_loss_dedupe",
         "loss": loss_col,
         "incident": incident_col,
         "result": result_col,
@@ -677,6 +879,12 @@ def _prepare_monitoring_contract(
         "psr_pretension": psr_columns["pretension"],
         "psr_fu": psr_columns["fu"],
         "psr_court": psr_columns["court"],
+        "n_rows_after_loss_dedupe_removed": str(n_dup_rows),
+        "n_writeoff_excluded": str(collapse_stats["n_writeoff_excluded"]),
+        "n_multi_loss_incidents": str(collapse_stats["n_multi_loss_incidents"]),
+        "n_incidents_after_collapse": str(
+            collapse_stats["n_incidents_after_collapse"]
+        ),
     }
     return work, contract, warnings
 
@@ -1147,6 +1355,13 @@ def _data_quality(
     metrics = {
         "n_rows": len(frame),
         "n_unique_losses": frame["_loss"].nunique(dropna=False),
+        "n_unique_incidents": frame["_incident"].nunique(dropna=False),
+        "unit_is_incident": True,
+        "mean_losses_per_incident": float(
+            frame["_n_losses_collapsed"].mean()
+        )
+        if "_n_losses_collapsed" in frame.columns
+        else 1.0,
         "losses_with_multiple_rows": int(duplicate_losses.sum()),
         "extra_rows_vs_one_row_per_loss": int(
             (rows_per_loss - 1).clip(lower=0).sum()
@@ -1408,7 +1623,9 @@ def build_synthetic_claims_excel(
 
 __all__ = [
     "build_synthetic_claims_excel",
+    "collapse_monitoring_to_incident",
     "COURT_FEE_DEFAULT",
+    "dedupe_monitoring_by_loss",
     "FU_FEE_DEFAULT",
     "GroupRetroPriors",
     "HORIZONS",
