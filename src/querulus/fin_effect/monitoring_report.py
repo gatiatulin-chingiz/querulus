@@ -20,22 +20,40 @@ FORMULA_VERSION = "ITT-U-2026-09-15-v8"
 def report_export_stamp(
     when: datetime | pd.Timestamp | str | None = None,
 ) -> str:
-    """Метка выгрузки для имён файлов: YYYY-MM-DD_HHMM."""
+    """Метка выгрузки для папки прогона: YYYY-MM-DD_HHMM."""
     ts = pd.Timestamp(when) if when is not None else pd.Timestamp.now()
     return ts.strftime("%Y-%m-%d_%H%M")
 
 
-def dated_artifact_names(stamp: str) -> dict[str, str]:
-    """Имена plan/report/conclusion/audit/weekly с датой выгрузки."""
+def export_run_dir(
+    data_dir: str | Path,
+    stamp: str | None = None,
+) -> Path:
+    """Папка одного прогона: ``data_dir/<stamp>/`` (создаётся при необходимости)."""
+    export_stamp = stamp or report_export_stamp()
+    path = Path(data_dir) / export_stamp
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def dated_artifact_names(stamp: str | None = None) -> dict[str, str]:
+    """Базовые имена артефактов внутри папки выгрузки.
+
+    Дата/время — в имени папки (``export_run_dir``), не в имени файла.
+    Аргумент ``stamp`` сохранён для совместимости вызовов и не влияет на имена.
+    """
+    _ = stamp
     return {
-        "plan": f"fin_effect_plan_{stamp}.html",
-        "report": f"fin_effect_report_{stamp}.html",
-        "conclusion": f"fin_effect_conclusion_{stamp}.html",
-        "audit": f"fin_effect_audit_{stamp}.xlsx",
-        "weekly_html": f"fin_effect_weekly_{stamp}.html",
-        "weekly_csv": f"fin_effect_weekly_{stamp}.csv",
-        "weekly_filial_csv": f"fin_effect_weekly_filial_{stamp}.csv",
-        "error": f"fin_effect_error_{stamp}.html",
+        "plan": PLAN_FILENAME,
+        "report": REPORT_FILENAME,
+        "conclusion": CONCLUSION_FILENAME,
+        "audit": "fin_effect_audit.xlsx",
+        "weekly_html": "fin_effect_weekly.html",
+        "weekly_csv": "fin_effect_weekly.csv",
+        "weekly_filial_csv": "fin_effect_weekly_filial.csv",
+        "weekly_group_csv": "fin_effect_weekly_group.csv",
+        "weekly_loss_csv": "fin_effect_weekly_loss_drivers.csv",
+        "error": "fin_effect_error.html",
     }
 
 _CSS = """
@@ -485,7 +503,11 @@ def _table(
     columns: dict[str, str] | None = None,
     rows: list[str] | None = None,
 ) -> str:
-    """Таблица + легенда колонок и строк под ней."""
+    """Таблица + легенда колонок и строк под ней.
+
+    Если передан ``columns``, заголовки таблицы показывают русские подписи,
+    а в легенде остаётся соответствие ``код → смысл``.
+    """
     if frame is None or frame.empty:
         return "<p class='muted'>(нет данных)</p>"
     shown = frame.copy()
@@ -504,21 +526,25 @@ def _table(
             return value
 
         shown[col] = series.map(_cell)
+    legend_parts: list[str] = []
+    if columns:
+        present = set(map(str, frame.columns))
+        rename = {
+            name: desc for name, desc in columns.items() if name in present
+        }
+        if rename:
+            shown = shown.rename(columns=rename)
+            items = "".join(
+                f"<li><code>{escape(name)}</code> — {escape(desc)}</li>"
+                for name, desc in columns.items()
+                if name in present
+            )
+            legend_parts.append(f"<h4>Колонки</h4><ul>{items}</ul>")
     html = (
         '<div class="scroll">'
         + shown.to_html(index=False, border=0, escape=True)
         + "</div>"
     )
-    legend_parts: list[str] = []
-    if columns:
-        present = set(map(str, frame.columns))
-        items = "".join(
-            f"<li><code>{escape(name)}</code> — {escape(desc)}</li>"
-            for name, desc in columns.items()
-            if name in present
-        )
-        if items:
-            legend_parts.append(f"<h4>Колонки</h4><ul>{items}</ul>")
     if rows:
         items = "".join(f"<li>{escape(item)}</li>" for item in rows)
         legend_parts.append(f"<h4>Строки</h4><ul>{items}</ul>")
@@ -1656,15 +1682,16 @@ def write_all_monitoring_htmls(
     development_lags: pd.DataFrame | None = None,
     stamp: str | None = None,
 ) -> tuple[Path, Path, Path, dict[str, str]]:
-    """Записать три HTML с датой выгрузки в имени (не затирают прошлые).
+    """Записать три HTML в ``data_dir/<stamp>/`` (прошлые прогоны не затираются).
 
+    Общие файлы (например лог снимков) остаются в ``data_dir``.
     Возвращает (plan, report, conclusion, names).
     """
-    data_dir = Path(data_dir)
     export_stamp = stamp or report_export_stamp()
+    run_dir = export_run_dir(data_dir, export_stamp)
     names = dated_artifact_names(export_stamp)
     plan = write_plan_html(
-        data_dir / names["plan"],
+        run_dir / names["plan"],
         source_label=source_label,
         plan_name=names["plan"],
         report_name=names["report"],
@@ -1672,14 +1699,14 @@ def write_all_monitoring_htmls(
     )
     report = write_monitoring_html(
         result,
-        data_dir / names["report"],
+        run_dir / names["report"],
         source_label=source_label,
         plan_name=names["plan"],
         report_name=names["report"],
         conclusion_name=names["conclusion"],
     )
     conclusion = write_conclusion_html(
-        data_dir / names["conclusion"],
+        run_dir / names["conclusion"],
         source_label=source_label,
         ready=True,
         body_html=build_conclusion_body_from_result(
@@ -1733,6 +1760,7 @@ __all__ = [
     "build_monitoring_html",
     "build_plan_html",
     "dated_artifact_names",
+    "export_run_dir",
     "report_export_stamp",
     "write_all_monitoring_htmls",
     "write_conclusion_html",

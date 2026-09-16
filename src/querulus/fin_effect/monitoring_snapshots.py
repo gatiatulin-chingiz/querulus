@@ -21,7 +21,10 @@ PILOT_START_DEFAULT = "2026-04-20"
 SNAPSHOT_FILENAME = "fin_effect_snapshots.csv"
 WEEKLY_FILENAME = "fin_effect_weekly.csv"
 WEEKLY_FILIAL_FILENAME = "fin_effect_weekly_filial.csv"
+WEEKLY_GROUP_FILENAME = "fin_effect_weekly_group.csv"
+WEEKLY_LOSS_FILENAME = "fin_effect_weekly_loss_drivers.csv"
 WEEKLY_HTML_FILENAME = "fin_effect_weekly.html"
+TOP_LOSS_DRIVERS_PER_KIND = 5
 
 SNAPSHOT_COLUMNS = [
     "snapshot_at",
@@ -233,12 +236,315 @@ def _filial_contributions(filial_effects: pd.DataFrame, horizon: str) -> pd.Data
     )[["filial", "n", "effect", "weight", "contribution"]]
 
 
+def _group_means_fact(result: MonitoringEffectResult) -> dict[str, float]:
+    """Средние Yfact и N по control/model на горизонте fact."""
+    part = result.group_summary.loc[
+        result.group_summary["horizon"].astype(str).eq("fact")
+    ]
+    out = {
+        "mean_control": np.nan,
+        "mean_model": np.nan,
+        "n_control": 0.0,
+        "n_model": 0.0,
+    }
+    for _, row in part.iterrows():
+        group = str(row["group"])
+        if group in ("control", "model"):
+            out[f"mean_{group}"] = float(row["mean_cost"])
+            out[f"n_{group}"] = float(row["n"])
+    return out
+
+
+def _loss_level_table(frame: pd.DataFrame) -> pd.DataFrame:
+    """Одна строка на убыток: группа, Yfact, флаги «тяжести»."""
+    if frame.empty:
+        return pd.DataFrame(
+            columns=[
+                "loss_id",
+                "group",
+                "filial",
+                "yfact",
+                "paid",
+                "od",
+                "age_days",
+                "agreement",
+                "has_pretension",
+                "has_fu",
+                "has_court",
+                "application_date",
+            ]
+        )
+    work = frame.copy()
+    work["_has_pretension"] = work["_psr_pretension"].fillna(0).gt(0)
+    work["_has_fu"] = work["_psr_fu"].fillna(0).gt(0)
+    work["_has_court"] = work["_psr_court"].fillna(0).gt(0)
+    agg = (
+        work.groupby("_loss", dropna=False)
+        .agg(
+            group=("_group", "first"),
+            filial=("_filial", "first"),
+            yfact=("Yfact", "mean"),
+            paid=("_paid_to_date", "mean"),
+            od=("_od", "mean"),
+            age_days=("_age_days", "max"),
+            agreement=("_agreement", "max"),
+            has_pretension=("_has_pretension", "max"),
+            has_fu=("_has_fu", "max"),
+            has_court=("_has_court", "max"),
+            application_date=("_application_date", "min"),
+        )
+        .reset_index()
+        .rename(columns={"_loss": "loss_id"})
+    )
+    agg["application_date"] = pd.to_datetime(
+        agg["application_date"], errors="coerce"
+    ).dt.date.astype("string")
+    for flag in ("agreement", "has_pretension", "has_fu", "has_court"):
+        agg[flag] = agg[flag].fillna(False).astype(bool)
+    return agg
+
+
+def _severity_flags(row: pd.Series) -> str:
+    parts: list[str] = []
+    if bool(row.get("agreement")):
+        parts.append("соглашение")
+    if bool(row.get("has_pretension")):
+        parts.append("претензия")
+    if bool(row.get("has_fu")):
+        parts.append("ФУ")
+    if bool(row.get("has_court")):
+        parts.append("суд")
+    od = row.get("od")
+    if pd.notna(od) and float(od) > 0:
+        parts.append(f"OD={float(od):,.0f}₽".replace(",", " "))
+    age = row.get("age_days")
+    if pd.notna(age):
+        parts.append(f"age={int(age)}д")
+    return ", ".join(parts)
+
+
+def _group_delta_table(
+    weekly: pd.DataFrame,
+    group_means_by_week: dict[str, dict[str, float]],
+) -> pd.DataFrame:
+    """Δ mean control/model и вклад в Δ ITT (без стратификации по филиалам)."""
+    rows: list[dict[str, Any]] = []
+    ok_weeks = (
+        weekly.loc[weekly["status"].eq("ok"), "week_end"].astype(str).tolist()
+        if "status" in weekly.columns
+        else []
+    )
+    for prev_key, key in zip(ok_weeks, ok_weeks[1:]):
+        prev = group_means_by_week.get(prev_key)
+        cur = group_means_by_week.get(key)
+        if prev is None or cur is None:
+            continue
+        delta_control = (
+            float(cur["mean_control"]) - float(prev["mean_control"])
+            if pd.notna(cur["mean_control"]) and pd.notna(prev["mean_control"])
+            else np.nan
+        )
+        delta_model = (
+            float(cur["mean_model"]) - float(prev["mean_model"])
+            if pd.notna(cur["mean_model"]) and pd.notna(prev["mean_model"])
+            else np.nan
+        )
+        # ITT = mean_c − mean_m → ΔITT ≈ Δmean_c − Δmean_m
+        contrib_control = delta_control
+        contrib_model = (
+            -delta_model if pd.notna(delta_model) else np.nan
+        )
+        delta_itt_unstrat = (
+            contrib_control + contrib_model
+            if pd.notna(contrib_control) and pd.notna(contrib_model)
+            else np.nan
+        )
+        week_row = weekly.loc[weekly["week_end"].astype(str).eq(key)]
+        delta_yfact = (
+            float(week_row.iloc[0]["delta_yfact"])
+            if not week_row.empty and "delta_yfact" in week_row.columns
+            and pd.notna(week_row.iloc[0].get("delta_yfact"))
+            else np.nan
+        )
+        if pd.notna(delta_control) and abs(delta_control) >= abs(
+            delta_model if pd.notna(delta_model) else 0.0
+        ):
+            leader = "control"
+            leader_dir = (
+                "подорожал (+ к ITT)"
+                if pd.notna(delta_control) and delta_control > 0
+                else "подешевел (− к ITT)"
+                if pd.notna(delta_control) and delta_control < 0
+                else "без изменения"
+            )
+        else:
+            leader = "model"
+            leader_dir = (
+                "подорожал (− к ITT)"
+                if pd.notna(delta_model) and delta_model > 0
+                else "подешевел (+ к ITT)"
+                if pd.notna(delta_model) and delta_model < 0
+                else "без изменения"
+            )
+        def _fmt(value: Any) -> str:
+            if pd.isna(value):
+                return "—"
+            return f"{float(value):+,.0f}".replace(",", " ")
+
+        read = (
+            f"Сильнее потянул {leader} ({leader_dir}): "
+            f"control Δmean={_fmt(delta_control)}₽ → вклад {_fmt(contrib_control)}; "
+            f"model Δmean={_fmt(delta_model)}₽ → вклад {_fmt(contrib_model)}"
+        )
+        rows.append(
+            {
+                "week_end": key,
+                "prev_week_end": prev_key,
+                "mean_control_prev": prev["mean_control"],
+                "mean_control_cur": cur["mean_control"],
+                "delta_mean_control": delta_control,
+                "n_control_prev": prev["n_control"],
+                "n_control_cur": cur["n_control"],
+                "mean_model_prev": prev["mean_model"],
+                "mean_model_cur": cur["mean_model"],
+                "delta_mean_model": delta_model,
+                "n_model_prev": prev["n_model"],
+                "n_model_cur": cur["n_model"],
+                "itt_contrib_control": contrib_control,
+                "itt_contrib_model": contrib_model,
+                "delta_itt_unstratified": delta_itt_unstrat,
+                "delta_yfact_stratified": delta_yfact,
+                "dominant_group": leader,
+                "readout": read,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _loss_drivers_table(
+    weekly: pd.DataFrame,
+    loss_by_week: dict[str, pd.DataFrame],
+    group_means_by_week: dict[str, dict[str, float]],
+    *,
+    top_n: int = TOP_LOSS_DRIVERS_PER_KIND,
+) -> pd.DataFrame:
+    """Топ новых убытков и топ shared с Δ оплаты по вкладу в Δ ITT."""
+    rows: list[dict[str, Any]] = []
+    ok_weeks = (
+        weekly.loc[weekly["status"].eq("ok"), "week_end"].astype(str).tolist()
+        if "status" in weekly.columns
+        else []
+    )
+    for prev_key, key in zip(ok_weeks, ok_weeks[1:]):
+        cur_tbl = loss_by_week.get(key)
+        prev_tbl = loss_by_week.get(prev_key)
+        prev_means = group_means_by_week.get(prev_key)
+        cur_means = group_means_by_week.get(key)
+        if cur_tbl is None or prev_tbl is None or prev_means is None or cur_means is None:
+            continue
+        if cur_tbl.empty:
+            continue
+        prev_ids = set(prev_tbl["loss_id"].tolist())
+        cur_ids = set(cur_tbl["loss_id"].tolist())
+        new_ids = cur_ids - prev_ids
+        shared_ids = cur_ids & prev_ids
+        prev_paid = prev_tbl.set_index("loss_id")["paid"]
+        cur_indexed = cur_tbl.set_index("loss_id")
+
+        week_rows: list[dict[str, Any]] = []
+        for loss_id in new_ids:
+            rec = cur_indexed.loc[loss_id]
+            if isinstance(rec, pd.DataFrame):
+                rec = rec.iloc[0]
+            group = str(rec["group"])
+            yfact = float(rec["yfact"]) if pd.notna(rec["yfact"]) else np.nan
+            mean_g = float(prev_means.get(f"mean_{group}", np.nan))
+            n_g = float(prev_means.get(f"n_{group}", 0.0))
+            if pd.notna(yfact) and pd.notna(mean_g) and n_g >= 0:
+                delta_mean = (yfact - mean_g) / (n_g + 1.0)
+                sign = 1.0 if group == "control" else -1.0
+                pull = sign * delta_mean
+            else:
+                pull = np.nan
+            week_rows.append(
+                {
+                    "week_end": key,
+                    "prev_week_end": prev_key,
+                    "driver_kind": "new_loss",
+                    "loss_id": loss_id,
+                    "group": group,
+                    "filial": rec["filial"],
+                    "application_date": rec.get("application_date"),
+                    "yfact": yfact,
+                    "paid_prev": np.nan,
+                    "paid_cur": float(rec["paid"]) if pd.notna(rec["paid"]) else np.nan,
+                    "delta_paid": np.nan,
+                    "estimated_itt_pull": pull,
+                    "severity": _severity_flags(rec),
+                }
+            )
+
+        for loss_id in shared_ids:
+            rec = cur_indexed.loc[loss_id]
+            if isinstance(rec, pd.DataFrame):
+                rec = rec.iloc[0]
+            if loss_id not in prev_paid.index:
+                continue
+            paid_cur = float(rec["paid"]) if pd.notna(rec["paid"]) else np.nan
+            paid_prev_v = prev_paid.loc[loss_id]
+            paid_prev_f = float(paid_prev_v) if pd.notna(paid_prev_v) else np.nan
+            if pd.isna(paid_cur) or pd.isna(paid_prev_f):
+                continue
+            delta_paid = paid_cur - paid_prev_f
+            if abs(delta_paid) < 1.0:
+                continue
+            group = str(rec["group"])
+            n_g = float(cur_means.get(f"n_{group}", 0.0))
+            if n_g > 0:
+                sign = 1.0 if group == "control" else -1.0
+                pull = sign * (delta_paid / n_g)
+            else:
+                pull = np.nan
+            week_rows.append(
+                {
+                    "week_end": key,
+                    "prev_week_end": prev_key,
+                    "driver_kind": "payment_update",
+                    "loss_id": loss_id,
+                    "group": group,
+                    "filial": rec["filial"],
+                    "application_date": rec.get("application_date"),
+                    "yfact": float(rec["yfact"]) if pd.notna(rec["yfact"]) else np.nan,
+                    "paid_prev": paid_prev_f,
+                    "paid_cur": paid_cur,
+                    "delta_paid": delta_paid,
+                    "estimated_itt_pull": pull,
+                    "severity": _severity_flags(rec),
+                }
+            )
+
+        if not week_rows:
+            continue
+        frame = pd.DataFrame(week_rows)
+        for kind in ("new_loss", "payment_update"):
+            part = frame.loc[frame["driver_kind"].eq(kind)].copy()
+            if part.empty:
+                continue
+            part = part.reindex(
+                part["estimated_itt_pull"].abs().sort_values(ascending=False).index
+            ).head(top_n)
+            rows.extend(part.to_dict("records"))
+    return pd.DataFrame(rows)
+
+
 @dataclass
 class WeeklySeriesResult:
     """Понедельный ряд и декомпозиция."""
 
     weekly: pd.DataFrame
     filial_deltas: pd.DataFrame
+    group_deltas: pd.DataFrame
+    loss_drivers: pd.DataFrame
     week_ends: list[pd.Timestamp]
     note: str
 
@@ -274,6 +580,8 @@ def run_weekly_monitoring_series(
     contrib_by_week: dict[str, pd.DataFrame] = {}
     loss_sets: dict[str, set[Any]] = {}
     paid_by_week: dict[str, pd.Series] = {}
+    loss_by_week: dict[str, pd.DataFrame] = {}
+    group_means_by_week: dict[str, dict[str, float]] = {}
 
     for week_end in ends:
         subset = filter_monitoring_by_application_date(
@@ -331,30 +639,41 @@ def run_weekly_monitoring_series(
         weekly_rows.append(snap)
 
         contrib_by_week[key] = _filial_contributions(result.filial_effects, "fact")
-        loss_sets[key] = set(result.frame["_loss"].tolist())
-        paid_by_week[key] = (
-            result.frame.groupby("_loss", dropna=False)["_paid_to_date"]
-            .mean()
-        )
+        loss_level = _loss_level_table(result.frame)
+        loss_by_week[key] = loss_level
+        group_means_by_week[key] = _group_means_fact(result)
+        loss_sets[key] = set(loss_level["loss_id"].tolist())
+        paid_by_week[key] = loss_level.set_index("loss_id")["paid"]
 
     weekly = pd.DataFrame(weekly_rows)
+    empty = WeeklySeriesResult(
+        weekly=weekly,
+        filial_deltas=pd.DataFrame(),
+        group_deltas=pd.DataFrame(),
+        loss_drivers=pd.DataFrame(),
+        week_ends=ends,
+        note="Пустой ряд",
+    )
     if weekly.empty:
-        return WeeklySeriesResult(
-            weekly=weekly,
-            filial_deltas=pd.DataFrame(),
-            week_ends=ends,
-            note="Пустой ряд",
-        )
+        return empty
 
     weekly = _add_week_deltas(weekly, loss_sets, paid_by_week)
     filial_deltas = _filial_delta_table(weekly, contrib_by_week)
+    group_deltas = _group_delta_table(weekly, group_means_by_week)
+    loss_drivers = _loss_drivers_table(
+        weekly, loss_by_week, group_means_by_week
+    )
     note = (
         "Кумулятивные срезы на текущих платежах витрины; "
-        "ретроспектива ≠ архивный снимок на ту дату."
+        "ретроспектива ≠ архивный снимок на ту дату. "
+        "Вклад отдельного убытка в Δ ITT — диагностическая оценка "
+        "без стратификации по филиалам."
     )
     return WeeklySeriesResult(
         weekly=weekly,
         filial_deltas=filial_deltas,
+        group_deltas=group_deltas,
+        loss_drivers=loss_drivers,
         week_ends=ends,
         note=note,
     )
@@ -503,25 +822,33 @@ def save_weekly_outputs(
     *,
     weekly_csv_name: str | None = None,
     filial_csv_name: str | None = None,
+    group_csv_name: str | None = None,
+    loss_csv_name: str | None = None,
     weekly_html_name: str | None = None,
-) -> tuple[Path, Path, Path]:
-    """Сохранить CSV + HTML понедельного ряда."""
+) -> dict[str, Path]:
+    """Сохранить CSV + HTML понедельного ряда (включая group/loss drivers)."""
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
-    weekly_path = data_dir / (weekly_csv_name or WEEKLY_FILENAME)
-    filial_path = data_dir / (filial_csv_name or WEEKLY_FILIAL_FILENAME)
-    html_path = data_dir / (weekly_html_name or WEEKLY_HTML_FILENAME)
-    series.weekly.to_csv(weekly_path, index=False)
-    series.filial_deltas.to_csv(filial_path, index=False)
-    html_path.write_text(
+    paths = {
+        "weekly_csv": data_dir / (weekly_csv_name or WEEKLY_FILENAME),
+        "filial_csv": data_dir / (filial_csv_name or WEEKLY_FILIAL_FILENAME),
+        "group_csv": data_dir / (group_csv_name or WEEKLY_GROUP_FILENAME),
+        "loss_csv": data_dir / (loss_csv_name or WEEKLY_LOSS_FILENAME),
+        "weekly_html": data_dir / (weekly_html_name or WEEKLY_HTML_FILENAME),
+    }
+    series.weekly.to_csv(paths["weekly_csv"], index=False)
+    series.filial_deltas.to_csv(paths["filial_csv"], index=False)
+    series.group_deltas.to_csv(paths["group_csv"], index=False)
+    series.loss_drivers.to_csv(paths["loss_csv"], index=False)
+    paths["weekly_html"].write_text(
         build_weekly_html(series),
         encoding="utf-8",
     )
-    return weekly_path, filial_path, html_path
+    return paths
 
 
 def build_weekly_html(series: WeeklySeriesResult) -> str:
-    """HTML: понедельные главные показатели и топ филиалов по вкладу в Δ."""
+    """HTML: понедельные показатели, Δ control/model, топ убытков и филиалов."""
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
     show_cols = [
         c
@@ -566,42 +893,139 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
     {_table(
       weekly_show,
       columns={
-        "week_end": "Конец недели / срез",
-        "status": "ok / skipped / error",
-        "n_rows": "N убытков",
-        "n_control": "N control",
-        "n_model": "N model",
-        "yfact_effect": "ITT Yfact, ₽/убыток",
-        "delta_yfact": "Δ Yfact к пред. неделе",
-        "y365_effect": "ITT Y365, ₽/убыток",
-        "delta_y365": "Δ Y365 к пред. неделе",
-        "ci_yfact_includes_0": "CI Yfact через 0?",
-        "n_new_losses": "Новые убытки vs prev",
-        "shared_mean_paid_delta": "Δ средней оплаты shared LossID",
-        "annual_pilot_full_y365": "Год пилот full Y365",
-        "annual_network_full_y365": "Год сеть full Y365",
-        "why_moved": "Кратко почему уехало",
-        "reason": "Ошибка / skip",
+        "week_end": "Дата конца недели / финальный срез as_of",
+        "status": "Статус расчёта среза: ok, skipped или error",
+        "n_rows": "Число убытков в кумулятивном окне на эту дату",
+        "n_control": "Число убытков в группе control",
+        "n_model": "Число убытков в группе model",
+        "yfact_effect": (
+            "ITT по Yfact: взвешенная разность mean(control)−mean(model), ₽/убыток"
+        ),
+        "delta_yfact": "Изменение ITT Yfact относительно предыдущей недели, ₽/убыток",
+        "y365_effect": (
+            "ITT по Y365 (Yfact + NPV хвоста ПСР), ₽/убыток"
+        ),
+        "delta_y365": "Изменение ITT Y365 относительно предыдущей недели, ₽/убыток",
+        "ci_yfact_includes_0": (
+            "Проходит ли 95% CI ITT Yfact через 0 (эффект статистически не подтверждён)"
+        ),
+        "n_new_losses": "Сколько новых убытков добавилось к предыдущей неделе",
+        "shared_mean_paid_delta": (
+            "Δ средней СуммаПлатежа по LossID, которые есть и на прошлой, и на текущей неделе"
+        ),
+        "annual_pilot_full_y365": (
+            "Сценарий годового эффекта пилота при full rollout, горизонт Y365, ₽/год"
+        ),
+        "annual_network_full_y365": (
+            "Сценарий годового эффекта сети при full rollout, горизонт Y365, ₽/год"
+        ),
+        "why_moved": "Кратко, за счёт чего уехала неделя к неделе",
+        "reason": "Текст ошибки или причина skip",
       },
-      rows=["Одна строка = кумулятивный срез на week_end."],
+      rows=[
+        "Одна строка = кумулятивный срез пилота от старта до week_end.",
+      ],
+    )}
+  </div>
+  <h2>Куда уехали control и model</h2>
+  <div class="card">
+    <p>ITT ≈ mean(control) − mean(model). Поэтому рост среднего control
+    увеличивает ITT, рост среднего model — уменьшает. Вклад в Δ ITT без
+    стратификации по филиалам: Δmean_control и −Δmean_model.</p>
+    {_table(
+      series.group_deltas,
+      columns={
+        "week_end": "Конец текущей недели",
+        "prev_week_end": "Конец предыдущей недели",
+        "mean_control_prev": "Средний Yfact control на прошлой неделе, ₽",
+        "mean_control_cur": "Средний Yfact control на текущей неделе, ₽",
+        "delta_mean_control": "Изменение среднего Yfact control, ₽/убыток",
+        "n_control_prev": "N control на прошлой неделе",
+        "n_control_cur": "N control на текущей неделе",
+        "mean_model_prev": "Средний Yfact model на прошлой неделе, ₽",
+        "mean_model_cur": "Средний Yfact model на текущей неделе, ₽",
+        "delta_mean_model": "Изменение среднего Yfact model, ₽/убыток",
+        "n_model_prev": "N model на прошлой неделе",
+        "n_model_cur": "N model на текущей неделе",
+        "itt_contrib_control": (
+            "Вклад control в Δ ITT (= Δmean_control); «+» — control подорожал"
+        ),
+        "itt_contrib_model": (
+            "Вклад model в Δ ITT (= −Δmean_model); «+» — model подешевел"
+        ),
+        "delta_itt_unstratified": "Сумма вкладов control+model (без филиалов), ₽",
+        "delta_yfact_stratified": "Фактический Δ ITT Yfact со стратификацией, ₽",
+        "dominant_group": "Какая группа сильнее потянула неделю по |Δmean|",
+        "readout": "Краткая расшифровка знаков и вкладов",
+      },
+      rows=[
+        "Одна строка на пару соседних недель с status=ok.",
+      ],
+    )}
+  </div>
+  <h2>Топ убытков по вкладу в Δ ITT</h2>
+  <div class="card">
+    <p>Диагностика: до {TOP_LOSS_DRIVERS_PER_KIND} новых убытков и до
+    {TOP_LOSS_DRIVERS_PER_KIND} обновлений оплаты с наибольшим
+    |estimated_itt_pull|. Знак: control «+» увеличивает ITT при росте
+    расхода; model «+» увеличивает ITT при падении расхода model.</p>
+    {_table(
+      series.loss_drivers,
+      columns={
+        "week_end": "Конец текущей недели",
+        "prev_week_end": "Конец предыдущей недели",
+        "driver_kind": (
+            "Тип драйвера: new_loss (новый убыток) или payment_update (Δ оплаты)"
+        ),
+        "loss_id": "Номер убытка",
+        "group": "Группа: control или model",
+        "filial": "Филиал",
+        "application_date": "Дата заявления",
+        "yfact": "Yfact убытка на текущем срезе, ₽",
+        "paid_prev": "СуммаПлатежа на прошлой неделе, ₽ (только payment_update)",
+        "paid_cur": "СуммаПлатежа на текущей неделе, ₽",
+        "delta_paid": "Изменение СуммаПлатежа, ₽",
+        "estimated_itt_pull": (
+            "Оценка вклада в Δ ITT, ₽: для new_loss — sign×(Yfact−mean_group)/(N+1); "
+            "для payment_update — sign×Δpaid/N"
+        ),
+        "severity": (
+            "Тяжесть / путь: соглашение, претензия, ФУ, суд, OD, возраст (дни)"
+        ),
+      },
+      rows=[
+        "До 5 new_loss и до 5 payment_update с наибольшим |вкладом| на пару недель.",
+      ],
     )}
   </div>
   <h2>Топ филиалов по вкладу в Δ Yfact</h2>
   <div class="card">
-    <p>Δ contribution = w·effect текущей недели − прошлой (стратифицированный ITT Yfact).</p>
+    <p>Δ вклада филиала = вклад на текущей неделе − вклад на предыдущей
+    (вклад = вес филиала × локальный ITT Yfact). Показаны филиалы с наибольшим |Δ|.</p>
     {_table(
       series.filial_deltas,
       columns={
-        "week_end": "Неделя",
-        "prev_week_end": "Пред. неделя",
+        "week_end": "Конец текущей недели (кумулятивный срез)",
+        "prev_week_end": "Конец предыдущей недели для сравнения",
         "filial": "Филиал",
-        "n_prev": "N prev",
-        "n_cur": "N cur",
-        "effect_prev": "effect prev",
-        "effect_cur": "effect cur",
-        "delta_contribution": "Δ вклада в ITT, ₽",
+        "n_prev": "Число убытков филиала на предыдущей неделе",
+        "n_cur": "Число убытков филиала на текущей неделе",
+        "effect_prev": (
+            "Локальный ITT Yfact филиала на предыдущей неделе "
+            "(mean control − mean model), ₽/убыток"
+        ),
+        "effect_cur": (
+            "Локальный ITT Yfact филиала на текущей неделе "
+            "(mean control − mean model), ₽/убыток"
+        ),
+        "delta_contribution": (
+            "Изменение вклада филиала в стратифицированный ITT Yfact, ₽ "
+            "(положительное — филиал усилил экономию)"
+        ),
       },
-      rows=["До 5 филиалов с наиболь |Δ| на каждую пару недель."],
+      rows=[
+        "До 5 филиалов с наибольшим |Δ вклада| на каждую пару соседних недель.",
+      ],
     )}
   </div>
 </div>
@@ -613,8 +1037,11 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
 __all__ = [
     "PILOT_START_DEFAULT",
     "SNAPSHOT_FILENAME",
+    "TOP_LOSS_DRIVERS_PER_KIND",
     "WEEKLY_FILENAME",
     "WEEKLY_FILIAL_FILENAME",
+    "WEEKLY_GROUP_FILENAME",
+    "WEEKLY_LOSS_FILENAME",
     "WEEKLY_HTML_FILENAME",
     "WeeklySeriesResult",
     "append_snapshot_log",
