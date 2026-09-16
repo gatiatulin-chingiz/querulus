@@ -15,7 +15,13 @@ from querulus.fin_effect.excel_monitoring import (
     MonitoringEffectResult,
     estimate_monitoring_effect,
 )
-from querulus.fin_effect.monitoring_report import FORMULA_VERSION, _CSS, _formula, _table
+from querulus.fin_effect.monitoring_report import (
+    FORMULA_VERSION,
+    _CSS,
+    _c,
+    _formula,
+    _table,
+)
 
 PILOT_START_DEFAULT = "2026-04-20"
 SNAPSHOT_FILENAME = "fin_effect_snapshots.csv"
@@ -887,41 +893,74 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
     {_table(
       weekly_show,
       columns={
-        "week_end": "Дата конца недели / финальный срез as_of",
-        "status": "Статус расчёта среза: ok, skipped или error",
-        "n_rows": "Число инцидентов в кумулятивном окне на эту дату",
-        "n_control": "Число инцидентов control (Result=−100)",
-        "n_model": "Число инцидентов model (Result∈{{0,1}})",
-        "yfact_effect": (
-            "ITT по Yfact: стратифицированная mean(control)−mean(model), ₽/инцидент"
+        "week_end": _c("week_end", "Конец недели / финальный as_of-срез"),
+        "status": _c("status", "Статус среза: ok, skipped_small_n или error"),
+        "n_rows": _c(
+            "n",
+            "Число инцидентов в кумулятивном окне",
+            "count(incidents | ДатаЗаявления ≤ week_end)",
         ),
-        "delta_yfact": "Δ ITT Yfact = yfact_effect(текущая) − yfact_effect(пред.)",
-        "y365_effect": "ITT по Y365 (Yfact + NPV хвоста ПСР), ₽/инцидент",
-        "delta_y365": "Δ ITT Y365 = y365_effect(текущая) − y365_effect(пред.)",
-        "ci_yfact_includes_0": (
-            "true, если 95% CI ITT Yfact содержит 0 (эффект не подтверждён)"
+        "n_control": _c(
+            "n_c",
+            "Число инцидентов control",
+            "count(group = control)",
         ),
-        "n_new_losses": "Число новых инцидентов vs предыдущая неделя (|cur|−|prev| по ID)",
-        "shared_mean_paid_delta": (
-            "mean(paid_cur − paid_prev) по инцидентам, общим для обеих недель"
+        "n_model": _c(
+            "n_m",
+            "Число инцидентов model",
+            "count(group = model)",
         ),
-        "annual_pilot_full_y365": (
-            "Годовой эффект пилота full rollout, Y365: effect×N_pilot_year"
+        "yfact_effect": _c(
+            "ITT Yfact",
+            "Стратифицированный ITT по Yfact, ₽/инцидент",
+            "Σ_f w_f · (mean_c,f − mean_m,f), YH = Yfact",
         ),
-        "annual_network_full_y365": (
-            "Годовой эффект сети full: annual_pilot_full × network_multiplier"
+        "delta_yfact": _c(
+            "ΔYfact",
+            "Изменение ITT Yfact к предыдущей ok-неделе",
+            "yfact_effect(week) − yfact_effect(prev)",
         ),
-        "why_moved": "Краткая сводка ΔYfact / ΔN / new / shared_paidΔ",
-        "reason": "Текст ошибки или причина skip",
+        "y365_effect": _c(
+            "ITT Y365",
+            "Стратифицированный ITT по Y365, ₽/инцидент",
+            "Σ_f w_f · (mean_c,f − mean_m,f), YH = Yfact + NPV(хвост)",
+        ),
+        "delta_y365": _c(
+            "ΔY365",
+            "Изменение ITT Y365 к предыдущей ok-неделе",
+            "y365_effect(week) − y365_effect(prev)",
+        ),
+        "ci_yfact_includes_0": _c(
+            "CI∋0",
+            "true, если 95% CI ITT Yfact содержит 0",
+            "ci_low ≤ 0 ≤ ci_high",
+        ),
+        "n_new_losses": _c(
+            "new",
+            "Число новых инцидентов относительно prev",
+            "|incident_ids(week) ∖ incident_ids(prev)|",
+        ),
+        "shared_mean_paid_delta": _c(
+            "Δpaid shared",
+            "Среднее изменение оплаты по общим инцидентам",
+            "mean_i∈shared (paid_i,week − paid_i,prev)",
+        ),
+        "annual_pilot_full_y365": _c(
+            "год пилот Y365",
+            "Годовой эффект пилота full rollout, Y365",
+            "y365_effect × N_pilot_eligible_year",
+        ),
+        "annual_network_full_y365": _c(
+            "год сеть Y365",
+            "Годовой эффект сети full rollout, Y365",
+            "annual_pilot_full_y365 × network_multiplier",
+        ),
+        "why_moved": _c("why", "Краткая сводка причин сдвига недели"),
+        "reason": _c("reason", "Текст ошибки или причина skip"),
       },
       rows=[
         "Одна строка = кумулятивный срез пилота от старта до week_end.",
         "Первая ok-неделя — база ряда (delta_* пустые).",
-      ],
-      formulas=[
-        "<b>delta_yfact</b> = ITT_Yfact(week) − ITT_Yfact(prev_week)",
-        "<b>n_new_losses</b> = |incident_ids(week) ∖ incident_ids(prev)|",
-        "<b>shared_mean_paid_delta</b> = mean<sub>i∈shared</sub>(paid<sub>i,week</sub> − paid<sub>i,prev</sub>)",
       ],
       notes=[
         "Платежи на всех срезах — из одной текущей выгрузки витрины: прошлые недели "
@@ -947,31 +986,74 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
     {_table(
       series.group_deltas,
       columns={
-        "prev_week_end": "Конец предыдущей недели",
-        "week_end": "Конец текущей недели",
-        "mean_control_prev": "Средний Yfact control на прошлой неделе, ₽",
-        "mean_control_cur": "Средний Yfact control на текущей неделе, ₽",
-        "delta_mean_control": "Δmean_control = mean_cur − mean_prev, ₽/инцидент",
-        "n_control_prev": "N control на прошлой неделе",
-        "n_control_cur": "N control на текущей неделе",
-        "mean_model_prev": "Средний Yfact model на прошлой неделе, ₽",
-        "mean_model_cur": "Средний Yfact model на текущей неделе, ₽",
-        "delta_mean_model": "Δmean_model = mean_cur − mean_prev, ₽/инцидент",
-        "n_model_prev": "N model на прошлой неделе",
-        "n_model_cur": "N model на текущей неделе",
-        "itt_contrib_control": "Вклад control = Δmean_control; «+» control подорожал",
-        "itt_contrib_model": "Вклад model = −Δmean_model; «+» model подешевел",
-        "delta_itt_unstratified": "Сумма вкладов (без филиалов) ≈ Δ ITT без страт",
-        "delta_yfact_stratified": "Фактический Δ ITT Yfact со стратификацией по филиалам",
-        "dominant_group": "Группа с большим |Δmean|",
-        "readout": "Текстовая расшифровка знаков",
+        "prev_week_end": _c("пред. неделя", "Конец предыдущей ok-недели"),
+        "week_end": _c("тек. неделя", "Конец текущей ok-недели"),
+        "mean_control_prev": _c(
+            "mean_c prev",
+            "Средний Yfact control на prev",
+            "mean(Yfact | control, prev)",
+        ),
+        "mean_control_cur": _c(
+            "mean_c cur",
+            "Средний Yfact control на текущей",
+            "mean(Yfact | control, week)",
+        ),
+        "delta_mean_control": _c(
+            "Δmean_c",
+            "Изменение среднего Yfact control",
+            "mean_control_cur − mean_control_prev",
+        ),
+        "n_control_prev": _c("n_c prev", "N control на prev"),
+        "n_control_cur": _c("n_c cur", "N control на текущей"),
+        "mean_model_prev": _c(
+            "mean_m prev",
+            "Средний Yfact model на prev",
+            "mean(Yfact | model, prev)",
+        ),
+        "mean_model_cur": _c(
+            "mean_m cur",
+            "Средний Yfact model на текущей",
+            "mean(Yfact | model, week)",
+        ),
+        "delta_mean_model": _c(
+            "Δmean_m",
+            "Изменение среднего Yfact model",
+            "mean_model_cur − mean_model_prev",
+        ),
+        "n_model_prev": _c("n_m prev", "N model на prev"),
+        "n_model_cur": _c("n_m cur", "N model на текущей"),
+        "itt_contrib_control": _c(
+            "вклад c",
+            "Вклад control в Δ ITT без страт; «+» = control подорожал",
+            "itt_contrib_control = delta_mean_control",
+        ),
+        "itt_contrib_model": _c(
+            "вклад m",
+            "Вклад model в Δ ITT без страт; «+» = model подешевел",
+            "itt_contrib_model = −delta_mean_model",
+        ),
+        "delta_itt_unstratified": _c(
+            "ΔITT без страт",
+            "Сумма вкладов групп без весов филиалов",
+            "itt_contrib_control + itt_contrib_model",
+        ),
+        "delta_yfact_stratified": _c(
+            "ΔITT страт",
+            "Фактический Δ ITT Yfact со стратификацией (из главной таблицы)",
+            "delta_yfact из ряда weekly",
+        ),
+        "dominant_group": _c(
+            "лидер",
+            "Группа с большим |Δmean|",
+            "argmax(|delta_mean_control|, |delta_mean_model|)",
+        ),
+        "readout": _c("readout", "Текстовая расшифровка знаков и вкладов"),
       },
       rows=[
         "Одна строка на пару соседних ok-недель.",
       ],
       formulas=[
-        "Пример: mean_model 142k → 131k ⇒ Δmean_model = −11k ⇒ "
-        "itt_contrib_model = −(−11k) = +11k (model подешевел → ITT вырос)",
+        "Пример: mean_model 142k → 131k ⇒ Δmean_m = −11k ⇒ вклад m = −(−11k) = +11k",
       ],
       notes=[
         "delta_itt_unstratified может отличаться от delta_yfact_stratified из-за весов филиалов.",
@@ -996,34 +1078,62 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
     {_table(
       series.loss_drivers,
       columns={
-        "prev_week_end": "Конец предыдущей недели",
-        "week_end": "Конец текущей недели",
-        "driver_kind": "new_incident или payment_update",
-        "incident_id": "Номер инцидента (ключ единицы ITT)",
-        "loss_ids": "Список LossID внутри инцидента через «; »",
-        "group": "control или model после схлопывания Result",
-        "filial": "Филиал (мода по убыткам инцидента)",
-        "application_date": "Мин. ДатаЗаявления по убыткам инцидента",
-        "yfact": "Yfact инцидента = сумма СуммаПлатежа, ₽",
-        "paid_prev": "Оплата на prev (только payment_update; иначе пусто)",
-        "paid_cur": "Оплата на текущем срезе, ₽",
-        "delta_paid": "paid_cur − paid_prev (только payment_update)",
-        "estimated_itt_pull": "Оценка вклада в Δ ITT, ₽ (см. формулы выше)",
-        "severity": "Соглашение / претензия / ФУ / суд / OD / age",
+        "prev_week_end": _c("пред. неделя", "Конец предыдущей ok-недели"),
+        "week_end": _c("тек. неделя", "Конец текущей ok-недели"),
+        "driver_kind": _c(
+            "тип",
+            "new_incident (новый) или payment_update (Δ оплаты)",
+        ),
+        "incident_id": _c("incident", "Номер инцидента — ключ единицы ITT"),
+        "loss_ids": _c("LossID", "LossID внутри инцидента через «; »"),
+        "group": _c("group", "control или model после схлопывания Result"),
+        "filial": _c("filial", "Филиал (мода по убыткам инцидента)"),
+        "application_date": _c(
+            "дата заявл.",
+            "Мин. ДатаЗаявления по убыткам инцидента",
+        ),
+        "yfact": _c(
+            "Yfact",
+            "Yfact инцидента на текущем срезе, ₽",
+            "Σ СуммаПлатежа по убыткам инцидента",
+        ),
+        "paid_prev": _c(
+            "paid prev",
+            "Оплата на prev; пусто у new_incident",
+            "paid на срезе prev_week_end",
+        ),
+        "paid_cur": _c(
+            "paid cur",
+            "Оплата на текущем срезе, ₽",
+            "paid на срезе week_end",
+        ),
+        "delta_paid": _c(
+            "Δpaid",
+            "Изменение оплаты; пусто у new_incident",
+            "paid_cur − paid_prev",
+        ),
+        "estimated_itt_pull": _c(
+            "вклад ≈",
+            "Оценка вклада в Δ ITT, ₽ (без страт. по филиалам)",
+            "new: sign×(Yfact−mean_group_prev)/(N_prev+1); "
+            "update: sign×Δpaid/N_cur; sign=+1 control, −1 model",
+        ),
+        "severity": _c(
+            "severity",
+            "Соглашение / претензия / ФУ / суд / OD / age",
+        ),
       },
       rows=[
-        "Сначала отбираются new_ids = cur∖prev и shared с |Δpaid|≥1.",
-        "Внутри каждого типа — топ по |estimated_itt_pull|.",
+        "На пару недель: new_ids = cur∖prev и shared с |Δpaid|≥1.",
+        f"В топ: до {TOP_LOSS_DRIVERS_PER_KIND} new_incident и до "
+        f"{TOP_LOSS_DRIVERS_PER_KIND} payment_update по |estimated_itt_pull|.",
       ],
       formulas=[
-        "Пример new control Yfact=400, mean_prev=100, N_prev=2: "
-        "pull = +1×(400−100)/(2+1) = +100",
-        "Пример new model с теми же числами: pull = −1×(400−100)/3 = −100",
+        "Пример new control Yfact=400, mean_prev=100, N_prev=2: pull = +1×(400−100)/3 = +100",
         "Пример payment_update model Δpaid=−60, N=2: pull = −1×(−60)/2 = +30",
       ],
       notes=[
-        "Это приближение без стратификации по филиалам; для точного ITT смотрите "
-        "главную таблицу и блок филиалов.",
+        "Приближение без стратификации; точный ITT — в главной таблице и блоке филиалов.",
       ],
     )}
   </div>
@@ -1042,21 +1152,33 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
     {_table(
       series.filial_deltas,
       columns={
-        "prev_week_end": "Конец предыдущей недели",
-        "week_end": "Конец текущей недели",
-        "filial": "Филиал",
-        "n_prev": "N инцидентов филиала на prev",
-        "n_cur": "N инцидентов филиала на текущей неделе",
-        "effect_prev": "Локальный ITT Yfact филиала на prev, ₽",
-        "effect_cur": "Локальный ITT Yfact филиала на текущей, ₽",
-        "delta_contribution": "Δ (w×effect); «+» — филиал усилил экономию ITT",
+        "prev_week_end": _c("пред. неделя", "Конец предыдущей ok-недели"),
+        "week_end": _c("тек. неделя", "Конец текущей ok-недели"),
+        "filial": _c("filial", "Филиал"),
+        "n_prev": _c("n prev", "N инцидентов филиала на prev"),
+        "n_cur": _c("n cur", "N инцидентов филиала на текущей"),
+        "effect_prev": _c(
+            "ITT_f prev",
+            "Локальный ITT Yfact филиала на prev",
+            "mean(Yfact|control,f,prev) − mean(Yfact|model,f,prev)",
+        ),
+        "effect_cur": _c(
+            "ITT_f cur",
+            "Локальный ITT Yfact филиала на текущей",
+            "mean(Yfact|control,f,week) − mean(Yfact|model,f,week)",
+        ),
+        "delta_contribution": _c(
+            "Δ вклад",
+            "Изменение вклада филиала в страт. ITT; «+» усилил экономию",
+            "w_f,week·effect_cur − w_f,prev·effect_prev",
+        ),
       },
       rows=[
-        "До 5 филиалов с наибольшим |Δ вклада| на пару соседних недель.",
+        "До 5 филиалов с наибольшим |delta_contribution| на пару ok-недель.",
       ],
-      formulas=[
-        "ITT_strat ≈ Σ_f contribution_f; поэтому сумма delta_contribution по филиалам "
-        "близка к delta_yfact (с учётом появления/исчезновения филиалов).",
+      notes=[
+        "w_f = N_f / Σ_g N_g; сумма Δ вкладов близка к delta_yfact "
+        "(с учётом появления/исчезновения филиалов).",
       ],
     )}
   </div>

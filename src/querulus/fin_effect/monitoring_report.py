@@ -14,7 +14,7 @@ from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_
 PLAN_FILENAME = "fin_effect_plan.html"
 REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
-FORMULA_VERSION = "ITT-U-2026-09-16-v9"
+FORMULA_VERSION = "ITT-U-2026-09-16-v10"
 
 
 def report_export_stamp(
@@ -492,19 +492,44 @@ def _charts_section(result: MonitoringEffectResult) -> str:
     return '<div class="charts">' + "".join(blocks) + "</div>"
 
 
+def _c(title: str, desc: str, formula: str = "") -> tuple[str, str, str]:
+    """Краткий заголовок, текстовое описание и формула колонки для ``_table``."""
+    return (title, desc, formula)
+
+
+def _parse_col_spec(name: str, spec: Any) -> tuple[str, str, str]:
+    """Нормализовать спецификацию колонки → (title, desc, formula).
+
+    - ``str`` → заголовок = код колонки, описание = строка
+    - ``(title, desc)`` → без формулы
+    - ``(title, desc, formula)`` → полный вариант (также результат ``_c``)
+    """
+    if isinstance(spec, tuple):
+        if len(spec) >= 3:
+            return str(spec[0]), str(spec[1]), str(spec[2])
+        if len(spec) == 2:
+            return str(spec[0]), str(spec[1]), ""
+        if len(spec) == 1:
+            return str(name), str(spec[0]), ""
+    return str(name), str(spec), ""
+
+
 def _table(
     frame: pd.DataFrame | None,
     *,
-    columns: dict[str, str] | None = None,
+    columns: dict[str, Any] | None = None,
     rows: list[str] | None = None,
     formulas: list[str] | None = None,
     notes: list[str] | None = None,
 ) -> str:
-    """Таблица + легенда колонок/строк + формулы расчёта.
+    """Таблица с краткими заголовками + легенда только по реальным колонкам.
 
-    Если передан ``columns``, заголовки таблицы показывают русские подписи,
-    а в легенде остаётся соответствие ``код → смысл``.
-    ``formulas`` — HTML-фрагменты уравнений (как в ``_formula``).
+    В шапке — короткий ``title`` (или код колонки). Внизу для каждой колонки
+    таблицы: ``код`` — описание и формула, если задана.
+    Ключи из ``columns``, которых нет в DataFrame, в легенду не попадают.
+    Колонки DataFrame без записи в ``columns`` остаются в таблице и в легенде
+    помечаются как без описания.
+    ``formulas`` / ``notes`` — общие пояснения ко всей таблице.
     """
     if frame is None or frame.empty:
         return "<p class='muted'>(нет данных)</p>"
@@ -524,40 +549,56 @@ def _table(
             return value
 
         shown[col] = series.map(_cell)
-    legend_parts: list[str] = []
+
+    present = [str(c) for c in shown.columns]
+    present_set = set(present)
+    specs: dict[str, tuple[str, str, str]] = {}
     if columns:
-        present = set(map(str, frame.columns))
-        ordered = [name for name in columns if name in present]
-        rest = [c for c in shown.columns if c not in ordered]
-        if ordered:
-            shown = shown.loc[:, ordered + rest]
-        rename = {
-            name: desc for name, desc in columns.items() if name in present
-        }
-        if rename:
-            shown = shown.rename(columns=rename)
-            items = "".join(
-                f"<li><code>{escape(name)}</code> — {escape(desc)}</li>"
-                for name, desc in columns.items()
-                if name in present
-            )
-            legend_parts.append(f"<h4>Колонки</h4><ul>{items}</ul>")
+        for name, spec in columns.items():
+            key = str(name)
+            if key in present_set:
+                specs[key] = _parse_col_spec(key, spec)
+    for key in present:
+        if key not in specs:
+            specs[key] = (key, "(нет описания в легенде)", "")
+
+    ordered = [name for name in (columns or {}) if str(name) in present_set]
+    ordered_set = set(ordered)
+    rest = [c for c in present if c not in ordered_set]
+    display_order = ordered + rest
+    shown = shown.loc[:, display_order]
+    rename = {name: specs[name][0] for name in display_order}
+    shown = shown.rename(columns=rename)
+
+    legend_parts: list[str] = []
+    items: list[str] = []
+    for name in display_order:
+        title, desc, formula = specs[name]
+        head = f"<code>{escape(name)}</code>"
+        if title and title != name:
+            head += f" → <b>{escape(title)}</b>"
+        block = f"<li>{head} — {escape(desc)}"
+        if formula:
+            block += f'<div class="eq">{escape(formula)}</div>'
+        block += "</li>"
+        items.append(block)
+    legend_parts.append(f"<h4>Колонки</h4><ul>{''.join(items)}</ul>")
+
     html = (
         '<div class="scroll">'
         + shown.to_html(index=False, border=0, escape=True)
         + "</div>"
     )
     if rows:
-        items = "".join(f"<li>{escape(item)}</li>" for item in rows)
-        legend_parts.append(f"<h4>Строки</h4><ul>{items}</ul>")
+        row_items = "".join(f"<li>{escape(item)}</li>" for item in rows)
+        legend_parts.append(f"<h4>Строки</h4><ul>{row_items}</ul>")
     if formulas:
         eqs = "".join(f'<div class="eq">{equation}</div>' for equation in formulas)
         legend_parts.append(f"<h4>Как считается</h4>{eqs}")
     if notes:
-        items = "".join(f"<li>{escape(item)}</li>" for item in notes)
-        legend_parts.append(f"<h4>Пояснения</h4><ul>{items}</ul>")
-    if legend_parts:
-        html += '<div class="legend">' + "".join(legend_parts) + "</div>"
+        note_items = "".join(f"<li>{escape(item)}</li>" for item in notes)
+        legend_parts.append(f"<h4>Пояснения</h4><ul>{note_items}</ul>")
+    html += '<div class="legend">' + "".join(legend_parts) + "</div>"
     return html
 
 
@@ -735,16 +776,40 @@ def _contract_table(result: MonitoringEffectResult) -> pd.DataFrame:
     )
 
 
-def _path_share_columns() -> dict[str, str]:
-    return {
-        "segment": "Сегмент: control, model или lift",
-        "filial": "Филиал",
-        "n": "Число убытков в сегменте",
-        "agreement_share": "Доля убытков с соглашением, %",
-        "pretension_share": "Доля убытков с претензией, %",
-        "fu_incident_share": "Доля убытков с ФУ на уровне инцидента, %",
-        "court_incident_share": "Доля убытков с судом на уровне инцидента, %",
+def _path_share_columns(*, include_filial: bool = False) -> dict[str, Any]:
+    """Легенда долей путей. ``filial`` только для таблицы по филиалам."""
+    cols: dict[str, Any] = {
+        "segment": _c("segment", "Сегмент строки: control, model или lift"),
+        "n": _c("n", "Число строк сегмента в ITT-выборке", "count(rows|segment)"),
+        "agreement_share": _c(
+            "agreement %",
+            "Доля строк с соглашением, %",
+            "100 × mean(is_agreement)",
+        ),
+        "pretension_share": _c(
+            "pretension %",
+            "Доля строк с претензией, %",
+            "100 × mean(is_pretension)",
+        ),
+        "fu_incident_share": _c(
+            "FU %",
+            "Доля строк с флагом ФУ на уровне инцидента, %",
+            "100 × mean(fu_incident)",
+        ),
+        "court_incident_share": _c(
+            "court %",
+            "Доля строк с флагом суда на уровне инцидента, %",
+            "100 × mean(court_incident)",
+        ),
     }
+    if include_filial:
+        out: dict[str, Any] = {
+            "segment": cols["segment"],
+            "filial": _c("filial", "Филиал"),
+        }
+        out.update({k: v for k, v in cols.items() if k != "segment"})
+        return out
+    return cols
 
 
 def _headline(result: MonitoringEffectResult) -> str:
@@ -958,7 +1023,7 @@ def build_monitoring_html(
     <h3>Control vs model</h3>
     {_table(
       result.path_shares,
-      columns=_path_share_columns(),
+      columns=_path_share_columns(include_filial=False),
       rows=[
         "control — группа без модели",
         "model — группа с назначением в модель",
@@ -969,7 +1034,7 @@ def build_monitoring_html(
     <h3>По филиалам</h3>
     {_table(
       result.filial_path_shares,
-      columns=_path_share_columns(),
+      columns=_path_share_columns(include_filial=True),
       rows=[
         "Для каждого филиала сначала строка control, затем model.",
       ],
@@ -1069,20 +1134,30 @@ def build_monitoring_html(
     {_table(
       result.group_summary,
       columns={
-        "horizon": "Горизонт: fact (=Yfact) / 365 (=Y365)",
-        "group": "Группа: control (Result=−100) или model (Result∈{{0,1}})",
-        "n": "Число инцидентов в группе",
-        "sum_cost": "Σ YH по группе, ₽",
-        "mean_cost": "mean(YH) = sum_cost / n, ₽/инцидент",
+        "horizon": _c("H", "Горизонт: fact (=Yfact) или 365 (=Y365)"),
+        "group": _c(
+            "group",
+            "control (Result=−100) или model (Result∈{{0,1}})",
+        ),
+        "n": _c("n", "Число инцидентов в группе"),
+        "sum_cost": _c(
+            "Σ YH",
+            "Сумма исхода YH по группе, ₽",
+            "Σ_i∈group Y_H,i",
+        ),
+        "mean_cost": _c(
+            "mean YH",
+            "Средний исход на инцидент, ₽",
+            "sum_cost / n",
+        ),
       },
       rows=[
         "Для каждого горизонта сначала control, затем model.",
         "Единица строки после дедупа/схлопывания — инцидент.",
       ],
-      formulas=[
-        "<b>mean_cost</b> = (1/n) Σ<sub>i∈group</sub> Y<sub>H,i</sub>",
-        "Y<sub>fact</sub> = сумма СуммаПлатежа по убыткам инцидента",
-        "Y<sub>365</sub> = Yfact + NPV(remaining ПСР)",
+      notes=[
+        "Yfact = Σ СуммаПлатежа по убыткам инцидента; "
+        "Y365 = Yfact + NPV(remaining ПСР).",
       ],
     )}
   </div>
@@ -1094,23 +1169,29 @@ def build_monitoring_html(
     {_table(
       result.effect_summary,
       columns={
-        "horizon": "Горизонт: fact / 365",
-        "effect_per_case": "ITT стратифицированный, ₽/инцидент",
-        "unstratified_effect": "mean(control)−mean(model) без весов филиалов, ₽",
-        "n_weighted": "Σ N<sub>f</sub> = число eligible-инцидентов",
-        "n_filials": "Число филиалов с парой control и model",
-        "ci_low": "2.5% квантиль bootstrap ITT, ₽",
-        "ci_high": "97.5% квантиль bootstrap ITT, ₽",
-        "n_bootstrap": "Число успешных bootstrap-повторений",
+        "horizon": _c("H", "Горизонт: fact / 365"),
+        "effect_per_case": _c(
+            "ITT страт",
+            "Стратифицированный ITT, ₽/инцидент",
+            "Σ_f w_f · (mean_c,f − mean_m,f), w_f = N_f/Σ N_g",
+        ),
+        "unstratified_effect": _c(
+            "ITT без страт",
+            "Разница средних без весов филиалов, ₽",
+            "mean(YH|control) − mean(YH|model)",
+        ),
+        "n_weighted": _c(
+            "N",
+            "Число eligible-инцидентов (сумма весов филиалов)",
+            "Σ_f N_f",
+        ),
+        "n_filials": _c("филиалы", "Число филиалов с парой control и model"),
+        "ci_low": _c("CI low", "2.5% квантиль bootstrap ITT, ₽"),
+        "ci_high": _c("CI high", "97.5% квантиль bootstrap ITT, ₽"),
+        "n_bootstrap": _c("n boot", "Число успешных bootstrap-повторений"),
       },
       rows=[
         "Одна строка на горизонт fact / 365.",
-      ],
-      formulas=[
-        "<b>effect_f</b> = mean(Y<sub>H</sub>|control,f) − mean(Y<sub>H</sub>|model,f)",
-        "<b>w_f</b> = N<sub>f</sub> / Σ<sub>g</sub> N<sub>g</sub>",
-        "<b>effect_per_case</b> = Σ<sub>f</sub> w<sub>f</sub>·effect_f",
-        "<b>unstratified_effect</b> = mean(Y|control) − mean(Y|model)",
       ],
       notes=[
         "Плюс = control дороже model = экономия модели (ITT).",
@@ -1120,21 +1201,34 @@ def build_monitoring_html(
     {_table(
       result.filial_effects,
       columns={
-        "horizon": "Горизонт",
-        "filial": "Филиал",
-        "n": "Всего инцидентов в филиале (control+model)",
-        "n_control": "Число инцидентов control",
-        "n_model": "Число инцидентов model",
-        "mean_control": "Средний YH в control, ₽",
-        "mean_model": "Средний YH в model, ₽",
-        "effect_control_minus_model": "effect_f = mean_control − mean_model, ₽",
+        "horizon": _c("H", "Горизонт"),
+        "filial": _c("filial", "Филиал"),
+        "n": _c("n", "Инциденты филиала (control+model)"),
+        "n_control": _c("n_c", "Число инцидентов control"),
+        "n_model": _c("n_m", "Число инцидентов model"),
+        "mean_control": _c(
+            "mean_c",
+            "Средний YH в control, ₽",
+            "mean(YH | control, filial)",
+        ),
+        "mean_model": _c(
+            "mean_m",
+            "Средний YH в model, ₽",
+            "mean(YH | model, filial)",
+        ),
+        "effect_control_minus_model": _c(
+            "effect_f",
+            "Локальный ITT филиала, ₽",
+            "mean_control − mean_model",
+        ),
       },
       rows=[
         "Одна строка на пару горизонт × филиал.",
-      ],
-      formulas=[
-        "<b>contribution_f</b> = w_f × effect_f  (входит в effect_per_case)",
         "Филиал без control или без model в стратифицированный ITT не входит.",
+      ],
+      notes=[
+        "Вклад филиала в ITT страт: contribution_f = w_f × effect_f "
+        "(колонки contribution в этой таблице нет).",
       ],
     )}
     <h3>Филиалы на внимании</h3>
@@ -1143,20 +1237,38 @@ def build_monitoring_html(
     {_table(
       result.attention_filials,
       columns={
-        "filial": "Филиал",
-        "agreement_share_control": "Доля соглашений в control, %",
-        "agreement_share_model": "Доля соглашений в model, %",
-        "agreement_gap_pp": "agreement_share_control − agreement_share_model, п.п.",
-        "negative_effect_horizons": "Горизонты с effect_f &lt; 0",
-        "min_effect_control_minus_model": "min_f effect_f по горизонтам, ₽",
-        "flags": "agreement_control_gt_model и/или negative_itt",
+        "filial": _c("filial", "Филиал"),
+        "agreement_share_control": _c(
+            "agr_c %",
+            "Доля соглашений в control, %",
+        ),
+        "agreement_share_model": _c(
+            "agr_m %",
+            "Доля соглашений в model, %",
+        ),
+        "agreement_gap_pp": _c(
+            "gap п.п.",
+            "Разрыв долей соглашений, п.п.",
+            "agreement_share_control − agreement_share_model",
+        ),
+        "negative_effect_horizons": _c(
+            "H<0",
+            "Горизонты с effect_f < 0",
+        ),
+        "min_effect_control_minus_model": _c(
+            "min effect",
+            "Минимальный effect_f по горизонтам, ₽",
+            "min_H effect_f",
+        ),
+        "flags": _c(
+            "flags",
+            "agreement_control_gt_model и/или negative_itt",
+            "gap_pp&gt;0 → agreement_control_gt_model; "
+            "effect_f&lt;0 → negative_itt",
+        ),
       },
       rows=[
         "Пустая таблица означает, что таких филиалов нет.",
-      ],
-      formulas=[
-        "Флаг agreement_control_gt_model: gap_pp &gt; 0",
-        "Флаг negative_itt: effect_f &lt; 0 хотя бы на одном горизонте",
       ],
     )}
     {_formula(
@@ -1181,12 +1293,22 @@ def build_monitoring_html(
     {_table(
       result.compliance_a,
       columns={
-        "horizon": "Только fact",
-        "compliance": "complied или not_complied",
-        "n": "Число убытков",
-        "agreement_share": "Доля соглашений внутри группы, %",
-        "mean_cost": "Средний Yfact, ₽",
-        "descriptive_only": "Признак: только описание, не causal effect",
+        "horizon": _c("H", "Только fact"),
+        "compliance": _c("compliance", "complied или not_complied"),
+        "n": _c("n", "Число инцидентов"),
+        "agreement_share": _c(
+            "agr %",
+            "Доля соглашений внутри группы, %",
+        ),
+        "mean_cost": _c(
+            "mean Yfact",
+            "Средний Yfact, ₽/инцидент",
+            "mean(Yfact | compliance)",
+        ),
+        "descriptive_only": _c(
+            "desc only",
+            "true: только описание, не causal effect",
+        ),
       },
       rows=[
         "complied — рекомендация исполнена (Выплата по модели=1)",
@@ -1209,15 +1331,23 @@ def build_monitoring_html(
     {_table(
       result.compliance_b,
       columns={
-        "horizon": "Горизонт сценария 100% compliance",
-        "effect_per_case": "Сценарный ITT: control actual − model scenario, ₽/убыток",
-        "unstratified_effect": "Та же разность без стратификации, ₽/убыток",
-        "n_weighted": "Сумма весов филиалов",
-        "n_filials": "Число филиалов в расчёте",
-        "ci_low": "Нижняя граница 95% CI bootstrap сценария, ₽/убыток",
-        "ci_high": "Верхняя граница 95% CI bootstrap сценария, ₽/убыток",
-        "n_bootstrap": "Число успешных bootstrap-повторений сценария",
-        "scenario": "Описание сценария",
+        "horizon": _c("H", "Горизонт сценария 100% compliance"),
+        "effect_per_case": _c(
+            "ITT_100",
+            "Сценарный ITT: control actual − model scenario, ₽/инцидент",
+            "Σ_f w_f · (mean_c actual − mean_m scenario)",
+        ),
+        "unstratified_effect": _c(
+            "ITT_100 без страт",
+            "Та же разность без стратификации, ₽/инцидент",
+            "mean(control actual) − mean(model scenario)",
+        ),
+        "n_weighted": _c("N", "Сумма весов филиалов (eligible-инциденты)"),
+        "n_filials": _c("филиалы", "Число филиалов в расчёте"),
+        "ci_low": _c("CI low", "2.5% квантиль bootstrap сценария, ₽"),
+        "ci_high": _c("CI high", "97.5% квантиль bootstrap сценария, ₽"),
+        "n_bootstrap": _c("n boot", "Число успешных bootstrap-повторений"),
+        "scenario": _c("scenario", "Описание сценария"),
       },
       rows=[
         "Одна строка на горизонт сценария 100% исполнения.",
@@ -1231,10 +1361,14 @@ def build_monitoring_html(
     {_table(
       result.sensitivity,
       columns={
-        "discount_rate": "Ставка дисконтирования r",
-        "residual_share": "Остаток ПСР после соглашения q",
-        "horizon": "Горизонт",
-        "effect_per_case": "ITT эффект на убыток при этих параметрах, ₽",
+        "discount_rate": _c("r", "Ставка дисконтирования"),
+        "residual_share": _c("q", "Остаток ПСР после соглашения"),
+        "horizon": _c("H", "Горизонт"),
+        "effect_per_case": _c(
+            "ITT",
+            "ITT на инцидент при этих (r, q), ₽",
+            "stratified ITT(YH | r, q)",
+        ),
       },
       rows=[
         "Каждая строка — одна комбинация (r, q, горизонт).",
@@ -1284,10 +1418,22 @@ def build_monitoring_html(
     {_table(
       result.seasonality,
       columns={
-        "month": "Месяц (1–12)",
-        "retro_share": "Средняя доля месяца в годовом pilot-потоке ретро",
-        "observed_coverage": "Покрытие месяца текущим окном наблюдения (0–1+)",
-        "exposure_contribution": "Вклад месяца в seasonal_exposure",
+        "month": _c("месяц", "Календарный месяц 1–12"),
+        "retro_share": _c(
+            "s_m",
+            "Средняя доля месяца в годовом pilot-потоке ретро",
+            "доля строк месяца m в ретро-пилоте",
+        ),
+        "observed_coverage": _c(
+            "coverage",
+            "Покрытие месяца текущим окном (0–1+)",
+            "доля дней месяца m в окне мониторинга",
+        ),
+        "exposure_contribution": _c(
+            "вклад",
+            "Вклад месяца в seasonal_exposure",
+            "coverage_m × s_m",
+        ),
       },
       rows=[
         "Одна строка на календарный месяц.",
@@ -1297,34 +1443,92 @@ def build_monitoring_html(
     {_table(
       result.annual_summary,
       columns={
-        "horizon": "Горизонт",
-        "effect_per_case": "ITT на инцидент, ₽",
-        "effect_100_compliance": "Сценарный эффект 100% compliance на инцидент, ₽",
-        "seasonal_exposure": "Σ_m coverage_m × s_m,P — доля года в окне",
-        "N_pilot_eligible_year": "N_obs / seasonal_exposure",
-        "N_pilot_model_year_current": "Годовой поток model при текущей доле model",
-        "N_pilot_model_year_full": "= N_pilot_eligible_year (full rollout)",
-        "volume_ratio_nonpilot": "Годовой поток nonpilot / pilot (ретро)",
-        "risk_ratio_nonpilot": "Средний ПСР nonpilot / pilot (ретро)",
-        "network_multiplier": "1 + volume_ratio × risk_ratio",
-        "annual_pilot_current": "effect × N_model_year_current, ₽/год",
-        "annual_pilot_full": "effect × N_pilot_eligible_year, ₽/год",
-        "annual_pilot_full_ci_low": "ci_low × N_pilot_eligible_year, ₽/год",
-        "annual_pilot_full_ci_high": "ci_high × N_pilot_eligible_year, ₽/год",
-        "effect_per_case_nonpilot": "effect_per_case × risk_ratio, ₽",
-        "annual_network_full": "annual_pilot_full × network_multiplier, ₽/год",
-        "annual_network_full_ci_low": "ci_low × N × network_multiplier, ₽/год",
-        "annual_network_full_ci_high": "ci_high × N × network_multiplier, ₽/год",
-        "annual_network_full_compliance": "То же для сценария 100% compliance, ₽/год",
+        "horizon": _c("H", "Горизонт"),
+        "effect_per_case": _c("ITT", "ITT на инцидент, ₽"),
+        "effect_100_compliance": _c(
+            "ITT_100",
+            "Сценарный ITT 100% compliance на инцидент, ₽",
+        ),
+        "seasonal_exposure": _c(
+            "exposure",
+            "Доля типичного года, уже увиденная в окне",
+            "Σ_m coverage_m × s_m,P",
+        ),
+        "N_pilot_eligible_year": _c(
+            "N_year",
+            "Ожидаемый годовой поток eligible пилота",
+            "N_obs / seasonal_exposure",
+        ),
+        "N_pilot_model_year_current": _c(
+            "N_model cur",
+            "Годовой поток model при текущей доле model",
+        ),
+        "N_pilot_model_year_full": _c(
+            "N_model full",
+            "Годовой поток model при full rollout",
+            "= N_pilot_eligible_year",
+        ),
+        "volume_ratio_nonpilot": _c(
+            "vol_NP",
+            "Годовой поток nonpilot / pilot (ретро)",
+        ),
+        "risk_ratio_nonpilot": _c(
+            "risk_NP",
+            "Средний ПСР nonpilot / pilot (ретро)",
+        ),
+        "network_multiplier": _c(
+            "net mult",
+            "Множитель сети",
+            "1 + volume_ratio_nonpilot × risk_ratio_nonpilot",
+        ),
+        "annual_pilot_current": _c(
+            "год пилот cur",
+            "Годовой эффект пилота при текущей доле model, ₽/год",
+            "effect_per_case × N_pilot_model_year_current",
+        ),
+        "annual_pilot_full": _c(
+            "год пилот full",
+            "Годовой эффект пилота full rollout, ₽/год",
+            "effect_per_case × N_pilot_eligible_year",
+        ),
+        "annual_pilot_full_ci_low": _c(
+            "год пилот CI↓",
+            "Нижняя граница CI годового эффекта пилота, ₽/год",
+            "ci_low × N_pilot_eligible_year",
+        ),
+        "annual_pilot_full_ci_high": _c(
+            "год пилот CI↑",
+            "Верхняя граница CI годового эффекта пилота, ₽/год",
+            "ci_high × N_pilot_eligible_year",
+        ),
+        "effect_per_case_nonpilot": _c(
+            "ITT_NP",
+            "Эффект на инцидент × risk_ratio, ₽",
+            "effect_per_case × risk_ratio_nonpilot",
+        ),
+        "annual_network_full": _c(
+            "год сеть",
+            "Годовой эффект сети full rollout, ₽/год",
+            "annual_pilot_full × network_multiplier",
+        ),
+        "annual_network_full_ci_low": _c(
+            "год сеть CI↓",
+            "Нижняя граница CI годового эффекта сети, ₽/год",
+            "ci_low × N_pilot_eligible_year × network_multiplier",
+        ),
+        "annual_network_full_ci_high": _c(
+            "год сеть CI↑",
+            "Верхняя граница CI годового эффекта сети, ₽/год",
+            "ci_high × N_pilot_eligible_year × network_multiplier",
+        ),
+        "annual_network_full_compliance": _c(
+            "год сеть 100%",
+            "Годовой эффект сети при 100% compliance, ₽/год",
+            "effect_100_compliance × N_pilot_eligible_year × network_multiplier",
+        ),
       },
       rows=[
         "Одна строка на горизонт fact / 365.",
-      ],
-      formulas=[
-        "<b>N_pilot_eligible_year</b> = N_obs / seasonal_exposure",
-        "<b>annual_pilot_full</b> = effect_per_case × N_pilot_eligible_year",
-        "<b>annual_network_full</b> = annual_pilot_full × (1 + volume_ratio × risk_ratio)",
-        "CI годового = CI на инцидент × те же множители (линейный перенос)",
       ],
       notes=[
         "Full rollout = все eligible идут в model-поток; это сценарий, не факт.",
