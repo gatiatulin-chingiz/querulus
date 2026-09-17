@@ -1666,7 +1666,7 @@ def build_conclusion_body_from_result(
     if paths is not None:
         for seg in ("control", "model"):
             if seg not in paths.index:
-            continue
+                continue
             row = paths.loc[seg]
             path_lines.append(
                 f"<li>{escape(seg)}: соглашения "
