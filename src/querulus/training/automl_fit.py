@@ -108,11 +108,11 @@ def create_querulus_automl(
     hp_tune: bool = False,
     log_mlflow: bool = False,
 ) -> Any:
-    """AutoMLManager с extractor=df; severity X/y patch через prepare_datasets_from_config."""
+    """AutoMLManager с extractor=df; runtime-патчи Querulus через prepare_datasets_from_config."""
     from outboxml.automl_manager import AutoMLManager
 
     config_path = str(models_config)
-    # side-effect: патч ModelDataSubset.load_subset (severity filter)
+    # side-effect: ensure_outboxml_runtime_patches (severity X/y + default replace)
     prepare_datasets_from_config(config_path)
 
     automl_cfg = auto_ml_config or DEFAULT_AUTOML_CONFIG

@@ -26,6 +26,7 @@ PROD_CAL_FRACTION = PROD_HOLDOUT_FRACTION  # alias: доля Test_prod (holdout)
 _NA_KEY = "N/A"
 _OTHER_KEY = "ПРОЧИЕ"
 _load_subset_patched = False
+_replace_default_patched = False
 
 
 def _patch_model_data_subset_load_subset() -> None:
@@ -59,6 +60,70 @@ def _patch_model_data_subset_load_subset() -> None:
     _load_subset_patched = True
 
 
+def _patch_update_model_config_replace_keep_default() -> None:
+    """OutBoxML: ``default`` (часто ``ПРОЧИЕ=0``) может не быть в train.
+
+    Сток бросает ``NotImplementedError`` → ERROR ``Try to delete default value …``
+    и срывает prune остальных unused levels. Патч: default оставляем, остальное чистим.
+    Идемпотентен; OutBoxML не меняем.
+    """
+    global _replace_default_patched
+    if _replace_default_patched:
+        return
+    import logging
+
+    from outboxml.core import utils as outboxml_utils
+    from outboxml.core.enums import FeatureEngineering
+    from outboxml.core.pydantic_models import ModelConfig
+
+    logger = logging.getLogger("querulus.training.outboxml_patch")
+
+    def _update_model_config_replace_keep_default(model_config, absent_levels):
+        dumped = model_config.model_dump()
+        for feature_name, levels in absent_levels.items():
+            for i in range(len(dumped["features"])):
+                if dumped["features"][i]["name"] != feature_name:
+                    continue
+                default = dumped["features"][i]["default"]
+                levels_to_drop = [level for level in levels if level != default]
+                if default in levels:
+                    logger.warning(
+                        "Default value %s of %s absent in train; "
+                        "keep in replace, drop other unused levels only",
+                        default,
+                        feature_name,
+                    )
+                if not levels_to_drop:
+                    break
+                for value, level in list(dumped["features"][i]["replace"].items()):
+                    if level == FeatureEngineering.not_changed:
+                        level = value
+                    if level in levels_to_drop:
+                        dumped["features"][i]["replace"].pop(value)
+                break
+        return ModelConfig.model_validate(dumped)
+
+    outboxml_utils.update_model_config_replace = (  # type: ignore[method-assign]
+        _update_model_config_replace_keep_default
+    )
+    # prepare_dataset импортирует имя напрямую — патчим и там.
+    try:
+        from outboxml.core import data_prepare as outboxml_data_prepare
+
+        outboxml_data_prepare.update_model_config_replace = (  # type: ignore[attr-defined]
+            _update_model_config_replace_keep_default
+        )
+    except Exception:
+        pass
+    _replace_default_patched = True
+
+
+def ensure_outboxml_runtime_patches() -> None:
+    """Все runtime-патчи OutBoxML, нужные Querulus (без правок библиотеки)."""
+    _patch_model_data_subset_load_subset()
+    _patch_update_model_config_replace_keep_default()
+
+
 def ensure_legacy_inflation_column(df: pd.DataFrame) -> pd.DataFrame:
     """Алиас ``*_REAL_2020`` ← текущий базис. Предпочтительно через ``save_df_final``."""
     from querulus.features.inflation import ensure_legacy_real_column_aliases
@@ -71,8 +136,8 @@ def prepare_datasets_from_config(
     *,
     check_prepared: bool = True,
 ) -> dict[str, Any]:
-    """PrepareDataset'ы OutBoxML; патч индексов X/y при data_filter severity."""
-    _patch_model_data_subset_load_subset()
+    """PrepareDataset'ы OutBoxML; runtime-патчи Querulus до prepare."""
+    ensure_outboxml_runtime_patches()
     from outboxml.core.prepared_datasets import PrepareDataset
     from outboxml.core.pydantic_models import AllModelsConfig
 
