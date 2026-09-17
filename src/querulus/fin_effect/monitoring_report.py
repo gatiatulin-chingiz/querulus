@@ -14,7 +14,7 @@ from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_
 PLAN_FILENAME = "fin_effect_plan.html"
 REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
-FORMULA_VERSION = "ITT-U-2026-09-16-v10"
+FORMULA_VERSION = "ITT-U-2026-09-17-v11"
 
 
 def report_export_stamp(
@@ -1123,7 +1123,7 @@ def build_monitoring_html(
       remaining = max(7 000−0, 0) = 7 000</div>
       <div class="eq">Уже «перебрали»: expected=100 000, observed=150 000 →
       remaining = 0</div>
-    </div>
+  </div>
     <div class="formula">
       <b>Пример midpoint / NPV для Y365</b>
       <div class="eq">age=184, remaining=80 000, paid=50 000, r=12%</div>
@@ -1285,7 +1285,68 @@ def build_monitoring_html(
     )}
   </div>
 
-  <h2>8. Non-compliance</h2>
+  <h2>8. Рекомендованные доплаты и факт оплаты</h2>
+  <div class="card">
+    <p>Объём колонки <code>Сумма рекомендованная к доплате по модели</code>
+    и факт оплаты: <b>исполнено = СуммаПлатежа &gt; 0</b>.
+    Это описание объёмов, не ITT и не оценка экономии от доплат.</p>
+    {_table(
+      result.recommended_extra_summary,
+      columns={
+        "segment": _c(
+            "segment",
+            "control / model / model_result_1 (риск) / model_result_0",
+        ),
+        "n": _c("n", "Число инцидентов в сегменте"),
+        "n_recommended_gt0": _c(
+            "n рек.>0",
+            "Инциденты с рекомендованной доплатой &gt; 0",
+        ),
+        "sum_recommended_extra": _c(
+            "Σ рек.",
+            "Сумма рекомендованных доплат, ₽",
+            "Σ Сумма рекомендованная к доплате по модели",
+        ),
+        "n_paid_gt0": _c(
+            "n paid>0",
+            "Инциденты с СуммаПлатежа &gt; 0 (факт оплаты)",
+        ),
+        "share_paid_gt0": _c(
+            "paid %",
+            "Доля инцидентов с СуммаПлатежа &gt; 0, %",
+            "100 × mean(СуммаПлатежа &gt; 0)",
+        ),
+        "n_recommended_and_paid": _c(
+            "n рек.∩paid",
+            "Рекомендация &gt; 0 и СуммаПлатежа &gt; 0",
+        ),
+        "sum_recommended_paid": _c(
+            "Σ рек. paid",
+            "Σ рекомендации на инцидентах с СуммаПлатежа &gt; 0, ₽",
+        ),
+        "sum_recommended_unpaid": _c(
+            "Σ рек. unpaid",
+            "Σ рекомендации на инцидентах с СуммаПлатежа = 0, ₽",
+        ),
+        "descriptive_only": _c(
+            "desc only",
+            "true: только описание, не causal effect",
+        ),
+      },
+      rows=[
+        "control — Result=−100; model — Result∈{0,1}.",
+        "model_result_1 — model с Result=1 (флаг риска / рекомендация).",
+        "model_result_0 — model с Result=0.",
+        "Исполнение здесь = СуммаПлатежа &gt; 0, не флаг «Выплата по модели».",
+      ],
+      notes=[
+        "У control сумма рекомендации обычно ≈ 0 (модели не было).",
+        "Не интерпретировать Σ рек. как экономию ITT.",
+      ],
+    )}
+  </div>
+
+  <h2>9. Non-compliance</h2>
   <div class="card">
     <h3>A. As-complied — только описательная диагностика (Yfact)</h3>
     <p>Сравнение внутри model и <code>РезультатПроверки=1</code> только по факту.
@@ -1355,7 +1416,7 @@ def build_monitoring_html(
     )}
   </div>
 
-  <h2>9. Чувствительность</h2>
+  <h2>10. Чувствительность</h2>
   <div class="card">
     <p>Сетка: r ∈ {{8%,12%,16%}} и остаток после соглашения q ∈ {{0%,7%,15%}}.</p>
     {_table(
@@ -1376,7 +1437,7 @@ def build_monitoring_html(
     )}
   </div>
 
-  <h2>10. Сезонный годовой эффект и сеть</h2>
+  <h2>11. Сезонный годовой эффект и сеть</h2>
   <div class="card">
     {_formula(
         "Экстраполяция потока",
@@ -1536,7 +1597,7 @@ def build_monitoring_html(
     )}
   </div>
 
-  <h2>11. Ограничения</h2>
+  <h2>12. Ограничения</h2>
   <div class="card">
     <ul>
       <li><b>ITT</b> — эффект назначения в model-поток, включая фактический non-compliance.</li>
@@ -1605,7 +1666,7 @@ def build_conclusion_body_from_result(
     if paths is not None:
         for seg in ("control", "model"):
             if seg not in paths.index:
-                continue
+            continue
             row = paths.loc[seg]
             path_lines.append(
                 f"<li>{escape(seg)}: соглашения "
@@ -1872,7 +1933,7 @@ def write_monitoring_html(
         Path(path),
         build_monitoring_html(
             result,
-            source_label=source_label,
+        source_label=source_label,
             plan_name=plan_name,
             report_name=report_name,
             conclusion_name=conclusion_name,

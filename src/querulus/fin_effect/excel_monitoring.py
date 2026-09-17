@@ -154,6 +154,7 @@ class MonitoringEffectResult:
     path_shares: pd.DataFrame
     filial_path_shares: pd.DataFrame
     attention_filials: pd.DataFrame
+    recommended_extra_summary: pd.DataFrame
     contract: dict[str, str]
     t_calc: pd.Timestamp
     discount_rate: float
@@ -1086,6 +1087,63 @@ def _compliance_a(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _recommended_extra_summary(frame: pd.DataFrame) -> pd.DataFrame:
+    """Объём рекомендованных доплат и факт оплаты (СуммаПлатежа > 0).
+
+    Описательная таблица: не ITT и не экономия от доплат.
+    """
+    segments: list[tuple[str, pd.Series]] = [
+        ("control", frame["_group"].eq("control")),
+        ("model", frame["_group"].eq("model")),
+        (
+            "model_result_1",
+            frame["_group"].eq("model") & frame["_result"].eq(1),
+        ),
+        (
+            "model_result_0",
+            frame["_group"].eq("model") & frame["_result"].eq(0),
+        ),
+    ]
+    rows: list[dict[str, Any]] = []
+    for name, mask in segments:
+        part = frame.loc[mask]
+        n = len(part)
+        if n == 0:
+            rows.append(
+                {
+                    "segment": name,
+                    "n": 0,
+                    "n_recommended_gt0": 0,
+                    "sum_recommended_extra": 0.0,
+                    "n_paid_gt0": 0,
+                    "share_paid_gt0": np.nan,
+                    "n_recommended_and_paid": 0,
+                    "sum_recommended_paid": 0.0,
+                    "sum_recommended_unpaid": 0.0,
+                    "descriptive_only": True,
+                }
+            )
+            continue
+        rec = part["_recommended_extra"]
+        paid_flag = part["_paid_to_date"].gt(0)
+        rec_flag = rec.gt(0)
+        rows.append(
+            {
+                "segment": name,
+                "n": n,
+                "n_recommended_gt0": int(rec_flag.sum()),
+                "sum_recommended_extra": float(rec.sum()),
+                "n_paid_gt0": int(paid_flag.sum()),
+                "share_paid_gt0": float(paid_flag.mean() * 100),
+                "n_recommended_and_paid": int((rec_flag & paid_flag).sum()),
+                "sum_recommended_paid": float(rec.loc[paid_flag].sum()),
+                "sum_recommended_unpaid": float(rec.loc[~paid_flag].sum()),
+                "descriptive_only": True,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _attention_filials(
     filial_paths: pd.DataFrame,
     filial_effects: pd.DataFrame,
@@ -1490,6 +1548,7 @@ def estimate_monitoring_effect(
     effects = effects.merge(ci, on="horizon", how="left")
 
     compliance_a = _compliance_a(current)
+    recommended_extra_summary = _recommended_extra_summary(current)
     current_100 = _add_outcomes(
         current,
         priors.pilot,
@@ -1591,6 +1650,7 @@ def estimate_monitoring_effect(
         path_shares=path_shares,
         filial_path_shares=filial_paths,
         attention_filials=attention,
+        recommended_extra_summary=recommended_extra_summary,
         contract=contract,
         t_calc=calc_date,
         discount_rate=discount_rate,
