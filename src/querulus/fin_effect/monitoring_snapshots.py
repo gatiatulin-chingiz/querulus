@@ -40,20 +40,16 @@ SNAPSHOT_COLUMNS = [
     "n_model",
     "n_filials",
     "max_age_days",
-    "yfact_effect",
-    "yfact_ci_low",
-    "yfact_ci_high",
-    "yfact_unstratified",
-    "y365_effect",
-    "y365_ci_low",
-    "y365_ci_high",
-    "y365_unstratified",
-    "annual_pilot_full_y365",
-    "annual_pilot_full_y365_ci_low",
-    "annual_pilot_full_y365_ci_high",
-    "annual_network_full_y365",
-    "annual_network_full_y365_ci_low",
-    "annual_network_full_y365_ci_high",
+    "yult_effect",
+    "yult_ci_low",
+    "yult_ci_high",
+    "yult_unstratified",
+    "annual_pilot_full_yult",
+    "annual_pilot_full_yult_ci_low",
+    "annual_pilot_full_yult_ci_high",
+    "annual_network_full_yult",
+    "annual_network_full_yult_ci_low",
+    "annual_network_full_yult_ci_high",
     "n_pilot_eligible_year",
     "network_multiplier",
     "payment_to_pay_mismatch_rows",
@@ -93,10 +89,9 @@ def snapshot_row_from_result(
 ) -> dict[str, Any]:
     """Одна строка лога снимка из MonitoringEffectResult."""
     quality = _quality_map(result)
-    fact = _effect_row(result, "fact")
-    y365 = _effect_row(result, "365")
+    yult = _effect_row(result, "ult")
     annual = result.annual_summary.set_index("horizon")
-    ann = annual.loc["365"] if "365" in annual.index else None
+    ann = annual.loc["ult"] if "ult" in annual.index else None
     return {
         "snapshot_at": snapshot_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "t_calc": result.t_calc.date().isoformat(),
@@ -109,30 +104,26 @@ def snapshot_row_from_result(
         "n_model": int(quality.get("n_model", 0)),
         "n_filials": int(quality.get("n_filials", 0)),
         "max_age_days": int(quality.get("max_age_days", 0)),
-        "yfact_effect": fact["effect"],
-        "yfact_ci_low": fact["ci_low"],
-        "yfact_ci_high": fact["ci_high"],
-        "yfact_unstratified": fact["unstratified"],
-        "y365_effect": y365["effect"],
-        "y365_ci_low": y365["ci_low"],
-        "y365_ci_high": y365["ci_high"],
-        "y365_unstratified": y365["unstratified"],
-        "annual_pilot_full_y365": (
+        "yult_effect": yult["effect"],
+        "yult_ci_low": yult["ci_low"],
+        "yult_ci_high": yult["ci_high"],
+        "yult_unstratified": yult["unstratified"],
+        "annual_pilot_full_yult": (
             float(ann["annual_pilot_full"]) if ann is not None else np.nan
         ),
-        "annual_pilot_full_y365_ci_low": (
+        "annual_pilot_full_yult_ci_low": (
             float(ann["annual_pilot_full_ci_low"]) if ann is not None else np.nan
         ),
-        "annual_pilot_full_y365_ci_high": (
+        "annual_pilot_full_yult_ci_high": (
             float(ann["annual_pilot_full_ci_high"]) if ann is not None else np.nan
         ),
-        "annual_network_full_y365": (
+        "annual_network_full_yult": (
             float(ann["annual_network_full"]) if ann is not None else np.nan
         ),
-        "annual_network_full_y365_ci_low": (
+        "annual_network_full_yult_ci_low": (
             float(ann["annual_network_full_ci_low"]) if ann is not None else np.nan
         ),
-        "annual_network_full_y365_ci_high": (
+        "annual_network_full_yult_ci_high": (
             float(ann["annual_network_full_ci_high"]) if ann is not None else np.nan
         ),
         "n_pilot_eligible_year": (
@@ -238,10 +229,10 @@ def _filial_contributions(filial_effects: pd.DataFrame, horizon: str) -> pd.Data
     )[["filial", "n", "effect", "weight", "contribution"]]
 
 
-def _group_means_fact(result: MonitoringEffectResult) -> dict[str, float]:
-    """Средние Yfact и N по control/model на горизонте fact."""
+def _group_means_ult(result: MonitoringEffectResult) -> dict[str, float]:
+    """Средние Yult и N по control/model."""
     part = result.group_summary.loc[
-        result.group_summary["horizon"].astype(str).eq("fact")
+        result.group_summary["horizon"].astype(str).eq("ult")
     ]
     out = {
         "mean_control": np.nan,
@@ -258,7 +249,7 @@ def _group_means_fact(result: MonitoringEffectResult) -> dict[str, float]:
 
 
 def _unit_level_table(frame: pd.DataFrame) -> pd.DataFrame:
-    """Одна строка на инцидент (единица ITT): группа, Yfact, флаги."""
+    """Одна строка на инцидент (единица ITT): группа, Yult, флаги."""
     if frame.empty:
         return pd.DataFrame(
             columns=[
@@ -266,7 +257,7 @@ def _unit_level_table(frame: pd.DataFrame) -> pd.DataFrame:
                 "loss_ids",
                 "group",
                 "filial",
-                "yfact",
+                "yult",
                 "paid",
                 "od",
                 "age_days",
@@ -288,7 +279,7 @@ def _unit_level_table(frame: pd.DataFrame) -> pd.DataFrame:
             "loss_ids": work["_loss"].astype("string"),
             "group": work["_group"],
             "filial": work["_filial"],
-            "yfact": work["Yfact"],
+            "yult": work["Yult"],
             "paid": work["_paid_to_date"],
             "od": work["_od"],
             "age_days": work["_age_days"],
@@ -360,10 +351,10 @@ def _group_delta_table(
             else np.nan
         )
         week_row = weekly.loc[weekly["week_end"].astype(str).eq(key)]
-        delta_yfact = (
-            float(week_row.iloc[0]["delta_yfact"])
-            if not week_row.empty and "delta_yfact" in week_row.columns
-            and pd.notna(week_row.iloc[0].get("delta_yfact"))
+        delta_yult = (
+            float(week_row.iloc[0]["delta_yult"])
+            if not week_row.empty and "delta_yult" in week_row.columns
+            and pd.notna(week_row.iloc[0].get("delta_yult"))
             else np.nan
         )
         if pd.notna(delta_control) and abs(delta_control) >= abs(
@@ -413,7 +404,7 @@ def _group_delta_table(
                 "itt_contrib_control": contrib_control,
                 "itt_contrib_model": contrib_model,
                 "delta_itt_unstratified": delta_itt_unstrat,
-                "delta_yfact_stratified": delta_yfact,
+                "delta_yult_stratified": delta_yult,
                 "dominant_group": leader,
                 "readout": read,
             }
@@ -459,11 +450,11 @@ def _loss_drivers_table(
             if isinstance(rec, pd.DataFrame):
                 rec = rec.iloc[0]
             group = str(rec["group"])
-            yfact = float(rec["yfact"]) if pd.notna(rec["yfact"]) else np.nan
+            yult = float(rec["yult"]) if pd.notna(rec["yult"]) else np.nan
             mean_g = float(prev_means.get(f"mean_{group}", np.nan))
             n_g = float(prev_means.get(f"n_{group}", 0.0))
-            if pd.notna(yfact) and pd.notna(mean_g) and n_g >= 0:
-                delta_mean = (yfact - mean_g) / (n_g + 1.0)
+            if pd.notna(yult) and pd.notna(mean_g) and n_g >= 0:
+                delta_mean = (yult - mean_g) / (n_g + 1.0)
                 sign = 1.0 if group == "control" else -1.0
                 pull = sign * delta_mean
             else:
@@ -478,7 +469,7 @@ def _loss_drivers_table(
                     "group": group,
                     "filial": rec["filial"],
                     "application_date": rec.get("application_date"),
-                    "yfact": yfact,
+                    "yult": yult,
                     "paid_prev": np.nan,
                     "paid_cur": float(rec["paid"]) if pd.notna(rec["paid"]) else np.nan,
                     "delta_paid": np.nan,
@@ -518,7 +509,7 @@ def _loss_drivers_table(
                     "group": group,
                     "filial": rec["filial"],
                     "application_date": rec.get("application_date"),
-                    "yfact": float(rec["yfact"]) if pd.notna(rec["yfact"]) else np.nan,
+                    "yult": float(rec["yult"]) if pd.notna(rec["yult"]) else np.nan,
                     "paid_prev": paid_prev_f,
                     "paid_cur": paid_cur,
                     "delta_paid": delta_paid,
@@ -599,8 +590,7 @@ def run_weekly_monitoring_series(
                     "week_end": week_end.date().isoformat(),
                     "status": "skipped_small_n",
                     "n_rows": len(subset),
-                    "yfact_effect": np.nan,
-                    "y365_effect": np.nan,
+                    "yult_effect": np.nan,
                     "reason": f"n<{min_rows}",
                 }
             )
@@ -624,8 +614,7 @@ def run_weekly_monitoring_series(
                     "week_end": week_end.date().isoformat(),
                     "status": "error",
                     "n_rows": len(subset),
-                    "yfact_effect": np.nan,
-                    "y365_effect": np.nan,
+                    "yult_effect": np.nan,
                     "reason": f"{type(exc).__name__}: {exc}",
                 }
             )
@@ -642,10 +631,10 @@ def run_weekly_monitoring_series(
         snap["reason"] = ""
         weekly_rows.append(snap)
 
-        contrib_by_week[key] = _filial_contributions(result.filial_effects, "fact")
+        contrib_by_week[key] = _filial_contributions(result.filial_effects, "ult")
         loss_level = _unit_level_table(result.frame)
         loss_by_week[key] = loss_level
-        group_means_by_week[key] = _group_means_fact(result)
+        group_means_by_week[key] = _group_means_ult(result)
         loss_sets[key] = set(loss_level["incident_id"].astype(str).tolist())
         paid_by_week[key] = loss_level.set_index(
             loss_level["incident_id"].astype(str)
@@ -692,13 +681,12 @@ def _add_week_deltas(
 ) -> pd.DataFrame:
     out = weekly.copy()
     for col in (
-        "delta_yfact",
-        "delta_y365",
+        "delta_yult",
         "delta_n_rows",
         "n_new_losses",
         "n_shared_losses",
         "shared_mean_paid_delta",
-        "ci_yfact_includes_0",
+        "ci_yult_includes_0",
         "why_moved",
     ):
         if col not in out.columns:
@@ -713,24 +701,19 @@ def _add_week_deltas(
     for i, row in out.iterrows():
         if not bool(ok_mask.loc[i]):
             continue
-        yf = row.get("yfact_effect")
-        yf_lo = row.get("yfact_ci_low")
-        yf_hi = row.get("yfact_ci_high")
-        if pd.notna(yf_lo) and pd.notna(yf_hi):
-            out.at[i, "ci_yfact_includes_0"] = bool(yf_lo <= 0 <= yf_hi)
+        yu = row.get("yult_effect")
+        yu_lo = row.get("yult_ci_low")
+        yu_hi = row.get("yult_ci_high")
+        if pd.notna(yu_lo) and pd.notna(yu_hi):
+            out.at[i, "ci_yult_includes_0"] = bool(yu_lo <= 0 <= yu_hi)
         if prev_i is None:
             out.at[i, "why_moved"] = "базовая неделя ряда"
             prev_i = i
             continue
         prev = out.loc[prev_i]
-        out.at[i, "delta_yfact"] = (
-            float(yf) - float(prev["yfact_effect"])
-            if pd.notna(yf) and pd.notna(prev["yfact_effect"])
-            else np.nan
-        )
-        out.at[i, "delta_y365"] = (
-            float(row["y365_effect"]) - float(prev["y365_effect"])
-            if pd.notna(row.get("y365_effect")) and pd.notna(prev.get("y365_effect"))
+        out.at[i, "delta_yult"] = (
+            float(yu) - float(prev["yult_effect"])
+            if pd.notna(yu) and pd.notna(prev["yult_effect"])
             else np.nan
         )
         out.at[i, "delta_n_rows"] = (
@@ -753,9 +736,9 @@ def _add_week_deltas(
                 (cur_paid - prev_paid).mean()
             )
         parts = []
-        dy = out.at[i, "delta_yfact"]
+        dy = out.at[i, "delta_yult"]
         if pd.notna(dy):
-            parts.append(f"ΔYfact={dy:+,.0f}₽".replace(",", " "))
+            parts.append(f"ΔYult={dy:+,.0f}₽".replace(",", " "))
         dn = out.at[i, "delta_n_rows"]
         if pd.notna(dn):
             parts.append(f"ΔN={dn:+.0f}")
@@ -847,15 +830,13 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
             "n_rows",
             "n_control",
             "n_model",
-            "yfact_effect",
-            "delta_yfact",
-            "y365_effect",
-            "delta_y365",
-            "ci_yfact_includes_0",
+            "yult_effect",
+            "delta_yult",
+            "ci_yult_includes_0",
             "n_new_losses",
             "shared_mean_paid_delta",
-            "annual_pilot_full_y365",
-            "annual_network_full_y365",
+            "annual_pilot_full_yult",
+            "annual_network_full_yult",
             "why_moved",
             "reason",
         )
@@ -880,7 +861,7 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
         "Общая логика ряда",
         [
             "Срез week_end: инциденты с ДатаЗаявления ≤ week_end, t_calc = week_end",
-            "<b>Yfact</b> = сумма СуммаПлатежа по убыткам инцидента <b>из текущей витрины</b> "
+            "<b>Yult</b> = paid + NPV(хвост ПСР); paid = Σ СуммаПлатежа <b>из текущей витрины</b> "
             "(не архив платежей на ту дату)",
             "<b>ITT(H)</b> = Σ<sub>f</sub> w<sub>f</sub>·(Ȳ<sub>H</sub>(control,f) − Ȳ<sub>H</sub>(model,f)), "
             "w<sub>f</sub> = N<sub>f</sub>/Σ N<sub>g</sub>",
@@ -910,29 +891,19 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
             "Число инцидентов model",
             "count(group = model)",
         ),
-        "yfact_effect": _c(
-            "ITT Yfact",
-            "Стратифицированный ITT по Yfact, ₽/инцидент",
-            "Σ_f w_f · (mean_c,f − mean_m,f), YH = Yfact",
+        "yult_effect": _c(
+            "ITT Yult",
+            "Стратифицированный ITT по Yult, ₽/инцидент",
+            "Σ_f w_f · (mean_c,f − mean_m,f), YH = Yult",
         ),
-        "delta_yfact": _c(
-            "ΔYfact",
-            "Изменение ITT Yfact к предыдущей ok-неделе",
-            "yfact_effect(week) − yfact_effect(prev)",
+        "delta_yult": _c(
+            "ΔYult",
+            "Изменение ITT Yult к предыдущей ok-неделе",
+            "yult_effect(week) − yult_effect(prev)",
         ),
-        "y365_effect": _c(
-            "ITT Y365",
-            "Стратифицированный ITT по Y365, ₽/инцидент",
-            "Σ_f w_f · (mean_c,f − mean_m,f), YH = Yfact + NPV(хвост)",
-        ),
-        "delta_y365": _c(
-            "ΔY365",
-            "Изменение ITT Y365 к предыдущей ok-неделе",
-            "y365_effect(week) − y365_effect(prev)",
-        ),
-        "ci_yfact_includes_0": _c(
+        "ci_yult_includes_0": _c(
             "CI∋0",
-            "true, если 95% CI ITT Yfact содержит 0",
+            "true, если 95% CI ITT Yult содержит 0",
             "ci_low ≤ 0 ≤ ci_high",
         ),
         "n_new_losses": _c(
@@ -945,15 +916,15 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
             "Среднее изменение оплаты по общим инцидентам",
             "mean_i∈shared (paid_i,week − paid_i,prev)",
         ),
-        "annual_pilot_full_y365": _c(
-            "год пилот Y365",
-            "Годовой эффект пилота при всём потоке в модель, Y365",
-            "y365_effect × N_pilot_eligible_year",
+        "annual_pilot_full_yult": _c(
+            "год пилот Yult",
+            "Годовой эффект пилота при всём потоке в модель, Yult",
+            "yult_effect × N_pilot_eligible_year",
         ),
-        "annual_network_full_y365": _c(
-            "год сеть Y365",
-            "Годовой эффект сети при всём потоке в модель, Y365",
-            "annual_pilot_full_y365 × network_multiplier",
+        "annual_network_full_yult": _c(
+            "год сеть Yult",
+            "Годовой эффект сети при всём потоке в модель, Yult",
+            "annual_pilot_full_yult × network_multiplier",
         ),
         "why_moved": _c("why", "Краткая сводка причин сдвига недели"),
         "reason": _c("reason", "Текст ошибки или причина skip"),
@@ -990,34 +961,34 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
         "week_end": _c("тек. неделя", "Конец текущей ok-недели"),
         "mean_control_prev": _c(
             "mean_c prev",
-            "Средний Yfact control на prev",
-            "mean(Yfact | control, prev)",
+            "Средний Yult control на prev",
+            "mean(Yult | control, prev)",
         ),
         "mean_control_cur": _c(
             "mean_c cur",
-            "Средний Yfact control на текущей",
-            "mean(Yfact | control, week)",
+            "Средний Yult control на текущей",
+            "mean(Yult | control, week)",
         ),
         "delta_mean_control": _c(
             "Δmean_c",
-            "Изменение среднего Yfact control",
+            "Изменение среднего Yult control",
             "mean_control_cur − mean_control_prev",
         ),
         "n_control_prev": _c("n_c prev", "N control на prev"),
         "n_control_cur": _c("n_c cur", "N control на текущей"),
         "mean_model_prev": _c(
             "mean_m prev",
-            "Средний Yfact model на prev",
-            "mean(Yfact | model, prev)",
+            "Средний Yult model на prev",
+            "mean(Yult | model, prev)",
         ),
         "mean_model_cur": _c(
             "mean_m cur",
-            "Средний Yfact model на текущей",
-            "mean(Yfact | model, week)",
+            "Средний Yult model на текущей",
+            "mean(Yult | model, week)",
         ),
         "delta_mean_model": _c(
             "Δmean_m",
-            "Изменение среднего Yfact model",
+            "Изменение среднего Yult model",
             "mean_model_cur − mean_model_prev",
         ),
         "n_model_prev": _c("n_m prev", "N model на prev"),
@@ -1037,10 +1008,10 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
             "Сумма вкладов групп без весов филиалов",
             "itt_contrib_control + itt_contrib_model",
         ),
-        "delta_yfact_stratified": _c(
+        "delta_yult_stratified": _c(
             "ΔITT страт",
-            "Фактический Δ ITT Yfact со стратификацией (из главной таблицы)",
-            "delta_yfact из ряда weekly",
+            "Фактический Δ ITT Yult со стратификацией (из главной таблицы)",
+            "delta_yult из ряда weekly",
         ),
         "dominant_group": _c(
             "лидер",
@@ -1056,7 +1027,7 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
         "Пример: mean_model 142k → 131k ⇒ Δmean_m = −11k ⇒ вклад m = −(−11k) = +11k",
       ],
       notes=[
-        "delta_itt_unstratified может отличаться от delta_yfact_stratified из-за весов филиалов.",
+        "delta_itt_unstratified может отличаться от delta_yult_stratified из-за весов филиалов.",
       ],
     )}
   </div>
@@ -1067,7 +1038,7 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
         [
             "<b>sign</b> = +1 для control, −1 для model "
             "(потому что ITT = mean_control − mean_model)",
-            "<b>new_incident</b>: estimated_itt_pull = sign × (Yfact − mean_group_prev) / (N_group_prev + 1)",
+            "<b>new_incident</b>: estimated_itt_pull = sign × (Yult − mean_group_prev) / (N_group_prev + 1)",
             "<b>payment_update</b>: estimated_itt_pull = sign × Δpaid / N_group_cur, "
             "только если |Δpaid| ≥ 1 ₽",
             "В топ: до {TOP_LOSS_DRIVERS_PER_KIND} new_incident и до "
@@ -1092,10 +1063,10 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
             "дата заявл.",
             "Мин. ДатаЗаявления по убыткам инцидента",
         ),
-        "yfact": _c(
-            "Yfact",
-            "Yfact инцидента на текущем срезе, ₽",
-            "Σ СуммаПлатежа по убыткам инцидента",
+        "yult": _c(
+            "Yult",
+            "Yult инцидента на текущем срезе, ₽",
+            "paid + NPV(remaining ПСР)",
         ),
         "paid_prev": _c(
             "paid prev",
@@ -1115,7 +1086,7 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
         "estimated_itt_pull": _c(
             "вклад ≈",
             "Оценка вклада в Δ ITT, ₽ (без страт. по филиалам)",
-            "new: sign×(Yfact−mean_group_prev)/(N_prev+1); "
+            "new: sign×(Yult−mean_group_prev)/(N_prev+1); "
             "update: sign×Δpaid/N_cur; sign=+1 control, −1 model",
         ),
         "severity": _c(
@@ -1129,7 +1100,7 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
         f"{TOP_LOSS_DRIVERS_PER_KIND} payment_update по |estimated_itt_pull|.",
       ],
       formulas=[
-        "Пример new control Yfact=400, mean_prev=100, N_prev=2: pull = +1×(400−100)/3 = +100",
+        "Пример new control Yult=400, mean_prev=100, N_prev=2: pull = +1×(400−100)/3 = +100",
         "Пример payment_update model Δpaid=−60, N=2: pull = −1×(−60)/2 = +30",
       ],
       notes=[
@@ -1137,12 +1108,12 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
       ],
     )}
   </div>
-  <h2>Топ филиалов по вкладу в Δ Yfact</h2>
+  <h2>Топ филиалов по вкладу в Δ Yult</h2>
   <div class="card">
     {_formula(
         "Вклад филиала в стратифицированный ITT",
         [
-            "<b>effect_f</b> = mean(Yfact|control,f) − mean(Yfact|model,f)",
+            "<b>effect_f</b> = mean(Yult|control,f) − mean(Yult|model,f)",
             "<b>w_f</b> = N<sub>f</sub> / Σ<sub>g</sub> N<sub>g</sub>  (N — все eligible инциденты филиала)",
             "<b>contribution_f</b> = w_f × effect_f",
             "<b>delta_contribution</b> = contribution_f(week) − contribution_f(prev)",
@@ -1159,13 +1130,13 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
         "n_cur": _c("n cur", "N инцидентов филиала на текущей"),
         "effect_prev": _c(
             "ITT_f prev",
-            "Локальный ITT Yfact филиала на prev",
-            "mean(Yfact|control,f,prev) − mean(Yfact|model,f,prev)",
+            "Локальный ITT Yult филиала на prev",
+            "mean(Yult|control,f,prev) − mean(Yult|model,f,prev)",
         ),
         "effect_cur": _c(
             "ITT_f cur",
-            "Локальный ITT Yfact филиала на текущей",
-            "mean(Yfact|control,f,week) − mean(Yfact|model,f,week)",
+            "Локальный ITT Yult филиала на текущей",
+            "mean(Yult|control,f,week) − mean(Yult|model,f,week)",
         ),
         "delta_contribution": _c(
             "Δ вклад",
@@ -1177,7 +1148,7 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
         "До 5 филиалов с наибольшим |delta_contribution| на пару ok-недель.",
       ],
       notes=[
-        "w_f = N_f / Σ_g N_g; сумма Δ вкладов близка к delta_yfact "
+        "w_f = N_f / Σ_g N_g; сумма Δ вкладов близка к delta_yult "
         "(с учётом появления/исчезновения филиалов).",
       ],
     )}

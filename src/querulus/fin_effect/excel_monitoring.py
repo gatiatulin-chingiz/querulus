@@ -30,7 +30,10 @@ RETRO_AS_OF_DEFAULT = "2025-06-30"
 RESULT_OUT_OF_MODEL = -100
 RESULT_ELIGIBLE = (0, 1, RESULT_OUT_OF_MODEL)
 WRITEOFF_REFUND_NEEDLES = ("списан",)
-HORIZONS = (365,)
+# NPV-окно для lifetime-хвоста ПСР (калибровка ultimate + дисконт до ~3 лет)
+ULTIMATE_HORIZON_DAYS = 1095
+HORIZON_SPECS: tuple[tuple[str, int], ...] = (("ult", ULTIMATE_HORIZON_DAYS),)
+HORIZONS = tuple(days for _, days in HORIZON_SPECS)
 PILOT_FILIALS = (
     "Владимирский",
     "Кемеровский",
@@ -618,7 +621,7 @@ def _bootstrap_ci(
         except Exception:
             results = _collect(ThreadPoolExecutor, init=False)
 
-    values: dict[str, list[float]] = {"fact": [], "365": []}
+    values: dict[str, list[float]] = {"ult": []}
     for item in results:
         if not item:
             continue
@@ -903,11 +906,11 @@ def _prepare_monitoring_contract(
     if work["_age_days"].lt(0).any():
         warnings.append("Есть t0 позже t_calc; age_days для них ограничен нулём.")
         work["_age_days"] = work["_age_days"].clip(lower=0)
-    if work["_age_days"].ge(min(HORIZONS)).any():
-        n_old = int(work["_age_days"].ge(min(HORIZONS)).sum())
-        raise ValueError(
-            f"{n_old} строк имеют age_days >= 365. "
-            "Методика требует отдельного наблюдаемого Y365 и останавливает расчёт."
+    if work["_age_days"].ge(ULTIMATE_HORIZON_DAYS).any():
+        n_old = int(work["_age_days"].ge(ULTIMATE_HORIZON_DAYS).sum())
+        warnings.append(
+            f"{n_old} строк имеют age_days >= {ULTIMATE_HORIZON_DAYS}: "
+            "для них midpoint NPV хвоста = 0 (Yult = paid + remaining)."
         )
 
     contract = {
@@ -965,31 +968,29 @@ def _add_outcomes(
         )
         model_one = work["_group"].eq("model") & work["_result"].eq(1)
         work["_forced_extra"] = work["_recommended_extra"].where(force, 0.0)
-        work["Yfact_100"] = work["_paid_to_date"] + work["_forced_extra"]
+        work["_paid_base"] = work["_paid_to_date"] + work["_forced_extra"]
         residual = pd.Series(1.0, index=work.index)
         residual.loc[work["_agreement"]] = residual_share
         residual.loc[model_one] = residual_share
         prefix = "_100"
-        fact_column = "Yfact_100"
     else:
         work["_forced_extra"] = 0.0
-        work["Yfact"] = work["_paid_to_date"]
+        work["_paid_base"] = work["_paid_to_date"]
         residual = pd.Series(1.0, index=work.index)
         residual.loc[work["_agreement"]] = residual_share
         prefix = ""
-        fact_column = "Yfact"
 
     remaining = (
         residual * work["_expected_open_psr"] - work["_observed_psr"]
     ).clip(lower=0.0)
     work[f"_remaining_nominal{prefix}"] = remaining
-    for horizon in HORIZONS:
-        remaining_days = (horizon - work["_age_days"]).clip(lower=0.0)
+    for name, horizon_days in HORIZON_SPECS:
+        remaining_days = (horizon_days - work["_age_days"]).clip(lower=0.0)
         midpoint_days = remaining_days / 2.0
         discount_factor = (1.0 + discount_rate) ** (midpoint_days / 365.0)
-        column = f"Y{horizon}{prefix}"
-        work[column] = work[fact_column] + remaining / discount_factor
-        work[f"_midpoint_days_{horizon}{prefix}"] = midpoint_days
+        column = f"Y{name}{prefix}"
+        work[column] = work["_paid_base"] + remaining / discount_factor
+        work[f"_midpoint_days_{name}{prefix}"] = midpoint_days
     return work
 
 
@@ -999,8 +1000,7 @@ def _summaries(
     suffix: str = "",
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     outcomes = {
-        "fact": f"Yfact{suffix}",
-        "365": f"Y365{suffix}",
+        "ult": f"Yult{suffix}",
     }
     group_rows: list[dict[str, Any]] = []
     filial_rows: list[dict[str, Any]] = []
@@ -1088,11 +1088,11 @@ def _compliance_a(frame: pd.DataFrame) -> pd.DataFrame:
         n = len(part)
         rows.append(
             {
-                "horizon": "fact",
+                "horizon": "ult",
                 "compliance": status,
                 "n": n,
                 "agreement_share": float(part["_agreement"].mean() * 100) if n else np.nan,
-                "mean_cost": float(part["Yfact"].mean()),
+                "mean_cost": float(part["Yult"].mean()),
                 "descriptive_only": True,
             }
         )
@@ -1410,7 +1410,7 @@ def _seasonal_scaling(
         "effect_per_case"
     ].to_dict()
     annual_rows = []
-    for horizon in ("fact", "365"):
+    for horizon in ("ult",):
         effect = float(effect_map[horizon])
         effect_100 = float(compliance_map[horizon])
         scale_full = n_model_year_full * network_multiplier
@@ -1430,6 +1430,9 @@ def _seasonal_scaling(
                 "volume_ratio_nonpilot": volume_ratio,
                 "risk_ratio_nonpilot": risk_ratio,
                 "network_multiplier": network_multiplier,
+                "annual_window": effect * n_observed,
+                "annual_window_ci_low": ci_low * n_observed,
+                "annual_window_ci_high": ci_high * n_observed,
                 "annual_pilot_current": effect * scale_pilot_current,
                 "annual_pilot_full": effect * scale_pilot_full,
                 "annual_pilot_full_ci_low": ci_low * scale_pilot_full,
@@ -1745,6 +1748,8 @@ __all__ = [
     "FU_FEE_DEFAULT",
     "GroupRetroPriors",
     "HORIZONS",
+    "HORIZON_SPECS",
+    "ULTIMATE_HORIZON_DAYS",
     "MonitoringEffectResult",
     "PILOT_FILIALS",
     "RETRO_AS_OF_DEFAULT",

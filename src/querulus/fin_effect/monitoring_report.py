@@ -14,7 +14,7 @@ from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_
 PLAN_FILENAME = "fin_effect_plan.html"
 REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
-FORMULA_VERSION = "ITT-U-2026-09-18-v14"
+FORMULA_VERSION = "ITT-U-2026-09-18-v16-ult"
 
 
 def report_export_stamp(
@@ -260,7 +260,7 @@ def _chart_bootstrap_hist(
 
     if samples is None or samples.empty:
         return ""
-    horizons = [h for h in ("fact", "365") if h in set(samples["horizon"].astype(str))]
+    horizons = [h for h in ("ult",) if h in set(samples["horizon"].astype(str))]
     if not horizons:
         return ""
     effect_idx = effects.set_index("horizon") if not effects.empty else None
@@ -314,9 +314,7 @@ def _chart_filial_effects(filial_effects: pd.DataFrame) -> str:
 
     if filial_effects is None or filial_effects.empty:
         return ""
-    part = filial_effects.loc[filial_effects["horizon"].astype(str).eq("365")].copy()
-    if part.empty:
-        part = filial_effects.loc[filial_effects["horizon"].astype(str).eq("fact")].copy()
+    part = filial_effects.loc[filial_effects["horizon"].astype(str).eq("ult")].copy()
     if part.empty:
         return ""
     part = part.sort_values("effect_control_minus_model")
@@ -413,7 +411,7 @@ def _chart_group_means(group_summary: pd.DataFrame) -> str:
     if group_summary is None or group_summary.empty:
         return ""
     horizons = [
-        h for h in ("fact", "365") if h in set(group_summary["horizon"].astype(str))
+        h for h in ("ult",) if h in set(group_summary["horizon"].astype(str))
     ]
     if not horizons:
         return ""
@@ -458,7 +456,7 @@ def _chart_annual_ci(annual_summary: pd.DataFrame) -> str:
 
     if annual_summary is None or annual_summary.empty:
         return ""
-    part = annual_summary.loc[annual_summary["horizon"].astype(str).eq("365")]
+    part = annual_summary.loc[annual_summary["horizon"].astype(str).eq("ult")]
     if part.empty:
         part = annual_summary.iloc[[0]]
     row = part.iloc[0]
@@ -663,11 +661,13 @@ def _nav(
     plan_name: str = PLAN_FILENAME,
     report_name: str = REPORT_FILENAME,
     conclusion_name: str = CONCLUSION_FILENAME,
+    weekly_name: str = "fin_effect_weekly.html",
 ) -> str:
+    _ = plan_name  # план больше не в наборе артефактов
     items = (
-        (plan_name, "1. План"),
-        (report_name, "2. Расчёт"),
-        (conclusion_name, "3. Заключение"),
+        (report_name, "1. Расчёт"),
+        (conclusion_name, "2. Заключение"),
+        (weekly_name, "3. Еженедельный"),
     )
     links = []
     for filename, label in items:
@@ -711,23 +711,23 @@ def _business_schema() -> str:
     Списанные по форме возмещения в схлопывание не входят.</li>
     <li><b>Result</b>: если у части убытков инцидента Result пустой, а у одного
     −100 (или 0/1) — на весь инцидент берём это значение.</li>
-    <li><b>Yfact</b> = сумма <code>СуммаПлатежа</code> по убыткам инцидента
+    <li><b>paid</b> = сумма <code>СуммаПлатежа</code> по убыткам инцидента
     (касса на дату отчёта). Observed ПСР вычитается из хвоста, не наращивает
-    Yfact.</li>
+    paid.</li>
     <li><b>observed_PSR</b> на инциденте = сумма выплат по претензии / ФУ /
     суду по схлопнутым убыткам.</li>
-    <li><b>Y365</b> = Yfact + NPV(ожидаемый ещё несозревший хвост ПСР по
+    <li><b>Yult</b> = paid + NPV(ожидаемый ещё несозревший хвост ПСР по
     ретро-коэффициентам).</li>
   </ul>
 
   <h3>Формула эффекта</h3>
-  <div class="formula">
-    <div class="eq">effect(H) = Σ<sub>f</sub> w<sub>f</sub> ·
-    (Ȳ<sub>H</sub>(control, f) − Ȳ<sub>H</sub>(model, f))</div>
+    <div class="formula">
+    <div class="eq">effect = Σ<sub>f</sub> w<sub>f</sub> ·
+    (Ȳ<sub>ult</sub>(control, f) − Ȳ<sub>ult</sub>(model, f))</div>
     <div class="eq">w<sub>f</sub> = N<sub>f</sub> / Σ<sub>g</sub> N<sub>g</sub>,
     N<sub>f</sub> = число eligible-инцидентов филиала f (control + model)</div>
     <div class="note">Плюс = control дороже model = экономия.
-    H ∈ {fact, 365}. Непростая разность глобальных средних: стратификация
+    Исход — только Yult. Непростая разность глобальных средних: стратификация
     по филиалу сохраняет дизайн рандомизации.</div>
       </div>
   <p><b>Число инцидентов</b> — сумма N<sub>f</sub> по пилотным филиалам
@@ -751,7 +751,8 @@ def _business_schema() -> str:
     <div class="flow-step">
       <div class="num">Шаг 2</div>
       <h4>Что уже заплатили</h4>
-      <p><code>Yfact</code> = сумма <code>СуммаПлатежа</code> по убыткам инцидента.</p>
+      <p><code>paid</code> = сумма <code>СуммаПлатежа</code> по убыткам инцидента
+      (база для Yult).</p>
       </div>
     <div class="flow-step">
       <div class="num">Шаг 3</div>
@@ -760,8 +761,8 @@ def _business_schema() -> str:
       </div>
     <div class="flow-step">
       <div class="num">Шаг 4</div>
-      <h4>Два горизонта</h4>
-      <p><code>Yfact</code> — сейчас; <code>Y365</code> — хвост с NPV на 1 год.</p>
+      <h4>Исход Yult</h4>
+      <p><code>Yult</code> = касса + NPV lifetime-хвоста ПСР.</p>
     </div>
     <div class="flow-step">
       <div class="num">Шаг 5</div>
@@ -775,7 +776,7 @@ def _business_schema() -> str:
     </div>
       </div>
     </div>
-"""
+    """
 
 
 def _plan_glossary() -> str:
@@ -809,12 +810,9 @@ def _plan_glossary() -> str:
         входят в сравнение ручеек vs модель.</td>
       </tr>
       <tr>
-        <th>Yfact</th>
-        <td>Уже выплаченное: сумма <code>СуммаПлатежа</code> по убыткам инцидента.</td>
-      </tr>
-      <tr>
-        <th>Y365</th>
-        <td>Yfact плюс оценка ещё не дозревшего хвоста ПСР (с дисконтом на год).</td>
+        <th>Yult</th>
+        <td>Касса (<code>СуммаПлатежа</code>) плюс NPV ещё не дозревшего хвоста ПСР
+        (lifetime).</td>
       </tr>
       <tr>
         <th>ITT</th>
@@ -842,12 +840,12 @@ def _plan_glossary() -> str:
       </tr>
       <tr>
         <th>ПСР</th>
-        <td>Постстраховые расходы / взыскания (претензии, ФУ, суд) — в хвосте Y365
+        <td>Постстраховые расходы / взыскания (претензии, ФУ, суд) — в хвосте Yult
         и в ретро-коэффициентах.</td>
       </tr>
     </table>
-  </div>
-"""
+    </div>
+    """
 
 
 def _plan_calculation_steps() -> str:
@@ -864,7 +862,7 @@ def _plan_calculation_steps() -> str:
     <div class="fx-node main">
       <div class="fx-head">
         <span class="fx-tag main">главная</span>
-        1. Факт на окне пилота (Y365)
+        1. Факт на окне пилота (Yult)
       </div>
       <div class="formula">
         <div class="eq">Финрез₁ = ITT(365) × N<sub>obs</sub></div>
@@ -974,8 +972,8 @@ def _plan_calculation_steps() -> str:
       <p class="muted" style="margin:0">Σ фактических доплат по модели
       (<code>Иные затраты</code>). Не рекомендация и не ITT.</p>
     </div>
-  </div>
-"""
+    </div>
+    """
 
 
 def _fx_itt_branch(*, compact: bool = False) -> str:
@@ -996,11 +994,11 @@ def _fx_itt_branch(*, compact: bool = False) -> str:
             ITT(H) — эффект на инцидент
           </div>
           <div class="formula">
-            <div class="eq">ITT(H) = Σ<sub>f</sub> w<sub>f</sub> · effect<sub>f</sub>(H)</div>
-            <div class="eq">effect<sub>f</sub>(H) =
-            mean(Y<sub>H</sub>|ручеек,f) − mean(Y<sub>H</sub>|модель,f)</div>
+            <div class="eq">ITT = Σ<sub>f</sub> w<sub>f</sub> · effect<sub>f</sub></div>
+            <div class="eq">effect<sub>f</sub> =
+            mean(Yult|ручеек,f) − mean(Yult|модель,f)</div>
             <div class="eq">w<sub>f</sub> = N<sub>f</sub> / Σ<sub>g</sub> N<sub>g</sub></div>
-            <div class="note">H ∈ {{fact, 365}}. Плюс = ручеек дороже модели =
+            <div class="note">Исход — Yult. Плюс = ручеек дороже модели =
             экономия. 95% CI — квантили bootstrap по пересчёту ITT.</div>
           </div>
           <p class="fx-need">Чтобы посчитать ITT:</p>
@@ -1015,7 +1013,7 @@ def _fx_itt_branch(*, compact: bool = False) -> str:
                 <div class="eq">ручеек ⇔ Result = −100</div>
                 <div class="eq">модель ⇔ Result ∈ {{0, 1}}</div>
               </div>
-              <div class="legend">
+    <div class="legend">
                 <ul>
                   <li>Соглашение и исполнение рекомендации строки не выкидывают
                   (post-treatment). ITT = эффект назначения.</li>
@@ -1027,25 +1025,25 @@ def _fx_itt_branch(*, compact: bool = False) -> str:
               </div>
             </div>
           </div>
-        </div>
-"""
+    </div>
+    """
 
 
 def _fx_y_branch() -> str:
-    """Yfact / Y365 и всё, что под ними."""
+    """Yult и всё, что под ним."""
     return f"""
             <div class="fx-node sub">
               <div class="fx-head">
                 <span class="fx-tag sub">второстепенная</span>
-                Y<sub>H</sub> — расход на инцидент
+                Yult — расход на инцидент
               </div>
               <div class="formula">
-                <div class="eq">Yfact<sub>i</sub> = Σ СуммаПлатежа по убыткам
+                <div class="eq">paid<sub>i</sub> = Σ СуммаПлатежа по убыткам
                 инцидента i</div>
-                <div class="eq">Y365<sub>i</sub> = Yfact<sub>i</sub> +
+                <div class="eq">Yult<sub>i</sub> = paid<sub>i</sub> +
                 remaining<sub>i</sub> / (1+r)<sup>midpoint<sub>i</sub>/365</sup></div>
               </div>
-              <p class="fx-need">Чтобы посчитать Y365:</p>
+              <p class="fx-need">Чтобы посчитать Yult:</p>
               <div class="fx-kids">
                 <div class="fx-node sub">
                   <div class="fx-head">
@@ -1063,7 +1061,7 @@ def _fx_y_branch() -> str:
                     <div class="eq">q<sub>i</sub> = 0.07 при соглашении, иначе 1</div>
                     <div class="eq">age<sub>i</sub> = t_calc − t0<sub>i</sub> (дни)</div>
                     <div class="eq">midpoint<sub>i</sub> =
-                    max(365 − age<sub>i</sub>, 0) / 2</div>
+                    max(1095 − age<sub>i</sub>, 0) / 2</div>
                   </div>
                   <div class="legend">
                     <ul>
@@ -1080,7 +1078,7 @@ def _fx_y_branch() -> str:
                   </div>
                 </div>
               </div>
-            </div>
+  </div>
 """
 
 
@@ -1115,10 +1113,10 @@ def _fx_eligible_branch() -> str:
                   <div class="fx-head">
                     <span class="fx-tag sub">второстепенная</span>
                     Eligible и схлоп на инцидент
-                  </div>
+      </div>
                   <div class="formula">
                     <div class="eq">eligible = фильтры ∧ Result ∈ {0, 1, −100}</div>
-                  </div>
+      </div>
                   <div class="legend">
                     <ul>
                       <li>Фильтры: пилот без Марийского/Архангельского;
@@ -1130,8 +1128,8 @@ def _fx_eligible_branch() -> str:
                       ничья: −100 → 1 → 0).</li>
                       <li>Списанные по форме возмещения в схлоп не входят.</li>
                     </ul>
-                  </div>
-                </div>
+      </div>
+      </div>
 """
 
 
@@ -1141,13 +1139,13 @@ def _fx_n_year_branch() -> str:
               <div class="fx-head">
                 <span class="fx-tag sub">второстепенная</span>
                 N<sub>year</sub> — годовой поток eligible пилота
-              </div>
+      </div>
               <div class="formula">
                 <div class="eq">N<sub>year</sub> =
                 N<sub>obs</sub> / seasonal_exposure</div>
                 <div class="eq">seasonal_exposure =
                 Σ<sub>m</sub> coverage<sub>m</sub> × s<sub>m,P</sub></div>
-              </div>
+      </div>
               <div class="legend">
                 <ul>
                   <li><code>s<sub>m,P</sub></code> — средняя за годы доля
@@ -1155,8 +1153,8 @@ def _fx_n_year_branch() -> str:
                   <li><code>coverage<sub>m</sub></code> — доля месяца m,
                   покрытая окном наблюдений.</li>
                 </ul>
-              </div>
-            </div>
+      </div>
+    </div>
 """
 
 
@@ -1166,7 +1164,7 @@ def _fx_network_multiplier_branch() -> str:
           <div class="fx-head">
             <span class="fx-tag sub">второстепенная</span>
             множитель<sub>сети</sub>
-          </div>
+      </div>
           <div class="formula">
             <div class="eq">множитель<sub>сети</sub> =
             1 + (объём<sub>NP</sub>/объём<sub>P</sub>) ×
@@ -1177,8 +1175,8 @@ def _fx_network_multiplier_branch() -> str:
               <li>NP = nonpilot, P = pilot (ретро, не окно пилота).</li>
               <li>Учитывает и объём потока, и относительную тяжесть ПСР.</li>
             </ul>
-          </div>
-        </div>
+      </div>
+    </div>
 """
 
 
@@ -1261,7 +1259,7 @@ def _headline(result: MonitoringEffectResult) -> str:
     effects = result.effect_summary.set_index("horizon")
     annual = result.annual_summary.set_index("horizon")
     cells = []
-    for horizon in ("fact", "365"):
+    for horizon in ("ult",):
         effect = float(effects.loc[horizon, "effect_per_case"])
         low = float(effects.loc[horizon, "ci_low"])
         high = float(effects.loc[horizon, "ci_high"])
@@ -1272,12 +1270,12 @@ def _headline(result: MonitoringEffectResult) -> str:
             f"<small>95% CI: {format_money(low)} … {format_money(high)}</small>"
             "</div>"
         )
-    ann = float(annual.loc["365", "annual_network_full"])
-    ann_low = float(annual.loc["365", "annual_network_full_ci_low"])
-    ann_high = float(annual.loc["365", "annual_network_full_ci_high"])
+    ann = float(annual.loc["ult", "annual_network_full"])
+    ann_low = float(annual.loc["ult", "annual_network_full_ci_low"])
+    ann_high = float(annual.loc["ult", "annual_network_full_ci_high"])
     cells.append(
         "<div class='stat'>"
-        "<span>Год, все филиалы, весь поток, Y365</span>"
+        "<span>Год, все филиалы, весь поток, Yult</span>"
         f"<b>{format_money(ann)}</b>"
         f"<small>95% CI: {format_money(ann_low)} … {format_money(ann_high)}</small>"
         "</div>"
@@ -1325,9 +1323,8 @@ def build_plan_html(
       (примерно 50/50). Марийский и Архангельский в ITT не входят.</li>
       <li>Единица — один <b>инцидент</b> (после дедупа убытков и схлопывания;
       списанные по форме возмещения не схлопываем).</li>
-      <li><b>Yfact</b> — сумма <code>СуммаПлатежа</code> по убыткам инцидента
-      (не претензия+ФУ+суд как отдельный lifecycle).</li>
-      <li><b>Y365</b> — Yfact + NPV хвоста ПСР по ретро пилотных филиалов.</li>
+      <li><b>Yult</b> — paid (<code>СуммаПлатежа</code>) + NPV хвоста ПСР
+      по ретро пилотных филиалов.</li>
       <li>Если заключено соглашение, экспертно оставляем 7% возможного ПСР.</li>
       <li>Главный результат — ITT (эффект назначения), включая non-compliance.
       Сценарий 100% исполнения — отдельно, не ITT.</li>
@@ -1351,7 +1348,7 @@ def build_plan_html(
   <div class="card">
     <ul>
       <li>Если 95% CI проходит через 0, экономия пока статистически не подтверждена.</li>
-      <li><code>Y365</code> сейчас — прогноз хвоста, а не полностью
+      <li><code>Yult</code> сейчас — прогноз хвоста, а не полностью
       дозревшие фактические расходы.</li>
       <li>Годовой эффект сети — сценарий масштабирования, не измеренный факт.</li>
     </ul>
@@ -1532,7 +1529,7 @@ def build_monitoring_html(
     e_U={format_money(pilot.expected_fee)}.</p>
         </div>
 
-  <h2>6. Yfact и Y365</h2>
+  <h2>6. Yult</h2>
   <div class="card">
     {_formula(
         "Построение исхода каждого убытка i",
@@ -1546,21 +1543,20 @@ def build_monitoring_html(
             "ФУ<sub>i</sub> + суд<sub>i</sub>",
             "<b>remaining<sub>i</sub></b> = max(q<sub>i</sub>×expected_open_PSR<sub>i</sub> "
             "− observed_PSR<sub>i</sub>, 0)",
-            "<b>remaining_days<sub>i</sub></b> = max(365 − age<sub>i</sub>, 0)",
+            "<b>remaining_days<sub>i</sub></b> = max(1095 − age<sub>i</sub>, 0)",
             "<b>midpoint_days<sub>i</sub></b> = remaining_days<sub>i</sub> / 2",
-            "<b>Yfact<sub>i</sub></b> = paid_to_date<sub>i</sub>",
-            "<b>Y365<sub>i</sub></b> = paid_to_date<sub>i</sub> + "
+            "<b>Yult<sub>i</sub></b> = paid_to_date<sub>i</sub> + "
             "remaining<sub>i</sub> / (1+r)<sup>midpoint_days<sub>i</sub>/365</sup>",
         ],
         f"OD = СуммаОсновногоДолгаЗаявлено; q=1 без соглашения и "
         f"q={result.residual_share:.0%} при соглашении; r={result.discount_rate:.0%}; "
-        "age=(t_calc−t0) в днях. Горизонт расчёта — только 365 дней.",
+        "age=(t_calc−t0) в днях. Lifetime NPV-окно — 1095 дней (~3 года).",
     )}
     <h3>Что означают remaining и midpoint</h3>
     <p><b>remaining</b> — ещё не проявившийся хвост ПСР (номинал). Это не дисконт,
     а «сколько ещё может прийти» после вычитания уже видимых претензии/ФУ/суда.</p>
     <p><b>midpoint</b> — упрощение срока будущего платежа: хвост считается
-    поступившим в середине оставшегося окна до горизонта 365 дней.
+    поступившим в середине оставшегося окна до 1095 дней.
     Дисконтирование здесь — NPV (приведение будущих рублей к сегодняшним),
     а не рост ПСР со временем.</p>
     <div class="formula">
@@ -1573,39 +1569,38 @@ def build_monitoring_html(
       remaining = 0</div>
   </div>
     <div class="formula">
-      <b>Пример midpoint / NPV для Y365</b>
+      <b>Пример midpoint / NPV для Yult</b>
       <div class="eq">age=184, remaining=80 000, paid=50 000, r=12%</div>
       <div class="eq">remaining_days=181, midpoint=90.5, DF≈1.028 →
-      Y365 ≈ 50 000 + 77 821 = 127 821</div>
+      Yult ≈ 50 000 + 77 821 = 127 821</div>
     </div>
     <h3>Итоги control / model</h3>
     {_table(
       result.group_summary,
       columns={
-        "horizon": _c("H", "Горизонт: fact (=Yfact) или 365 (=Y365)"),
+        "horizon": _c("H", "Горизонт: ult (=Yult)"),
         "group": _c(
             "group",
             "control (Result=−100) или model (Result∈{{0,1}})",
         ),
         "n": _c("n", "Число инцидентов в группе"),
         "sum_cost": _c(
-            "Σ YH",
-            "Сумма исхода YH по группе, ₽",
-            "Σ_i∈group Y_H,i",
+            "Σ Yult",
+            "Сумма Yult по группе, ₽",
+            "Σ_i∈group Yult_i",
         ),
         "mean_cost": _c(
-            "mean YH",
-            "Средний исход на инцидент, ₽",
+            "mean Yult",
+            "Средний Yult на инцидент, ₽",
             "sum_cost / n",
         ),
       },
       rows=[
-        "Для каждого горизонта сначала control, затем model.",
+        "Сначала control, затем model.",
         "Единица строки после дедупа/схлопывания — инцидент.",
       ],
       notes=[
-        "Yfact = Σ СуммаПлатежа по убыткам инцидента; "
-        "Y365 = Yfact + NPV(remaining ПСР).",
+        "Yult = paid (Σ СуммаПлатежа) + NPV(remaining ПСР).",
       ],
     )}
   </div>
@@ -1617,7 +1612,7 @@ def build_monitoring_html(
     {_table(
       result.effect_summary,
       columns={
-        "horizon": _c("H", "Горизонт: fact / 365"),
+        "horizon": _c("H", "Горизонт: ult"),
         "effect_per_case": _c(
             "ITT страт",
             "Стратифицированный ITT, ₽/инцидент",
@@ -1639,7 +1634,7 @@ def build_monitoring_html(
         "n_bootstrap": _c("n boot", "Число успешных bootstrap-повторений"),
       },
       rows=[
-        "Одна строка на горизонт fact / 365.",
+        "Одна строка на горизонт ult.",
       ],
       notes=[
         "Плюс = control дороже model = экономия модели (ITT).",
@@ -1802,13 +1797,13 @@ def build_monitoring_html(
 
   <h2>9. Non-compliance</h2>
   <div class="card">
-    <h3>A. As-complied — только описательная диагностика (Yfact)</h3>
-    <p>Сравнение внутри model и <code>РезультатПроверки=1</code> только по факту.
-    Не является причинным эффектом; горизонт 365 здесь не считается.</p>
+    <h3>A. As-complied — только описательная диагностика (Yult)</h3>
+    <p>Сравнение внутри model и <code>РезультатПроверки=1</code> по Yult.
+    Не является причинным эффектом.</p>
     {_table(
       result.compliance_a,
       columns={
-        "horizon": _c("H", "Только fact"),
+        "horizon": _c("H", "Только ult"),
         "compliance": _c("compliance", "complied или not_complied"),
         "n": _c("n", "Число инцидентов"),
         "agreement_share": _c(
@@ -1816,9 +1811,9 @@ def build_monitoring_html(
             "Доля соглашений внутри группы, %",
         ),
         "mean_cost": _c(
-            "mean Yfact",
-            "Средний Yfact, ₽/инцидент",
-            "mean(Yfact | compliance)",
+            "mean Yult",
+            "Средний Yult, ₽/инцидент",
+            "mean(Yult | compliance)",
         ),
         "descriptive_only": _c(
             "desc only",
@@ -1837,11 +1832,11 @@ def build_monitoring_html(
         [
             "<b>forced_extra<sub>i</sub></b> = рекомендованная доплата, если "
             "model, result=1 и Выплата по модели≠1; иначе 0",
-            "<b>Yfact_100<sub>i</sub></b> = СуммаПлатежа<sub>i</sub> + forced_extra<sub>i</sub>",
-            "для всех model/result=1: q<sub>i</sub>=7%; затем Y365_100",
-            "<b>effect_100(H)</b> = stratified mean(control actual) − mean(model scenario)",
+            "<b>paid_100<sub>i</sub></b> = СуммаПлатежа<sub>i</sub> + forced_extra<sub>i</sub>",
+            "для всех model/result=1: q<sub>i</sub>=7%; затем Yult_100",
+            "<b>effect_100</b> = stratified mean(control actual) − mean(model scenario)",
         ],
-        "Сценарная механика, не LATE/IV. CI — отдельный bootstrap на Y*_100.",
+        "Сценарная механика, не LATE/IV. CI — отдельный bootstrap на Yult_100.",
     )}
     {_table(
       result.compliance_b,
@@ -1905,7 +1900,7 @@ def build_monitoring_html(
             "<b>annual_network_full</b> = effect_per_case × N_pilot_eligible_year × network_multiplier",
             "<b>annual CI</b> = [ci_low, ci_high] × N_pilot_eligible_year × network_multiplier",
         ],
-        "Горизонт Y365 не умножается на 365/30: масштабируется число новых убытков. "
+        "Горизонт Yult не умножается на 365/30: масштабируется число новых убытков. "
         "CI годового эффекта — линейный перенос bootstrap CI с уровня убытка.",
     )}
     <h3>Зачем сезонность и откуда берутся числа</h3>
@@ -2043,7 +2038,7 @@ def build_monitoring_html(
         ),
       },
       rows=[
-        "Одна строка на горизонт fact / 365.",
+        "Одна строка на горизонт ult.",
       ],
       notes=[
         "Весь поток в модель = все eligible идут в model-поток; это сценарий, не факт.",
@@ -2055,7 +2050,7 @@ def build_monitoring_html(
   <div class="card">
     <ul>
       <li><b>ITT</b> — эффект назначения в model-поток, включая фактический non-compliance.</li>
-      <li><b>Y365</b> — Yfact плюс модельный NPV остатка; это не полностью
+      <li><b>Yult</b> — paid плюс модельный NPV остатка; это не полностью
       дозревший фактический горизонт.</li>
       <li>Терминальные priors не содержат отдельного 365-таргета вызревания.</li>
       <li>В мониторинге OD — <code>СуммаОсновногоДолгаЗаявлено</code>, а k_U
@@ -2138,16 +2133,11 @@ def build_conclusion_body_from_result(
             float(effects.loc[horizon, "ci_high"]),
         )
 
-    e_f, lo_f, hi_f = _eff("fact")
-    e_y, lo_y, hi_y = _eff("365")
-    ann_pilot_cur = float(annual.loc["365", "annual_pilot_current"])
-    ann_pilot_full = float(annual.loc["365", "annual_pilot_full"])
-    ann_net = float(annual.loc["365", "annual_network_full"])
-    ann_net_lo = float(annual.loc["365", "annual_network_full_ci_low"])
-    ann_net_hi = float(annual.loc["365", "annual_network_full_ci_high"])
-    mult = float(annual.loc["365", "network_multiplier"])
-    n_year = float(annual.loc["365", "N_pilot_eligible_year"])
-    n_model_year_cur = float(annual.loc["365", "N_pilot_model_year_current"])
+    e_y, lo_y, hi_y = _eff("ult")
+    ann_pilot_full = float(annual.loc["ult", "annual_pilot_full"])
+    ann_pilot_full_lo = float(annual.loc["ult", "annual_pilot_full_ci_low"])
+    ann_pilot_full_hi = float(annual.loc["ult", "annual_pilot_full_ci_high"])
+    n_year = float(annual.loc["ult", "N_pilot_eligible_year"])
 
     n_rows = int(quality.get("n_rows", len(result.frame)))
     n_c = int(quality.get("n_control", 0))
@@ -2156,22 +2146,14 @@ def build_conclusion_body_from_result(
     obs_start = quality.get("observation_start", "?")
     obs_end = quality.get("observation_end", "?")
 
-    # 1) факт на окне пилота
-    save_window_y = e_y * n_rows
+    # 1) текущий объём инцидентов + lifetime-хвост
+    save_window = e_y * n_rows
     save_window_lo = lo_y * n_rows
     save_window_hi = hi_y * n_rows
-    # 2) год, те же филиалы, текущая доля модели
-    save_pilot_year = ann_pilot_cur
-    save_pilot_year_lo = lo_y * n_model_year_cur
-    save_pilot_year_hi = hi_y * n_model_year_cur
-    # 3) все филиалы, год, доля модели как сейчас (~50/50)
-    save_all_cur = ann_pilot_cur * mult
-    save_all_cur_lo = save_pilot_year_lo * mult
-    save_all_cur_hi = save_pilot_year_hi * mult
-    # 4) все филиалы, год, весь поток в модель (не 50/50)
-    save_all_full = ann_net
-    # ann_pilot_full = ITT × N_year (весь eligible пилота) — база для пункта 4 до × сети
-    _ = ann_pilot_full
+    # 2) годовой объём eligible пилота + тот же ITT_ult
+    save_year = ann_pilot_full
+    save_year_lo = ann_pilot_full_lo
+    save_year_hi = ann_pilot_full_hi
 
     ctrl_x = _extra_row(extras, "control")
     model_x = _extra_row(extras, "model")
@@ -2191,9 +2173,9 @@ def build_conclusion_body_from_result(
             lift_agr = _path_pct(paths, lift_idx[0], "agreement_share")
             lift_pret = _path_pct(paths, lift_idx[0], "pretension_share")
 
-    confirmed = lo_f > 0 and lo_y > 0
+    confirmed = lo_y > 0
     ci_note = (
-        "оба 95% CI выше 0 — направление подтверждено"
+        "95% CI выше 0 — направление подтверждено"
         if confirmed
         else "95% CI проходит через 0 — точечная экономия есть, статистически не подтверждена"
     )
@@ -2237,17 +2219,14 @@ def build_conclusion_body_from_result(
 
     <h4>Сколько потенциально экономим (ручеек − модель)</h4>
     <p class="muted">ITT на инцидент = mean(ручеек) − mean(модель), со стратификацией.
+    <b>Yult</b> = paid + NPV lifetime-хвоста ПСР (соглашение → остаток 7%).
     Плюс = экономия. {ci_note}.</p>
     <table class="kv">
       <tr>
-        <th>ITT Yfact / инцидент</th>
-        <td><b>{format_money(e_f)}</b> ₽
-        <small>(95% CI: {format_money(lo_f)} … {format_money(hi_f)})</small></td>
-      </tr>
-      <tr>
-        <th>ITT Y365 / инцидент</th>
+        <th>ITT Yult / инцидент</th>
         <td><b>{format_money(e_y)}</b> ₽
-        <small>(95% CI: {format_money(lo_y)} … {format_money(hi_y)})</small></td>
+        <small>(касса + NPV хвоста за жизнь инцидента;
+        95% CI: {format_money(lo_y)} … {format_money(hi_y)})</small></td>
       </tr>
     </table>
 
@@ -2267,37 +2246,22 @@ def build_conclusion_body_from_result(
   </div>
 
   <div class="card">
-    <h3>Финрез (Y365)</h3>
-    <p class="muted">Четыре уровня масштаба. Сценарии 2–4 — экстраполяция, не измеренный факт.</p>
+    <h3>Финрез (Yult = касса + lifetime-хвост ПСР)</h3>
+    <p class="muted">Два масштаба одного ITT на инцидент. Пункт 2 — экстраполяция
+    числа инцидентов на год, не новый эксперимент.</p>
     <table class="kv">
       <tr>
-        <th>1. Факт (пилот, окно)</th>
-        <td><span class="million">{_fmt_million(save_window_y)} млн ₽</span>
-        <small>= ITT × {n_rows} инцидентов окна;
+        <th>1. Текущий объём (окно пилота)</th>
+        <td><span class="million">{_fmt_million(save_window)} млн ₽</span>
+        <small>= ITT_Yult × {n_rows} инцидентов окна;
         95% CI: {_fmt_million(save_window_lo)} … {_fmt_million(save_window_hi)} млн</small></td>
       </tr>
       <tr>
-        <th>2. Факт за год (те же филиалы пилота)</th>
-        <td><span class="million">{_fmt_million(save_pilot_year)} млн ₽</span>
-        <small>= ITT × годовой поток model при <b>текущей</b> доле модели
-        (~{100.0 * n_m / n_rows if n_rows else 0:.0f}% сейчас);
-        N_year eligible ≈ {n_year:,.0f}; 95% CI:
-        {_fmt_million(save_pilot_year_lo)} … {_fmt_million(save_pilot_year_hi)} млн</small></td>
-      </tr>
-      <tr>
-        <th>3. Шарим на все филиалы (год, доля как сейчас)</th>
-        <td><span class="million">{_fmt_million(save_all_cur)} млн ₽</span>
-        <small>= пункт 2 × множитель сети {mult:.2f}
-        (объём и тяжесть ПСР nonpilot / pilot);
-        95% CI: {_fmt_million(save_all_cur_lo)} … {_fmt_million(save_all_cur_hi)} млн</small></td>
-      </tr>
-      <tr>
-        <th>4. Все филиалы + год + весь поток (не 50/50)</th>
-        <td><span class="million">{_fmt_million(save_all_full)} млн ₽</span>
-        <small>= ITT × весь годовой eligible пилота
-        (~{n_year:,.0f}) × множитель сети {mult:.2f}
-        (все идут в поток модели); 95% CI:
-        {_fmt_million(ann_net_lo)} … {_fmt_million(ann_net_hi)} млн</small></td>
+        <th>2. Годовой объём (те же филиалы пилота)</th>
+        <td><span class="million">{_fmt_million(save_year)} млн ₽</span>
+        <small>= ITT_Yult × N_year eligible ≈ {n_year:,.0f}
+        (сезонная экстраполяция всего потока пилота);
+        95% CI: {_fmt_million(save_year_lo)} … {_fmt_million(save_year_hi)} млн</small></td>
       </tr>
     </table>
   </div>
@@ -2306,8 +2270,10 @@ def build_conclusion_body_from_result(
     <h3>Как читать</h3>
     <ul>
       <li><b>Ручеек</b> = Result=−100; <b>модель</b> = Result∈{{0,1}}.</li>
-      <li><b>Yfact</b> — уже выплаченное; <b>Y365</b> — плюс NPV хвоста ПСР.</li>
-      <li>Пункты финреза 2–4 — сценарии; обещать как факт нельзя, пока CI через 0.</li>
+      <li><b>Yult</b> — paid (касса) + NPV ещё не дозревшего lifetime-хвоста ПСР
+      (ретро p_U/k_U/m_U/e_U; при соглашении остаток 7%).</li>
+      <li>Пункт финреза 2 — сценарий по объёму; обещать как факт нельзя,
+      пока CI через 0.</li>
     </ul>
   </div>
 """
@@ -2334,7 +2300,7 @@ def build_conclusion_html(
   как «файл №2» — по нему будет подготовлено краткое бизнес-заключение:</p>
   <ul>
     <li>есть ли подтверждённая экономия;</li>
-    <li>что означают Yфакт / Y365;</li>
+    <li>что означают Yфакт / Yult;</li>
     <li>какой годовой сценарий можно и нельзя обещать;</li>
     <li>какие риски и следующие шаги.</li>
   </ul>
@@ -2449,22 +2415,18 @@ def write_all_monitoring_htmls(
     source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
     development_lags: pd.DataFrame | None = None,
     stamp: str | None = None,
+    also_flat_dir: str | Path | None = None,
 ) -> tuple[Path, Path, Path, dict[str, str]]:
-    """Записать три HTML в ``data_dir/<stamp>/`` (прошлые прогоны не затираются).
+    """Записать report + conclusion в ``data_dir/<stamp>/``.
 
-    Общие файлы (например лог снимков) остаются в ``data_dir``.
-    Возвращает (plan, report, conclusion, names).
+    План больше не пишется. Опционально копирует report/conclusion в
+    ``also_flat_dir`` (например ``monitoring/data``).
+    Возвращает (report, conclusion, report, names) — первый элемент = report
+    для совместимости со старым ``plan, report, conclusion = ...``.
     """
     export_stamp = stamp or report_export_stamp()
     run_dir = export_run_dir(data_dir, export_stamp)
     names = dated_artifact_names(export_stamp)
-    plan = write_plan_html(
-        run_dir / names["plan"],
-        source_label=source_label,
-        plan_name=names["plan"],
-        report_name=names["report"],
-        conclusion_name=names["conclusion"],
-    )
     report = write_monitoring_html(
         result,
         run_dir / names["report"],
@@ -2485,7 +2447,24 @@ def write_all_monitoring_htmls(
         report_name=names["report"],
         conclusion_name=names["conclusion"],
     )
-    return plan, report, conclusion, names
+    if also_flat_dir is not None:
+        flat = Path(also_flat_dir)
+        flat.mkdir(parents=True, exist_ok=True)
+        write_monitoring_html(
+            result,
+            flat / REPORT_FILENAME,
+            source_label=source_label,
+        )
+        write_conclusion_html(
+            flat / CONCLUSION_FILENAME,
+            source_label=source_label,
+            ready=True,
+            body_html=build_conclusion_body_from_result(
+                result,
+                development_lags=development_lags,
+            ),
+        )
+    return report, conclusion, report, names
 
 
 def write_error_html(

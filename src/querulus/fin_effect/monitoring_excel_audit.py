@@ -40,7 +40,7 @@ _SHEET_COLUMN_DOCS: dict[str, list[tuple[str, str, str]]] = {
         (
             "paid_SummaPlatezha",
             "Оплата на дату расчёта, ₽",
-            "Σ СуммаПлатежа по убыткам инцидента (= Yfact)",
+            "Σ СуммаПлатежа по убыткам инцидента (база Yult)",
         ),
         (
             "od",
@@ -94,47 +94,30 @@ _SHEET_COLUMN_DOCS: dict[str, list[tuple[str, str, str]]] = {
             "Середина оставшегося горизонта, дни",
             "MAX(horizon_days − age_days, 0) / 2",
         ),
-        ("Yfact", "Фактический исход, ₽", "Yfact = paid_SummaPlatezha"),
         (
-            "Y365",
-            "Исход с NPV хвоста на горизонте 365, ₽",
-            "Yfact + remaining / (1+r)^(midpoint_days/365)",
+            "Yult",
+            "Исход с NPV хвоста на lifetime-горизонте (ult), ₽",
+            "paid + remaining / (1+r)^(midpoint_days/365)",
         ),
-        ("python_Yfact", "Эталон Yfact из Python", "сверка с колонкой Yfact"),
-        ("python_Y365", "Эталон Y365 из Python", "сверка с колонкой Y365"),
+        ("python_Yult", "Эталон Yult из Python", "сверка с колонкой Yult"),
     ],
     "filial": [
         ("filial", "Филиал", "уникальные значения из rows.filial"),
         ("n", "Число инцидентов филиала", "COUNTIF(rows.filial, filial)"),
         (
-            "mean_Yfact_control",
-            "Средний Yfact control в филиале",
-            "AVERAGEIFS(Yfact | filial, group=control)",
+            "mean_Yult_control",
+            "Средний Yult control в филиале",
+            "AVERAGEIFS(Yult | filial, group=control)",
         ),
         (
-            "mean_Yfact_model",
-            "Средний Yfact model в филиале",
-            "AVERAGEIFS(Yfact | filial, group=model)",
+            "mean_Yult_model",
+            "Средний Yult model в филиале",
+            "AVERAGEIFS(Yult | filial, group=model)",
         ),
         (
-            "effect_Yfact",
-            "Локальный ITT Yfact филиала",
-            "mean_Yfact_control − mean_Yfact_model",
-        ),
-        (
-            "mean_Y365_control",
-            "Средний Y365 control в филиале",
-            "AVERAGEIFS(Y365 | filial, group=control)",
-        ),
-        (
-            "mean_Y365_model",
-            "Средний Y365 model в филиале",
-            "AVERAGEIFS(Y365 | filial, group=model)",
-        ),
-        (
-            "effect_Y365",
-            "Локальный ITT Y365 филиала",
-            "mean_Y365_control − mean_Y365_model",
+            "effect_Yult",
+            "Локальный ITT Yult филиала",
+            "mean_Yult_control − mean_Yult_model",
         ),
         (
             "weight",
@@ -146,7 +129,7 @@ _SHEET_COLUMN_DOCS: dict[str, list[tuple[str, str, str]]] = {
         (
             "metric",
             "Имя итоговой метрики",
-            "effect_Yfact / effect_Y365 / annual_network_Y365",
+            "effect_Yult / annual_network_Yult",
         ),
         (
             "excel_formula_value",
@@ -157,7 +140,7 @@ _SHEET_COLUMN_DOCS: dict[str, list[tuple[str, str, str]]] = {
         ("note", "Как считается метрика", "текстовая формула"),
     ],
     "bootstrap": [
-        ("horizon", "Горизонт ITT: fact или 365", "из effect_summary"),
+        ("horizon", "Горизонт ITT: ult", "из effect_summary"),
         (
             "effect_per_case",
             "Точечный стратифицированный ITT, ₽/инцидент",
@@ -284,20 +267,20 @@ def _write_inputs(ws, result: MonitoringEffectResult) -> dict[str, str]:
     pilot = result.priors.pilot
     annual = result.annual_summary.set_index("horizon")
     n_year = (
-        float(annual.loc["365", "N_pilot_eligible_year"])
-        if "365" in annual.index
+        float(annual.loc["ult", "N_pilot_eligible_year"])
+        if "ult" in annual.index
         else 0.0
     )
     multiplier = (
-        float(annual.loc["365", "network_multiplier"])
-        if "365" in annual.index
+        float(annual.loc["ult", "network_multiplier"])
+        if "ult" in annual.index
         else 1.0
     )
 
     rows = [
         ("discount_rate", result.discount_rate, "Годовая ставка дисконта r"),
         ("residual_share", result.residual_share, "Остаток ПСР при соглашении q"),
-        ("horizon_days", 365, "Горизонт Y365, дни"),
+        ("horizon_days", 1095, "Горизонт Yult, дни"),
         ("p_U", pilot.p_ultimate, "Доля убытков с ПСР (ретро pilot)"),
         ("k_U", pilot.k_ultimate, "Коэффициент ПСР к OD"),
         ("m_U", pilot.mean_positive_psr, "Средний положительный ПСР (fallback), ₽"),
@@ -320,7 +303,7 @@ def _write_inputs(ws, result: MonitoringEffectResult) -> dict[str, str]:
         ws[col].fill = fill
 
     how = {
-        "discount_rate": "Y365 = Yfact + remaining / (1+r)^(midpoint/365)",
+        "discount_rate": "Yult = paid + remaining / (1+r)^(midpoint/365)",
         "residual_share": "q = residual_share при соглашении, иначе 1",
         "horizon_days": "remaining_days = max(horizon − age, 0)",
         "p_U": "expected_open = p_U × (ultimate_base + e_U)",
@@ -373,10 +356,8 @@ def _write_rows(ws, result: MonitoringEffectResult, inputs: dict[str, str]) -> i
         "expected_open_psr",
         "remaining",
         "midpoint_days",
-        "Yfact",
-        "Y365",
-        "python_Yfact",
-        "python_Y365",
+        "Yult",
+        "python_Yult",
     ]
     header_font = Font(bold=True, color="075F66")
     fill = PatternFill("solid", fgColor="E7F3F4")
@@ -433,15 +414,13 @@ def _write_rows(ws, result: MonitoringEffectResult, inputs: dict[str, str]) -> i
             17,
             f"=MAX(inputs!{horizon}-L{excel_row},0)/2",
         )
-        ws.cell(excel_row, 18, f"=E{excel_row}")
         ws.cell(
             excel_row,
-            19,
-            f"=R{excel_row}+P{excel_row}/POWER(1+inputs!{r},Q{excel_row}/365)",
+            18,
+            f"=E{excel_row}+P{excel_row}/POWER(1+inputs!{r},Q{excel_row}/365)",
         )
-        ws.cell(excel_row, 20, float(get["Yfact"]))
-        ws.cell(excel_row, 21, float(get["Y365"]))
-        for col in (5, 6, 7, 8, 9, 16, 18, 19, 20, 21):
+        ws.cell(excel_row, 19, float(get["Yult"]))
+        for col in (5, 6, 7, 8, 9, 16, 18, 19):
             ws.cell(excel_row, col).number_format = "#,##0.00"
 
     ws.cell(n + 3, 1, "Примечание")
@@ -449,9 +428,9 @@ def _write_rows(ws, result: MonitoringEffectResult, inputs: dict[str, str]) -> i
         n + 3,
         2,
         "Одна строка = один инцидент после дедупа/схлопывания. "
-        "Yfact = СуммаПлатежа (оплата), не observed_PSR. "
-        "Колонки psr_* вычитаются из хвоста remaining, а не прибавляются к Yfact. "
-        "python_Y* — эталон из Python для сверки. "
+        "Yult = paid (СуммаПлатежа) + NPV(remaining). "
+        "Колонки psr_* вычитаются из хвоста remaining, а не прибавляются к paid. "
+        "python_Yult — эталон из Python для сверки. "
         "Полное описание колонок — лист columns; краткое — комментарий к заголовку.",
     )
     return n
@@ -463,12 +442,9 @@ def _write_filial(ws, n_rows: int, filials: list[str]) -> int:
     headers = [
         "filial",
         "n",
-        "mean_Yfact_control",
-        "mean_Yfact_model",
-        "effect_Yfact",
-        "mean_Y365_control",
-        "mean_Y365_model",
-        "effect_Y365",
+        "mean_Yult_control",
+        "mean_Yult_model",
+        "effect_Yult",
         "weight",
     ]
     header_font = Font(bold=True, color="075F66")
@@ -496,24 +472,11 @@ def _write_filial(ws, n_rows: int, filials: list[str]) -> int:
             f'rows!$C$2:$C${last},"model"),"")',
         )
         ws.cell(i, 5, f'=IF(OR(C{i}="",D{i}=""),"",C{i}-D{i})')
-        ws.cell(
-            i,
-            6,
-            f"=IFERROR(AVERAGEIFS(rows!$S$2:$S${last},rows!$D$2:$D${last},A{i},"
-            f'rows!$C$2:$C${last},"control"),"")',
-        )
-        ws.cell(
-            i,
-            7,
-            f"=IFERROR(AVERAGEIFS(rows!$S$2:$S${last},rows!$D$2:$D${last},A{i},"
-            f'rows!$C$2:$C${last},"model"),"")',
-        )
-        ws.cell(i, 8, f'=IF(OR(F{i}="",G{i}=""),"",F{i}-G{i})')
         end_f = 1 + len(filials)
-        ws.cell(i, 9, f"=IF(SUM($B$2:$B${end_f})=0,0,B{i}/SUM($B$2:$B${end_f}))")
-        for col in range(3, 9):
+        ws.cell(i, 6, f"=IF(SUM($B$2:$B${end_f})=0,0,B{i}/SUM($B$2:$B${end_f}))")
+        for col in range(3, 6):
             ws.cell(i, col).number_format = "#,##0.00"
-        ws.cell(i, 9).number_format = "0.0000"
+        ws.cell(i, 6).number_format = "0.0000"
 
     note_row = 3 + len(filials)
     ws.cell(note_row, 1, "Описание колонок")
@@ -546,47 +509,35 @@ def _write_effect(ws, n_filials: int, result: MonitoringEffectResult) -> None:
     effects = result.effect_summary.set_index("horizon")
     annual = result.annual_summary.set_index("horizon")
 
-    ws["A4"] = "effect_Yfact"
+    ws["A4"] = "effect_Yult"
     ws["B4"] = (
         f"=IFERROR(SUMPRODUCT(filial!$B$2:$B${end},filial!$E$2:$E${end})"
         f'/SUM(filial!$B$2:$B${end}),"")'
     )
     ws["C4"] = (
-        float(effects.loc["fact", "effect_per_case"])
-        if "fact" in effects.index
+        float(effects.loc["ult", "effect_per_case"])
+        if "ult" in effects.index
         else None
     )
     ws["D4"] = "Σ w_f × (mean_control − mean_model), w_f ∝ N_f"
 
-    ws["A5"] = "effect_Y365"
-    ws["B5"] = (
-        f"=IFERROR(SUMPRODUCT(filial!$B$2:$B${end},filial!$H$2:$H${end})"
-        f'/SUM(filial!$B$2:$B${end}),"")'
-    )
+    ws["A5"] = "annual_network_Yult"
+    ws["B5"] = '=IFERROR(B4*inputs!$B$12*inputs!$B$13,"")'
     ws["C5"] = (
-        float(effects.loc["365", "effect_per_case"])
-        if "365" in effects.index
+        float(annual.loc["ult", "annual_network_full"])
+        if "ult" in annual.index
         else None
     )
-    ws["D5"] = "То же для Y365"
+    ws["D5"] = "effect × N_year × network_multiplier"
 
-    ws["A6"] = "annual_network_Y365"
-    ws["B6"] = '=IFERROR(B5*inputs!$B$12*inputs!$B$13,"")'
-    ws["C6"] = (
-        float(annual.loc["365", "annual_network_full"])
-        if "365" in annual.index
-        else None
-    )
-    ws["D6"] = "effect × N_year × network_multiplier"
-
-    ws["A8"] = "Плюс = экономия (control дороже model)."
-    ws["A9"] = (
+    ws["A7"] = "Плюс = экономия (control дороже model)."
+    ws["A8"] = (
         "Марийский и Архангельский в эту книгу не входят: filial_scope=pilot."
     )
-    ws["A10"] = (
+    ws["A9"] = (
         "Описание колонок таблицы — лист columns и комментарии к заголовкам (строка 3)."
     )
-    for cell in ("B4", "B5", "B6", "C4", "C5", "C6"):
+    for cell in ("B4", "B5", "C4", "C5"):
         ws[cell].number_format = "#,##0.00"
 
 
@@ -632,7 +583,7 @@ def _write_bootstrap(ws, result: MonitoringEffectResult) -> None:
         Comment = _require_openpyxl()[5]
         cols = list(samples.columns)
         sample_docs = {
-            "horizon": "Горизонт семпла (fact / 365)",
+            "horizon": "Горизонт семпла (ult)",
             "effect_per_case": "ITT одной bootstrap-итерации, ₽/инцидент",
         }
         for j, name in enumerate(cols, start=1):
@@ -658,12 +609,12 @@ def _write_readme(ws) -> None:
     lines = [
         "1. Лист columns — словарь колонок всех листов (описание + формула/источник).",
         "2. Лист inputs — крутите discount_rate, residual_share, p_U/k_U/m_U/e_U, N_year, multiplier.",
-        "3. Лист rows — одна строка = инцидент; исходные поля и расчёт Yfact/Y365 формулами Excel.",
+        "3. Лист rows — одна строка = инцидент; исходные поля и расчёт Yult формулами Excel.",
         "4. Лист filial — средние control/model и веса филиалов (AVERAGEIFS / COUNTIF).",
         "5. Лист effect — стратифицированный ITT = Σ N_f×effect_f / Σ N_f; сверяйте с python_value.",
         "6. Лист bootstrap — только снимок Python (CI и семплы); в Excel не пересчитывается.",
         "7. Наведите курсор на заголовок колонки — во всплывающем комментарии то же описание.",
-        "8. Yfact = СуммаПлатежа; претензия/ФУ/суд на строке — observed_PSR для хвоста remaining.",
+        "8. paid = СуммаПлатежа; претензия/ФУ/суд на строке — observed_PSR для хвоста remaining.",
         "9. Данные из frame estimate_monitoring_effect (после дедупа убытка и схлопывания на инцидент).",
     ]
     for i, line in enumerate(lines, start=3):

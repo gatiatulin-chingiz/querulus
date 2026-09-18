@@ -1,0 +1,3861 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"/>
+  <title>Понедельный финэффект</title>
+  <style>
+:root {
+  --bg:#f5f3ee; --surface:#fff; --ink:#1d2526; --muted:#5f696a;
+  --line:#d9d4c9; --accent:#075f66; --soft:#e7f3f4; --warn:#fff4da;
+  --model:#0b5f66; --control:#6b5b4b; --save:#2f6b3a;
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; color:var(--ink); background:var(--bg);
+  font:15px/1.48 "Segoe UI", Arial, sans-serif;
+}
+.page { max-width:1240px; margin:auto; padding:1.2rem 1rem 2.5rem; }
+h1 { color:var(--accent); margin:0 0 .25rem; font-size:1.55rem; }
+h2 { color:var(--accent); margin:1.4rem 0 .45rem; font-size:1.18rem; }
+h3 { color:#244f53; margin:1rem 0 .35rem; font-size:1rem; }
+p { margin:.35rem 0; }
+.sub,.muted { color:var(--muted); }
+.card {
+  background:var(--surface); border:1px solid var(--line);
+  border-radius:9px; padding:.85rem 1rem; margin:.45rem 0;
+}
+.grid {
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+  gap:.5rem; margin:.55rem 0;
+}
+.charts {
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr));
+  gap:.75rem; margin:.55rem 0;
+}
+.chart {
+  background:#fff; border:1px solid var(--line); border-radius:8px;
+  padding:.55rem .65rem;
+}
+.chart img { width:100%; height:auto; display:block; }
+.chart .cap { color:var(--muted); font-size:.8rem; margin-top:.35rem; }
+.stat { background:#fbfbf9; border:1px solid var(--line); padding:.6rem; border-radius:7px; }
+.stat span { display:block; color:var(--muted); font-size:.78rem; }
+.stat b { font-size:1.05rem; font-variant-numeric:tabular-nums; }
+.stat small { display:block; color:var(--muted); margin-top:.2rem; }
+.formula {
+  background:linear-gradient(135deg,var(--soft),#f7fbfb);
+  border:1px solid #c7dfe1; border-left:4px solid var(--accent);
+  border-radius:0 8px 8px 0; padding:.7rem .85rem; margin:.5rem 0;
+  overflow-x:auto;
+}
+.formula b { color:var(--accent); }
+.eq { font:1.02rem/1.65 Cambria, "Times New Roman", serif; white-space:nowrap; }
+.note { color:var(--muted); border-top:1px solid #d4e6e7; margin-top:.35rem; padding-top:.35rem; }
+.warning {
+  background:var(--warn); border:1px solid #e5c66e; border-left:4px solid #9b7100;
+  border-radius:0 8px 8px 0; padding:.65rem .8rem; margin:.4rem 0;
+}
+.scroll { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:.82rem; background:#fff; }
+th,td { border:1px solid var(--line); padding:.35rem .45rem; text-align:left; vertical-align:top; }
+th { background:var(--soft); color:var(--accent); position:sticky; top:0; }
+code { background:#efede7; padding:.05rem .2rem; border-radius:3px; font-family:Consolas,monospace; }
+ul,ol { margin:.3rem 0 .3rem 1.25rem; padding:0; }
+li { margin:.18rem 0; }
+.good { color:#20612d; } .bad { color:#8a2d21; }
+.flow {
+  display:grid; gap:.55rem;
+  grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  margin:.6rem 0;
+}
+.flow-step {
+  background:#fff; border:1px solid var(--line); border-top:4px solid var(--accent);
+  border-radius:8px; padding:.65rem .7rem; min-height:7.2rem;
+}
+.flow-step .num {
+  color:var(--accent); font-size:.72rem; font-weight:700; letter-spacing:.04em;
+  text-transform:uppercase;
+}
+.flow-step h4 { margin:.15rem 0 .25rem; font-size:.95rem; }
+.flow-step p { margin:0; color:var(--muted); font-size:.84rem; }
+.compare {
+  display:grid; grid-template-columns:1fr auto 1fr; gap:.7rem; align-items:stretch;
+  margin:.7rem 0;
+}
+.compare .box {
+  border:1px solid var(--line); border-radius:8px; padding:.7rem .8rem; background:#fff;
+}
+.compare .box.model { border-top:4px solid var(--model); }
+.compare .box.control { border-top:4px solid var(--control); }
+.compare .mid {
+  display:flex; align-items:center; justify-content:center;
+  font-weight:700; color:var(--save); min-width:3rem;
+}
+.nav { display:flex; flex-wrap:wrap; gap:.45rem; margin:.5rem 0 1rem; }
+.nav a {
+  text-decoration:none; color:var(--accent); border:1px solid #b7d4d7;
+  background:var(--soft); border-radius:999px; padding:.25rem .7rem; font-size:.86rem;
+}
+.legend {
+  background:#fbfbf9; border:1px solid var(--line); border-radius:7px;
+  padding:.55rem .7rem; margin:.35rem 0 .7rem; font-size:.84rem;
+}
+.legend h4 { margin:0 0 .3rem; color:#244f53; font-size:.9rem; }
+.legend ul { margin:.15rem 0 .15rem 1.1rem; }
+.legend li { margin:.12rem 0; color:var(--muted); }
+.legend code { font-size:.82rem; }
+.fx-tree { margin:.4rem 0; }
+.fx-node {
+  border:1px solid var(--line); border-radius:8px; background:#fff;
+  padding:.65rem .75rem; margin:.45rem 0;
+}
+.fx-node.main {
+  border-left:4px solid var(--accent);
+  background:linear-gradient(180deg,#f7fbfb 0%,#fff 48%);
+}
+.fx-node.sub {
+  border-left:3px solid #9bb9bc;
+  background:#fbfbf9;
+}
+.fx-head {
+  display:flex; flex-wrap:wrap; align-items:baseline; gap:.45rem;
+  margin:0 0 .35rem; font-weight:600; color:#244f53;
+}
+.fx-tag {
+  display:inline-block; font-size:.68rem; font-weight:700;
+  letter-spacing:.03em; text-transform:uppercase;
+  border-radius:999px; padding:.12rem .45rem;
+}
+.fx-tag.main {
+  color:#fff; background:var(--accent);
+}
+.fx-tag.sub {
+  color:#35565a; background:#e7f0f1; border:1px solid #c7d9db;
+}
+.fx-need {
+  margin:.45rem 0 .2rem; color:var(--muted); font-size:.86rem;
+}
+.fx-kids {
+  margin:.35rem 0 0 .35rem; padding-left:.55rem;
+  border-left:2px dashed #c9d8d9;
+}
+.kv { width:100%; border-collapse:collapse; margin:.35rem 0 .7rem; font-size:.92rem; }
+.kv th, .kv td { border:none; border-bottom:1px solid var(--line); padding:.4rem .35rem; vertical-align:top; }
+.kv th { width:34%; color:var(--accent); background:transparent; font-weight:600; position:static; }
+.kv td { color:var(--ink); }
+.million { font-size:1.35rem; font-weight:700; color:var(--save); }
+@media (max-width:820px) {
+  .compare { grid-template-columns:1fr; }
+  .compare .mid { min-height:auto; }
+  .eq { white-space:normal; }
+  .kv th { width:40%; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Понедельный ряд финансового эффекта</h1>
+  <p class="sub">Сформировано 2026-09-18 15:18 · версия ITT-U-2026-09-18-v16-ult</p>
+  <div class="card">
+    <p>Кумулятивные срезы на текущих платежах витрины; ретроспектива ≠ архивный снимок на ту дату. Вклад отдельного убытка в Δ ITT — диагностическая оценка без стратификации по филиалам.</p>
+    <p>Стартовое окно пилота → week_end (кумулятивно). Частота: W-SUN + финальный as_of.</p>
+    <div class="formula"><b>Общая логика ряда</b><div class="eq">Срез week_end: инциденты с ДатаЗаявления ≤ week_end, t_calc = week_end</div><div class="eq"><b>Yult</b> = paid + NPV(хвост ПСР); paid = Σ СуммаПлатежа <b>из текущей витрины</b> (не архив платежей на ту дату)</div><div class="eq"><b>ITT(H)</b> = Σ<sub>f</sub> w<sub>f</sub>·(Ȳ<sub>H</sub>(control,f) − Ȳ<sub>H</sub>(model,f)), w<sub>f</sub> = N<sub>f</sub>/Σ N<sub>g</sub></div><div class="note">Плюс ITT = control дороже model = экономия модели.</div></div>
+  </div>
+  <h2>Главные показатели</h2>
+  <div class="card">
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>week_end</th>
+      <th>status</th>
+      <th>n</th>
+      <th>n_c</th>
+      <th>n_m</th>
+      <th>ITT Yult</th>
+      <th>ΔYult</th>
+      <th>CI∋0</th>
+      <th>new</th>
+      <th>Δpaid shared</th>
+      <th>год пилот Yult</th>
+      <th>год сеть Yult</th>
+      <th>why</th>
+      <th>reason</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>2026-04-26</td>
+      <td>skipped_small_n</td>
+      <td>0</td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td>n&lt;30</td>
+    </tr>
+    <tr>
+      <td>2026-05-03</td>
+      <td>skipped_small_n</td>
+      <td>0</td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td>n&lt;30</td>
+    </tr>
+    <tr>
+      <td>2026-05-10</td>
+      <td>skipped_small_n</td>
+      <td>0</td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td>n&lt;30</td>
+    </tr>
+    <tr>
+      <td>2026-05-17</td>
+      <td>skipped_small_n</td>
+      <td>0</td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td>n&lt;30</td>
+    </tr>
+    <tr>
+      <td>2026-05-24</td>
+      <td>skipped_small_n</td>
+      <td>7</td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td>n&lt;30</td>
+    </tr>
+    <tr>
+      <td>2026-05-31</td>
+      <td>skipped_small_n</td>
+      <td>29</td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td>n&lt;30</td>
+    </tr>
+    <tr>
+      <td>2026-06-07</td>
+      <td>ok</td>
+      <td>52</td>
+      <td>13.00</td>
+      <td>39.00</td>
+      <td>-32 531.37</td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td>-35 449 423.54</td>
+      <td>-40 596 870.73</td>
+      <td>базовая неделя ряда</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>ok</td>
+      <td>81</td>
+      <td>23.00</td>
+      <td>58.00</td>
+      <td>-10 690.80</td>
+      <td>21 840.56</td>
+      <td></td>
+      <td>29.00</td>
+      <td>5 404.61</td>
+      <td>-12 868 136.49</td>
+      <td>-14 736 659.21</td>
+      <td>ΔYult=+21 841₽; ΔN=+29; new=29; shared_paidΔ=+5 405₽</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-06-21</td>
+      <td>ok</td>
+      <td>93</td>
+      <td>27.00</td>
+      <td>66.00</td>
+      <td>18 402.31</td>
+      <td>29 093.11</td>
+      <td></td>
+      <td>12.00</td>
+      <td>11 032.07</td>
+      <td>19 701 000.67</td>
+      <td>22 561 692.05</td>
+      <td>ΔYult=+29 093₽; ΔN=+12; new=12; shared_paidΔ=+11 032₽</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>ok</td>
+      <td>105</td>
+      <td>31.00</td>
+      <td>74.00</td>
+      <td>9 717.63</td>
+      <td>-8 684.69</td>
+      <td></td>
+      <td>12.00</td>
+      <td>2 601.08</td>
+      <td>9 844 387.20</td>
+      <td>11 273 845.23</td>
+      <td>ΔYult=-8 685₽; ΔN=+12; new=12; shared_paidΔ=+2 601₽</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>ok</td>
+      <td>118</td>
+      <td>33.00</td>
+      <td>85.00</td>
+      <td>39 583.47</td>
+      <td>29 865.85</td>
+      <td></td>
+      <td>13.00</td>
+      <td>8 115.20</td>
+      <td>37 358 711.78</td>
+      <td>42 783 397.90</td>
+      <td>ΔYult=+29 866₽; ΔN=+13; new=13; shared_paidΔ=+8 115₽</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>ok</td>
+      <td>130</td>
+      <td>42.00</td>
+      <td>88.00</td>
+      <td>34 472.37</td>
+      <td>-5 111.11</td>
+      <td></td>
+      <td>12.00</td>
+      <td>12 434.80</td>
+      <td>31 870 087.75</td>
+      <td>36 497 796.11</td>
+      <td>ΔYult=-5 111₽; ΔN=+12; new=12; shared_paidΔ=+12 435₽</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>ok</td>
+      <td>138</td>
+      <td>45.00</td>
+      <td>93.00</td>
+      <td>37 479.62</td>
+      <td>3 007.25</td>
+      <td></td>
+      <td>8.00</td>
+      <td>7 133.99</td>
+      <td>32 046 055.21</td>
+      <td>36 699 314.99</td>
+      <td>ΔYult=+3 007₽; ΔN=+8; new=8; shared_paidΔ=+7 134₽</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>ok</td>
+      <td>148</td>
+      <td>51.00</td>
+      <td>97.00</td>
+      <td>47 186.51</td>
+      <td>9 706.89</td>
+      <td></td>
+      <td>10.00</td>
+      <td>11 975.27</td>
+      <td>40 046 266.46</td>
+      <td>45 861 200.00</td>
+      <td>ΔYult=+9 707₽; ΔN=+10; new=10; shared_paidΔ=+11 975₽</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>ok</td>
+      <td>160</td>
+      <td>57.00</td>
+      <td>103.00</td>
+      <td>60 450.12</td>
+      <td>13 263.60</td>
+      <td></td>
+      <td>12.00</td>
+      <td>10 189.50</td>
+      <td>49 066 507.17</td>
+      <td>56 191 228.23</td>
+      <td>ΔYult=+13 264₽; ΔN=+12; new=12; shared_paidΔ=+10 189₽</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>ok</td>
+      <td>172</td>
+      <td>67.00</td>
+      <td>105.00</td>
+      <td>63 166.81</td>
+      <td>2 716.69</td>
+      <td></td>
+      <td>12.00</td>
+      <td>14 401.28</td>
+      <td>51 550 083.57</td>
+      <td>59 035 433.30</td>
+      <td>ΔYult=+2 717₽; ΔN=+12; new=12; shared_paidΔ=+14 401₽</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>ok</td>
+      <td>178</td>
+      <td>73.00</td>
+      <td>105.00</td>
+      <td>56 681.48</td>
+      <td>-6 485.32</td>
+      <td></td>
+      <td>6.00</td>
+      <td>8 076.83</td>
+      <td>44 068 553.87</td>
+      <td>50 467 545.20</td>
+      <td>ΔYult=-6 485₽; ΔN=+6; new=6; shared_paidΔ=+8 077₽</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>ok</td>
+      <td>184</td>
+      <td>77.00</td>
+      <td>107.00</td>
+      <td>48 057.23</td>
+      <td>-8 624.25</td>
+      <td></td>
+      <td>6.00</td>
+      <td>16 535.85</td>
+      <td>36 451 269.95</td>
+      <td>41 744 190.63</td>
+      <td>ΔYult=-8 624₽; ΔN=+6; new=6; shared_paidΔ=+16 536₽</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>ok</td>
+      <td>192</td>
+      <td>83.00</td>
+      <td>109.00</td>
+      <td>42 827.46</td>
+      <td>-5 229.77</td>
+      <td></td>
+      <td>8.00</td>
+      <td>10 701.70</td>
+      <td>32 092 476.66</td>
+      <td>36 752 477.09</td>
+      <td>ΔYult=-5 230₽; ΔN=+8; new=8; shared_paidΔ=+10 702₽</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-09-06</td>
+      <td>ok</td>
+      <td>197</td>
+      <td>87.00</td>
+      <td>110.00</td>
+      <td>36 729.20</td>
+      <td>-6 098.26</td>
+      <td></td>
+      <td>5.00</td>
+      <td>12 165.04</td>
+      <td>25 551 589.75</td>
+      <td>29 261 818.18</td>
+      <td>ΔYult=-6 098₽; ΔN=+5; new=5; shared_paidΔ=+12 165₽</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-09-13</td>
+      <td>ok</td>
+      <td>199</td>
+      <td>96.00</td>
+      <td>103.00</td>
+      <td>3 130.32</td>
+      <td>-33 598.88</td>
+      <td></td>
+      <td>2.00</td>
+      <td>17 780.88</td>
+      <td>2 031 295.99</td>
+      <td>2 326 251.10</td>
+      <td>ΔYult=-33 599₽; ΔN=+2; new=2; shared_paidΔ=+17 781₽</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>2026-09-18</td>
+      <td>ok</td>
+      <td>200</td>
+      <td>99.00</td>
+      <td>101.00</td>
+      <td>-111.77</td>
+      <td>-3 242.09</td>
+      <td></td>
+      <td>1.00</td>
+      <td>14 880.69</td>
+      <td>-70 577.34</td>
+      <td>-80 825.55</td>
+      <td>ΔYult=-3 242₽; ΔN=+1; new=1; shared_paidΔ=+14 881₽</td>
+      <td></td>
+    </tr>
+  </tbody>
+</table></div><div class="legend"><h4>Колонки</h4><ul><li><code>week_end</code> — Конец недели / финальный as_of-срез</li><li><code>status</code> — Статус среза: ok, skipped_small_n или error</li><li><code>n_rows</code> → <b>n</b> — Число инцидентов в кумулятивном окне<div class="eq">count(incidents | ДатаЗаявления ≤ week_end)</div></li><li><code>n_control</code> → <b>n_c</b> — Число инцидентов control<div class="eq">count(group = control)</div></li><li><code>n_model</code> → <b>n_m</b> — Число инцидентов model<div class="eq">count(group = model)</div></li><li><code>yult_effect</code> → <b>ITT Yult</b> — Стратифицированный ITT по Yult, ₽/инцидент<div class="eq">Σ_f w_f · (mean_c,f − mean_m,f), YH = Yult</div></li><li><code>delta_yult</code> → <b>ΔYult</b> — Изменение ITT Yult к предыдущей ok-неделе<div class="eq">yult_effect(week) − yult_effect(prev)</div></li><li><code>ci_yult_includes_0</code> → <b>CI∋0</b> — true, если 95% CI ITT Yult содержит 0<div class="eq">ci_low ≤ 0 ≤ ci_high</div></li><li><code>n_new_losses</code> → <b>new</b> — Число новых инцидентов относительно prev<div class="eq">|incident_ids(week) ∖ incident_ids(prev)|</div></li><li><code>shared_mean_paid_delta</code> → <b>Δpaid shared</b> — Среднее изменение оплаты по общим инцидентам<div class="eq">mean_i∈shared (paid_i,week − paid_i,prev)</div></li><li><code>annual_pilot_full_yult</code> → <b>год пилот Yult</b> — Годовой эффект пилота при всём потоке в модель, Yult<div class="eq">yult_effect × N_pilot_eligible_year</div></li><li><code>annual_network_full_yult</code> → <b>год сеть Yult</b> — Годовой эффект сети при всём потоке в модель, Yult<div class="eq">annual_pilot_full_yult × network_multiplier</div></li><li><code>why_moved</code> → <b>why</b> — Краткая сводка причин сдвига недели</li><li><code>reason</code> — Текст ошибки или причина skip</li></ul><h4>Строки</h4><ul><li>Одна строка = кумулятивный срез пилота от старта до week_end.</li><li>Первая ok-неделя — база ряда (delta_* пустые).</li></ul><h4>Пояснения</h4><ul><li>Платежи на всех срезах — из одной текущей выгрузки витрины: прошлые недели могут «пересчитаться», если СуммаПлатежа дописалась.</li></ul></div>
+  </div>
+  <h2>Куда уехали control и model</h2>
+  <div class="card">
+    <div class="formula"><b>Связь средних групп и Δ ITT</b><div class="eq"><b>ITT</b> ≈ mean(control) − mean(model)  (здесь без стратификации по филиалам)</div><div class="eq"><b>Δmean_control</b> = mean_control(week) − mean_control(prev)</div><div class="eq"><b>Δmean_model</b> = mean_model(week) − mean_model(prev)</div><div class="eq"><b>itt_contrib_control</b> = Δmean_control</div><div class="eq"><b>itt_contrib_model</b> = −Δmean_model</div><div class="eq"><b>delta_itt_unstratified</b> = itt_contrib_control + itt_contrib_model</div><div class="note">Если model подешевел (Δmean_model &lt; 0), вклад model в Δ ITT положительный: −(отрицательное) = плюс. Это не «ошибка знака».</div></div>
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>пред. неделя</th>
+      <th>тек. неделя</th>
+      <th>mean_c prev</th>
+      <th>mean_c cur</th>
+      <th>Δmean_c</th>
+      <th>n_c prev</th>
+      <th>n_c cur</th>
+      <th>mean_m prev</th>
+      <th>mean_m cur</th>
+      <th>Δmean_m</th>
+      <th>n_m prev</th>
+      <th>n_m cur</th>
+      <th>вклад c</th>
+      <th>вклад m</th>
+      <th>ΔITT без страт</th>
+      <th>ΔITT страт</th>
+      <th>лидер</th>
+      <th>readout</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>2026-06-07</td>
+      <td>2026-06-14</td>
+      <td>145 513.86</td>
+      <td>162 201.41</td>
+      <td>16 687.56</td>
+      <td>13.00</td>
+      <td>23.00</td>
+      <td>166 118.75</td>
+      <td>168 075.71</td>
+      <td>1 956.96</td>
+      <td>39.00</td>
+      <td>58.00</td>
+      <td>16 687.56</td>
+      <td>-1 956.96</td>
+      <td>14 730.60</td>
+      <td>21 840.56</td>
+      <td>control</td>
+      <td>Сильнее потянул control (подорожал (+ к ITT)): control Δmean=+16 688₽ → вклад +16 688; model Δmean=+1 957₽ → вклад -1 957</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>162 201.41</td>
+      <td>180 331.71</td>
+      <td>18 130.29</td>
+      <td>23.00</td>
+      <td>27.00</td>
+      <td>168 075.71</td>
+      <td>172 260.30</td>
+      <td>4 184.59</td>
+      <td>58.00</td>
+      <td>66.00</td>
+      <td>18 130.29</td>
+      <td>-4 184.59</td>
+      <td>13 945.70</td>
+      <td>29 093.11</td>
+      <td>control</td>
+      <td>Сильнее потянул control (подорожал (+ к ITT)): control Δmean=+18 130₽ → вклад +18 130; model Δmean=+4 185₽ → вклад -4 185</td>
+    </tr>
+    <tr>
+      <td>2026-06-21</td>
+      <td>2026-06-28</td>
+      <td>180 331.71</td>
+      <td>177 884.76</td>
+      <td>-2 446.95</td>
+      <td>27.00</td>
+      <td>31.00</td>
+      <td>172 260.30</td>
+      <td>174 049.63</td>
+      <td>1 789.33</td>
+      <td>66.00</td>
+      <td>74.00</td>
+      <td>-2 446.95</td>
+      <td>-1 789.33</td>
+      <td>-4 236.27</td>
+      <td>-8 684.69</td>
+      <td>control</td>
+      <td>Сильнее потянул control (подешевел (− к ITT)): control Δmean=-2 447₽ → вклад -2 447; model Δmean=+1 789₽ → вклад -1 789</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>177 884.76</td>
+      <td>201 369.46</td>
+      <td>23 484.70</td>
+      <td>31.00</td>
+      <td>33.00</td>
+      <td>174 049.63</td>
+      <td>169 258.04</td>
+      <td>-4 791.58</td>
+      <td>74.00</td>
+      <td>85.00</td>
+      <td>23 484.70</td>
+      <td>4 791.58</td>
+      <td>28 276.28</td>
+      <td>29 865.85</td>
+      <td>control</td>
+      <td>Сильнее потянул control (подорожал (+ к ITT)): control Δmean=+23 485₽ → вклад +23 485; model Δmean=-4 792₽ → вклад +4 792</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>201 369.46</td>
+      <td>215 621.30</td>
+      <td>14 251.85</td>
+      <td>33.00</td>
+      <td>42.00</td>
+      <td>169 258.04</td>
+      <td>176 174.76</td>
+      <td>6 916.72</td>
+      <td>85.00</td>
+      <td>88.00</td>
+      <td>14 251.85</td>
+      <td>-6 916.72</td>
+      <td>7 335.13</td>
+      <td>-5 111.11</td>
+      <td>control</td>
+      <td>Сильнее потянул control (подорожал (+ к ITT)): control Δmean=+14 252₽ → вклад +14 252; model Δmean=+6 917₽ → вклад -6 917</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>215 621.30</td>
+      <td>221 980.40</td>
+      <td>6 359.10</td>
+      <td>42.00</td>
+      <td>45.00</td>
+      <td>176 174.76</td>
+      <td>178 846.69</td>
+      <td>2 671.93</td>
+      <td>88.00</td>
+      <td>93.00</td>
+      <td>6 359.10</td>
+      <td>-2 671.93</td>
+      <td>3 687.16</td>
+      <td>3 007.25</td>
+      <td>control</td>
+      <td>Сильнее потянул control (подорожал (+ к ITT)): control Δmean=+6 359₽ → вклад +6 359; model Δmean=+2 672₽ → вклад -2 672</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>221 980.40</td>
+      <td>232 337.71</td>
+      <td>10 357.31</td>
+      <td>45.00</td>
+      <td>51.00</td>
+      <td>178 846.69</td>
+      <td>187 867.84</td>
+      <td>9 021.14</td>
+      <td>93.00</td>
+      <td>97.00</td>
+      <td>10 357.31</td>
+      <td>-9 021.14</td>
+      <td>1 336.17</td>
+      <td>9 706.89</td>
+      <td>control</td>
+      <td>Сильнее потянул control (подорожал (+ к ITT)): control Δmean=+10 357₽ → вклад +10 357; model Δmean=+9 021₽ → вклад -9 021</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>232 337.71</td>
+      <td>247 158.57</td>
+      <td>14 820.86</td>
+      <td>51.00</td>
+      <td>57.00</td>
+      <td>187 867.84</td>
+      <td>191 488.43</td>
+      <td>3 620.60</td>
+      <td>97.00</td>
+      <td>103.00</td>
+      <td>14 820.86</td>
+      <td>-3 620.60</td>
+      <td>11 200.26</td>
+      <td>13 263.60</td>
+      <td>control</td>
+      <td>Сильнее потянул control (подорожал (+ к ITT)): control Δmean=+14 821₽ → вклад +14 821; model Δmean=+3 621₽ → вклад -3 621</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>247 158.57</td>
+      <td>256 963.27</td>
+      <td>9 804.71</td>
+      <td>57.00</td>
+      <td>67.00</td>
+      <td>191 488.43</td>
+      <td>198 960.19</td>
+      <td>7 471.76</td>
+      <td>103.00</td>
+      <td>105.00</td>
+      <td>9 804.71</td>
+      <td>-7 471.76</td>
+      <td>2 332.95</td>
+      <td>2 716.69</td>
+      <td>control</td>
+      <td>Сильнее потянул control (подорожал (+ к ITT)): control Δmean=+9 805₽ → вклад +9 805; model Δmean=+7 472₽ → вклад -7 472</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>256 963.27</td>
+      <td>256 005.80</td>
+      <td>-957.47</td>
+      <td>67.00</td>
+      <td>73.00</td>
+      <td>198 960.19</td>
+      <td>205 783.50</td>
+      <td>6 823.31</td>
+      <td>105.00</td>
+      <td>105.00</td>
+      <td>-957.47</td>
+      <td>-6 823.31</td>
+      <td>-7 780.78</td>
+      <td>-6 485.32</td>
+      <td>model</td>
+      <td>Сильнее потянул model (подорожал (− к ITT)): control Δmean=-957₽ → вклад -957; model Δmean=+6 823₽ → вклад -6 823</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>256 005.80</td>
+      <td>265 247.68</td>
+      <td>9 241.88</td>
+      <td>73.00</td>
+      <td>77.00</td>
+      <td>205 783.50</td>
+      <td>221 986.54</td>
+      <td>16 203.04</td>
+      <td>105.00</td>
+      <td>107.00</td>
+      <td>9 241.88</td>
+      <td>-16 203.04</td>
+      <td>-6 961.16</td>
+      <td>-8 624.25</td>
+      <td>model</td>
+      <td>Сильнее потянул model (подорожал (− к ITT)): control Δmean=+9 242₽ → вклад +9 242; model Δmean=+16 203₽ → вклад -16 203</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>265 247.68</td>
+      <td>268 913.26</td>
+      <td>3 665.58</td>
+      <td>77.00</td>
+      <td>83.00</td>
+      <td>221 986.54</td>
+      <td>230 642.24</td>
+      <td>8 655.69</td>
+      <td>107.00</td>
+      <td>109.00</td>
+      <td>3 665.58</td>
+      <td>-8 655.69</td>
+      <td>-4 990.11</td>
+      <td>-5 229.77</td>
+      <td>model</td>
+      <td>Сильнее потянул model (подорожал (− к ITT)): control Δmean=+3 666₽ → вклад +3 666; model Δmean=+8 656₽ → вклад -8 656</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>268 913.26</td>
+      <td>278 350.21</td>
+      <td>9 436.95</td>
+      <td>83.00</td>
+      <td>87.00</td>
+      <td>230 642.24</td>
+      <td>244 250.04</td>
+      <td>13 607.80</td>
+      <td>109.00</td>
+      <td>110.00</td>
+      <td>9 436.95</td>
+      <td>-13 607.80</td>
+      <td>-4 170.85</td>
+      <td>-6 098.26</td>
+      <td>model</td>
+      <td>Сильнее потянул model (подорожал (− к ITT)): control Δmean=+9 437₽ → вклад +9 437; model Δmean=+13 608₽ → вклад -13 608</td>
+    </tr>
+    <tr>
+      <td>2026-09-06</td>
+      <td>2026-09-13</td>
+      <td>278 350.21</td>
+      <td>277 687.29</td>
+      <td>-662.92</td>
+      <td>87.00</td>
+      <td>96.00</td>
+      <td>244 250.04</td>
+      <td>276 136.44</td>
+      <td>31 886.40</td>
+      <td>110.00</td>
+      <td>103.00</td>
+      <td>-662.92</td>
+      <td>-31 886.40</td>
+      <td>-32 549.32</td>
+      <td>-33 598.88</td>
+      <td>model</td>
+      <td>Сильнее потянул model (подорожал (− к ITT)): control Δmean=-663₽ → вклад -663; model Δmean=+31 886₽ → вклад -31 886</td>
+    </tr>
+    <tr>
+      <td>2026-09-13</td>
+      <td>2026-09-18</td>
+      <td>277 687.29</td>
+      <td>291 803.11</td>
+      <td>14 115.83</td>
+      <td>96.00</td>
+      <td>99.00</td>
+      <td>276 136.44</td>
+      <td>291 931.92</td>
+      <td>15 795.48</td>
+      <td>103.00</td>
+      <td>101.00</td>
+      <td>14 115.83</td>
+      <td>-15 795.48</td>
+      <td>-1 679.65</td>
+      <td>-3 242.09</td>
+      <td>model</td>
+      <td>Сильнее потянул model (подорожал (− к ITT)): control Δmean=+14 116₽ → вклад +14 116; model Δmean=+15 795₽ → вклад -15 795</td>
+    </tr>
+  </tbody>
+</table></div><div class="legend"><h4>Колонки</h4><ul><li><code>prev_week_end</code> → <b>пред. неделя</b> — Конец предыдущей ok-недели</li><li><code>week_end</code> → <b>тек. неделя</b> — Конец текущей ok-недели</li><li><code>mean_control_prev</code> → <b>mean_c prev</b> — Средний Yult control на prev<div class="eq">mean(Yult | control, prev)</div></li><li><code>mean_control_cur</code> → <b>mean_c cur</b> — Средний Yult control на текущей<div class="eq">mean(Yult | control, week)</div></li><li><code>delta_mean_control</code> → <b>Δmean_c</b> — Изменение среднего Yult control<div class="eq">mean_control_cur − mean_control_prev</div></li><li><code>n_control_prev</code> → <b>n_c prev</b> — N control на prev</li><li><code>n_control_cur</code> → <b>n_c cur</b> — N control на текущей</li><li><code>mean_model_prev</code> → <b>mean_m prev</b> — Средний Yult model на prev<div class="eq">mean(Yult | model, prev)</div></li><li><code>mean_model_cur</code> → <b>mean_m cur</b> — Средний Yult model на текущей<div class="eq">mean(Yult | model, week)</div></li><li><code>delta_mean_model</code> → <b>Δmean_m</b> — Изменение среднего Yult model<div class="eq">mean_model_cur − mean_model_prev</div></li><li><code>n_model_prev</code> → <b>n_m prev</b> — N model на prev</li><li><code>n_model_cur</code> → <b>n_m cur</b> — N model на текущей</li><li><code>itt_contrib_control</code> → <b>вклад c</b> — Вклад control в Δ ITT без страт; «+» = control подорожал<div class="eq">itt_contrib_control = delta_mean_control</div></li><li><code>itt_contrib_model</code> → <b>вклад m</b> — Вклад model в Δ ITT без страт; «+» = model подешевел<div class="eq">itt_contrib_model = −delta_mean_model</div></li><li><code>delta_itt_unstratified</code> → <b>ΔITT без страт</b> — Сумма вкладов групп без весов филиалов<div class="eq">itt_contrib_control + itt_contrib_model</div></li><li><code>delta_yult_stratified</code> → <b>ΔITT страт</b> — Фактический Δ ITT Yult со стратификацией (из главной таблицы)<div class="eq">delta_yult из ряда weekly</div></li><li><code>dominant_group</code> → <b>лидер</b> — Группа с большим |Δmean|<div class="eq">argmax(|delta_mean_control|, |delta_mean_model|)</div></li><li><code>readout</code> — Текстовая расшифровка знаков и вкладов</li></ul><h4>Строки</h4><ul><li>Одна строка на пару соседних ok-недель.</li></ul><h4>Как считается</h4><div class="eq">Пример: mean_model 142k → 131k ⇒ Δmean_m = −11k ⇒ вклад m = −(−11k) = +11k</div><h4>Пояснения</h4><ul><li>delta_itt_unstratified может отличаться от delta_yult_stratified из-за весов филиалов.</li></ul></div>
+  </div>
+  <h2>Топ инцидентов по вкладу в Δ ITT</h2>
+  <div class="card">
+    <div class="formula"><b>Оценка вклада инцидента (диагностика, не точная декомпозиция)</b><div class="eq"><b>sign</b> = +1 для control, −1 для model (потому что ITT = mean_control − mean_model)</div><div class="eq"><b>new_incident</b>: estimated_itt_pull = sign × (Yult − mean_group_prev) / (N_group_prev + 1)</div><div class="eq"><b>payment_update</b>: estimated_itt_pull = sign × Δpaid / N_group_cur, только если |Δpaid| ≥ 1 ₽</div><div class="eq">В топ: до {TOP_LOSS_DRIVERS_PER_KIND} new_incident и до {TOP_LOSS_DRIVERS_PER_KIND} payment_update с наибольшим |pull|</div><div class="note">paid_prev / delta_paid пустые у new_incident: на прошлой неделе инцидента ещё не было.</div></div>
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>пред. неделя</th>
+      <th>тек. неделя</th>
+      <th>тип</th>
+      <th>incident</th>
+      <th>LossID</th>
+      <th>group</th>
+      <th>filial</th>
+      <th>дата заявл.</th>
+      <th>Yult</th>
+      <th>paid prev</th>
+      <th>paid cur</th>
+      <th>Δpaid</th>
+      <th>вклад ≈</th>
+      <th>severity</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>2026-06-07</td>
+      <td>2026-06-14</td>
+      <td>new_incident</td>
+      <td>INC-000169</td>
+      <td>SYN-000338; SYN-000339</td>
+      <td>control</td>
+      <td>Уфимский</td>
+      <td>2026-06-11</td>
+      <td>236 418.27</td>
+      <td></td>
+      <td>228 995.45</td>
+      <td></td>
+      <td>6 493.17</td>
+      <td>OD=164 269₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-07</td>
+      <td>2026-06-14</td>
+      <td>new_incident</td>
+      <td>INC-000126</td>
+      <td>SYN-000253</td>
+      <td>control</td>
+      <td>Курский</td>
+      <td>2026-06-09</td>
+      <td>226 883.29</td>
+      <td></td>
+      <td>226 883.29</td>
+      <td></td>
+      <td>5 812.10</td>
+      <td>претензия, OD=256 912₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-07</td>
+      <td>2026-06-14</td>
+      <td>new_incident</td>
+      <td>INC-000033</td>
+      <td>SYN-000067</td>
+      <td>control</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-06-11</td>
+      <td>196 445.55</td>
+      <td></td>
+      <td>191 469.70</td>
+      <td></td>
+      <td>3 637.98</td>
+      <td>OD=80 922₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-07</td>
+      <td>2026-06-14</td>
+      <td>new_incident</td>
+      <td>INC-000171</td>
+      <td>SYN-000342</td>
+      <td>control</td>
+      <td>Кемеровский</td>
+      <td>2026-06-09</td>
+      <td>195 883.01</td>
+      <td></td>
+      <td>187 413.57</td>
+      <td></td>
+      <td>3 597.80</td>
+      <td>OD=199 918₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-07</td>
+      <td>2026-06-14</td>
+      <td>new_incident</td>
+      <td>INC-000098</td>
+      <td>SYN-000197</td>
+      <td>control</td>
+      <td>Ярославский</td>
+      <td>2026-06-10</td>
+      <td>98 966.67</td>
+      <td></td>
+      <td>90 612.49</td>
+      <td></td>
+      <td>-3 324.80</td>
+      <td>OD=195 992₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-07</td>
+      <td>2026-06-14</td>
+      <td>payment_update</td>
+      <td>INC-000157</td>
+      <td>SYN-000314; SYN-000315</td>
+      <td>model</td>
+      <td>Магнитогорский</td>
+      <td>2026-05-23</td>
+      <td>385 621.99</td>
+      <td>141 648.80</td>
+      <td>377 387.91</td>
+      <td>235 739.12</td>
+      <td>-4 064.47</td>
+      <td>OD=191 422₽, age=11д</td>
+    </tr>
+    <tr>
+      <td>2026-06-07</td>
+      <td>2026-06-14</td>
+      <td>payment_update</td>
+      <td>INC-000026</td>
+      <td>SYN-000052; SYN-000053</td>
+      <td>model</td>
+      <td>Омский</td>
+      <td>2026-05-27</td>
+      <td>92 106.94</td>
+      <td>34 183.53</td>
+      <td>79 484.05</td>
+      <td>45 300.52</td>
+      <td>-781.04</td>
+      <td>OD=341 256₽, age=2д</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>new_incident</td>
+      <td>INC-000004</td>
+      <td>SYN-000009</td>
+      <td>control</td>
+      <td>Магнитогорский</td>
+      <td>2026-06-15</td>
+      <td>56 847.09</td>
+      <td></td>
+      <td>50 400.62</td>
+      <td></td>
+      <td>-4 389.76</td>
+      <td>OD=131 013₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>new_incident</td>
+      <td>INC-000079</td>
+      <td>SYN-000158</td>
+      <td>control</td>
+      <td>Мурманский</td>
+      <td>2026-06-17</td>
+      <td>224 298.70</td>
+      <td></td>
+      <td>212 922.06</td>
+      <td></td>
+      <td>2 587.39</td>
+      <td>OD=298 941₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>new_incident</td>
+      <td>INC-000198</td>
+      <td>SYN-000396</td>
+      <td>model</td>
+      <td>Мурманский</td>
+      <td>2026-06-18</td>
+      <td>39 865.23</td>
+      <td></td>
+      <td>34 194.30</td>
+      <td></td>
+      <td>2 173.06</td>
+      <td>OD=104 597₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>new_incident</td>
+      <td>INC-000153</td>
+      <td>SYN-000307</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-06-17</td>
+      <td>85 933.69</td>
+      <td></td>
+      <td>79 178.71</td>
+      <td></td>
+      <td>1 392.24</td>
+      <td>OD=141 521₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>new_incident</td>
+      <td>INC-000158</td>
+      <td>SYN-000317</td>
+      <td>control</td>
+      <td>Уфимский</td>
+      <td>2026-06-16</td>
+      <td>191 126.10</td>
+      <td></td>
+      <td>184 964.26</td>
+      <td></td>
+      <td>1 205.20</td>
+      <td>OD=121 318₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>payment_update</td>
+      <td>INC-000194</td>
+      <td>SYN-000388; SYN-000389</td>
+      <td>control</td>
+      <td>Магнитогорский</td>
+      <td>2026-05-26</td>
+      <td>492 684.08</td>
+      <td>235 358.28</td>
+      <td>484 698.78</td>
+      <td>249 340.50</td>
+      <td>9 234.83</td>
+      <td>OD=183 427₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>payment_update</td>
+      <td>INC-000124</td>
+      <td>SYN-000248; SYN-000249</td>
+      <td>control</td>
+      <td>Омский</td>
+      <td>2026-06-07</td>
+      <td>336 060.55</td>
+      <td>155 940.76</td>
+      <td>336 060.55</td>
+      <td>180 119.79</td>
+      <td>6 671.10</td>
+      <td>соглашение, претензия, OD=375 837₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>payment_update</td>
+      <td>INC-000057</td>
+      <td>SYN-000114; SYN-000115</td>
+      <td>model</td>
+      <td>Уфимский</td>
+      <td>2026-06-05</td>
+      <td>375 812.50</td>
+      <td>157 178.82</td>
+      <td>370 899.69</td>
+      <td>213 720.87</td>
+      <td>-3 238.19</td>
+      <td>OD=78 775₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>payment_update</td>
+      <td>INC-000191</td>
+      <td>SYN-000382; SYN-000383</td>
+      <td>model</td>
+      <td>Пермский</td>
+      <td>2026-06-10</td>
+      <td>186 565.39</td>
+      <td>72 818.32</td>
+      <td>180 755.99</td>
+      <td>107 937.67</td>
+      <td>-1 635.42</td>
+      <td>OD=109 314₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>payment_update</td>
+      <td>INC-000020</td>
+      <td>SYN-000040; SYN-000041</td>
+      <td>control</td>
+      <td>Курский</td>
+      <td>2026-05-28</td>
+      <td>268 713.01</td>
+      <td>214 206.86</td>
+      <td>252 787.39</td>
+      <td>38 580.53</td>
+      <td>1 428.91</td>
+      <td>OD=453 885₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-21</td>
+      <td>2026-06-28</td>
+      <td>new_incident</td>
+      <td>INC-000035</td>
+      <td>SYN-000071</td>
+      <td>control</td>
+      <td>Владимирский</td>
+      <td>2026-06-23</td>
+      <td>63 814.41</td>
+      <td></td>
+      <td>55 506.33</td>
+      <td></td>
+      <td>-4 161.33</td>
+      <td>OD=194 422₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-21</td>
+      <td>2026-06-28</td>
+      <td>new_incident</td>
+      <td>INC-000011</td>
+      <td>SYN-000023</td>
+      <td>control</td>
+      <td>Пермский</td>
+      <td>2026-06-27</td>
+      <td>73 290.74</td>
+      <td></td>
+      <td>64 672.32</td>
+      <td></td>
+      <td>-3 822.89</td>
+      <td>OD=204 992₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-21</td>
+      <td>2026-06-28</td>
+      <td>new_incident</td>
+      <td>INC-000012</td>
+      <td>SYN-000025</td>
+      <td>control</td>
+      <td>Мурманский</td>
+      <td>2026-06-23</td>
+      <td>114 878.85</td>
+      <td></td>
+      <td>108 429.88</td>
+      <td></td>
+      <td>-2 337.60</td>
+      <td>OD=131 098₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-21</td>
+      <td>2026-06-28</td>
+      <td>new_incident</td>
+      <td>INC-000090</td>
+      <td>SYN-000181</td>
+      <td>control</td>
+      <td>Омский</td>
+      <td>2026-06-26</td>
+      <td>242 103.18</td>
+      <td></td>
+      <td>236 278.65</td>
+      <td></td>
+      <td>2 206.12</td>
+      <td>OD=109 829₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-21</td>
+      <td>2026-06-28</td>
+      <td>new_incident</td>
+      <td>INC-000092</td>
+      <td>SYN-000185</td>
+      <td>model</td>
+      <td>Омский</td>
+      <td>2026-06-27</td>
+      <td>69 380.91</td>
+      <td></td>
+      <td>64 099.74</td>
+      <td></td>
+      <td>1 535.51</td>
+      <td>OD=91 154₽, age=6д</td>
+    </tr>
+    <tr>
+      <td>2026-06-21</td>
+      <td>2026-06-28</td>
+      <td>payment_update</td>
+      <td>INC-000120</td>
+      <td>SYN-000240; SYN-000241</td>
+      <td>control</td>
+      <td>Магнитогорский</td>
+      <td>2026-06-01</td>
+      <td>239 547.12</td>
+      <td>78 594.15</td>
+      <td>239 547.12</td>
+      <td>160 952.97</td>
+      <td>5 192.03</td>
+      <td>соглашение, претензия, OD=369 681₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-21</td>
+      <td>2026-06-28</td>
+      <td>payment_update</td>
+      <td>INC-000000</td>
+      <td>SYN-000000; SYN-000001</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-06-10</td>
+      <td>238 641.98</td>
+      <td>138 369.11</td>
+      <td>219 316.66</td>
+      <td>80 947.55</td>
+      <td>-1 093.89</td>
+      <td>OD=568 152₽, age=15д</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>new_incident</td>
+      <td>INC-000016</td>
+      <td>SYN-000032</td>
+      <td>model</td>
+      <td>Кемеровский</td>
+      <td>2026-07-05</td>
+      <td>41 349.26</td>
+      <td></td>
+      <td>33 040.16</td>
+      <td></td>
+      <td>1 769.34</td>
+      <td>OD=194 456₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>new_incident</td>
+      <td>INC-000013</td>
+      <td>SYN-000026</td>
+      <td>model</td>
+      <td>Владимирский</td>
+      <td>2026-07-01</td>
+      <td>53 523.68</td>
+      <td></td>
+      <td>46 629.30</td>
+      <td></td>
+      <td>1 607.01</td>
+      <td>OD=144 924₽, age=37д</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>new_incident</td>
+      <td>INC-000095</td>
+      <td>SYN-000190; SYN-000191</td>
+      <td>model</td>
+      <td>Курский</td>
+      <td>2026-06-30</td>
+      <td>290 564.12</td>
+      <td></td>
+      <td>289 555.06</td>
+      <td></td>
+      <td>-1 553.53</td>
+      <td>соглашение, OD=402 438₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>new_incident</td>
+      <td>INC-000040</td>
+      <td>SYN-000080</td>
+      <td>model</td>
+      <td>Пермский</td>
+      <td>2026-07-02</td>
+      <td>79 293.17</td>
+      <td></td>
+      <td>75 672.22</td>
+      <td></td>
+      <td>1 263.42</td>
+      <td>OD=34 371₽, age=21д</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>new_incident</td>
+      <td>INC-000029</td>
+      <td>SYN-000058</td>
+      <td>model</td>
+      <td>Уфимский</td>
+      <td>2026-06-29</td>
+      <td>80 014.65</td>
+      <td></td>
+      <td>76 234.56</td>
+      <td></td>
+      <td>1 253.80</td>
+      <td>OD=39 654₽, age=27д</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>payment_update</td>
+      <td>INC-000174</td>
+      <td>SYN-000348; SYN-000349</td>
+      <td>control</td>
+      <td>Кемеровский</td>
+      <td>2026-06-11</td>
+      <td>401 757.08</td>
+      <td>174 951.35</td>
+      <td>391 233.55</td>
+      <td>216 282.20</td>
+      <td>6 554.01</td>
+      <td>претензия, OD=384 458₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>payment_update</td>
+      <td>INC-000134</td>
+      <td>SYN-000268; SYN-000269</td>
+      <td>control</td>
+      <td>Кемеровский</td>
+      <td>2026-06-17</td>
+      <td>367 074.78</td>
+      <td>181 121.06</td>
+      <td>365 853.25</td>
+      <td>184 732.19</td>
+      <td>5 597.95</td>
+      <td>соглашение, OD=505 821₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>payment_update</td>
+      <td>INC-000112</td>
+      <td>SYN-000224; SYN-000225</td>
+      <td>control</td>
+      <td>Мурманский</td>
+      <td>2026-05-30</td>
+      <td>404 680.79</td>
+      <td>246 982.80</td>
+      <td>389 489.54</td>
+      <td>142 506.74</td>
+      <td>4 318.39</td>
+      <td>OD=426 547₽, age=29д</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>payment_update</td>
+      <td>INC-000075</td>
+      <td>SYN-000150; SYN-000151</td>
+      <td>model</td>
+      <td>Магнитогорский</td>
+      <td>2026-05-22</td>
+      <td>380 749.15</td>
+      <td>191 992.98</td>
+      <td>380 036.99</td>
+      <td>188 044.01</td>
+      <td>-2 212.28</td>
+      <td>соглашение, OD=257 430₽, age=10д</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>payment_update</td>
+      <td>INC-000107</td>
+      <td>SYN-000214; SYN-000215</td>
+      <td>control</td>
+      <td>Владимирский</td>
+      <td>2026-06-26</td>
+      <td>274 408.76</td>
+      <td>198 114.49</td>
+      <td>265 448.08</td>
+      <td>67 333.59</td>
+      <td>2 040.41</td>
+      <td>OD=216 224₽, age=9д</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>new_incident</td>
+      <td>INC-000055</td>
+      <td>SYN-000110</td>
+      <td>control</td>
+      <td>Владимирский</td>
+      <td>2026-07-11</td>
+      <td>53 545.95</td>
+      <td></td>
+      <td>44 519.44</td>
+      <td></td>
+      <td>-4 347.75</td>
+      <td>OD=218 893₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>new_incident</td>
+      <td>INC-000193</td>
+      <td>SYN-000386</td>
+      <td>control</td>
+      <td>Уфимский</td>
+      <td>2026-07-07</td>
+      <td>132 186.57</td>
+      <td></td>
+      <td>127 472.07</td>
+      <td></td>
+      <td>-2 034.79</td>
+      <td>OD=72 020₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>new_incident</td>
+      <td>INC-000123</td>
+      <td>SYN-000246</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-07-10</td>
+      <td>249 845.93</td>
+      <td></td>
+      <td>243 491.50</td>
+      <td></td>
+      <td>-937.07</td>
+      <td>OD=127 878₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>new_incident</td>
+      <td>INC-000116</td>
+      <td>SYN-000232</td>
+      <td>model</td>
+      <td>Курский</td>
+      <td>2026-07-06</td>
+      <td>95 694.18</td>
+      <td></td>
+      <td>95 309.22</td>
+      <td></td>
+      <td>855.39</td>
+      <td>соглашение, OD=97 362₽, age=48д</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>new_incident</td>
+      <td>INC-000008</td>
+      <td>SYN-000017</td>
+      <td>model</td>
+      <td>Ярославский</td>
+      <td>2026-07-10</td>
+      <td>234 391.67</td>
+      <td></td>
+      <td>233 756.84</td>
+      <td></td>
+      <td>-757.37</td>
+      <td>соглашение, OD=219 622₽, age=15д</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>payment_update</td>
+      <td>INC-000025</td>
+      <td>SYN-000050; SYN-000051</td>
+      <td>control</td>
+      <td>Владимирский</td>
+      <td>2026-06-08</td>
+      <td>388 140.19</td>
+      <td>176 834.89</td>
+      <td>379 750.18</td>
+      <td>202 915.29</td>
+      <td>4 831.32</td>
+      <td>OD=195 796₽, age=32д</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>payment_update</td>
+      <td>INC-000073</td>
+      <td>SYN-000146; SYN-000147</td>
+      <td>control</td>
+      <td>Кемеровский</td>
+      <td>2026-06-22</td>
+      <td>319 813.74</td>
+      <td>112 488.99</td>
+      <td>308 239.55</td>
+      <td>195 750.56</td>
+      <td>4 660.73</td>
+      <td>OD=302 682₽, age=49д</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>payment_update</td>
+      <td>INC-000035</td>
+      <td>SYN-000070; SYN-000071</td>
+      <td>control</td>
+      <td>Уфимский</td>
+      <td>2026-06-23</td>
+      <td>250 190.06</td>
+      <td>55 506.33</td>
+      <td>239 175.18</td>
+      <td>183 668.85</td>
+      <td>4 373.07</td>
+      <td>OD=283 949₽, age=46д</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>payment_update</td>
+      <td>INC-000012</td>
+      <td>SYN-000024; SYN-000025</td>
+      <td>control</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-06-23</td>
+      <td>285 063.89</td>
+      <td>108 429.88</td>
+      <td>271 410.42</td>
+      <td>162 980.54</td>
+      <td>3 880.49</td>
+      <td>OD=376 492₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>payment_update</td>
+      <td>INC-000092</td>
+      <td>SYN-000184; SYN-000185</td>
+      <td>model</td>
+      <td>Ярославский</td>
+      <td>2026-06-27</td>
+      <td>302 480.41</td>
+      <td>64 099.74</td>
+      <td>296 243.53</td>
+      <td>232 143.79</td>
+      <td>-2 638.00</td>
+      <td>OD=122 297₽, age=48д</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>new_incident</td>
+      <td>INC-000138</td>
+      <td>SYN-000276</td>
+      <td>model</td>
+      <td>Магнитогорский</td>
+      <td>2026-07-19</td>
+      <td>51 663.02</td>
+      <td></td>
+      <td>45 886.75</td>
+      <td></td>
+      <td>1 399.01</td>
+      <td>OD=108 185₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>new_incident</td>
+      <td>INC-000097</td>
+      <td>SYN-000195</td>
+      <td>model</td>
+      <td>Владимирский</td>
+      <td>2026-07-17</td>
+      <td>68 591.49</td>
+      <td></td>
+      <td>65 319.85</td>
+      <td></td>
+      <td>1 208.80</td>
+      <td>OD=22 874₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>new_incident</td>
+      <td>INC-000003</td>
+      <td>SYN-000007</td>
+      <td>control</td>
+      <td>Магнитогорский</td>
+      <td>2026-07-15</td>
+      <td>171 684.85</td>
+      <td></td>
+      <td>167 822.67</td>
+      <td></td>
+      <td>-1 021.78</td>
+      <td>OD=42 805₽, age=9д</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>new_incident</td>
+      <td>INC-000181</td>
+      <td>SYN-000362</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-07-16</td>
+      <td>87 199.57</td>
+      <td></td>
+      <td>86 837.68</td>
+      <td></td>
+      <td>999.72</td>
+      <td>соглашение, OD=87 530₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>new_incident</td>
+      <td>INC-000028</td>
+      <td>SYN-000056</td>
+      <td>model</td>
+      <td>Магнитогорский</td>
+      <td>2026-07-15</td>
+      <td>99 308.67</td>
+      <td></td>
+      <td>98 968.39</td>
+      <td></td>
+      <td>863.66</td>
+      <td>соглашение, OD=77 017₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>payment_update</td>
+      <td>INC-000136</td>
+      <td>SYN-000272; SYN-000273</td>
+      <td>control</td>
+      <td>Магнитогорский</td>
+      <td>2026-06-22</td>
+      <td>382 609.05</td>
+      <td>193 890.66</td>
+      <td>370 150.67</td>
+      <td>176 260.01</td>
+      <td>3 916.89</td>
+      <td>OD=334 077₽, age=26д</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>payment_update</td>
+      <td>INC-000010</td>
+      <td>SYN-000020; SYN-000021</td>
+      <td>control</td>
+      <td>Уфимский</td>
+      <td>2026-05-28</td>
+      <td>378 543.10</td>
+      <td>209 976.99</td>
+      <td>377 571.88</td>
+      <td>167 594.89</td>
+      <td>3 724.33</td>
+      <td>соглашение, OD=382 191₽, age=25д</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>payment_update</td>
+      <td>INC-000123</td>
+      <td>SYN-000246; SYN-000247</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-07-10</td>
+      <td>477 326.55</td>
+      <td>243 491.50</td>
+      <td>464 080.92</td>
+      <td>220 589.41</td>
+      <td>-2 371.93</td>
+      <td>OD=362 461₽, age=2д</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>payment_update</td>
+      <td>INC-000038</td>
+      <td>SYN-000076; SYN-000077</td>
+      <td>model</td>
+      <td>Омский</td>
+      <td>2026-06-06</td>
+      <td>373 079.29</td>
+      <td>193 230.65</td>
+      <td>366 730.05</td>
+      <td>173 499.40</td>
+      <td>-1 865.58</td>
+      <td>OD=127 701₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>payment_update</td>
+      <td>INC-000105</td>
+      <td>SYN-000210; SYN-000211</td>
+      <td>model</td>
+      <td>Мурманский</td>
+      <td>2026-07-03</td>
+      <td>328 606.43</td>
+      <td>229 424.76</td>
+      <td>324 098.65</td>
+      <td>94 673.90</td>
+      <td>-1 018.00</td>
+      <td>претензия, OD=369 920₽, age=33д</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>new_incident</td>
+      <td>INC-000133</td>
+      <td>SYN-000266; SYN-000267</td>
+      <td>control</td>
+      <td>Пермский</td>
+      <td>2026-07-24</td>
+      <td>332 971.50</td>
+      <td></td>
+      <td>322 420.55</td>
+      <td></td>
+      <td>2 412.85</td>
+      <td>OD=270 817₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>new_incident</td>
+      <td>INC-000069</td>
+      <td>SYN-000139</td>
+      <td>control</td>
+      <td>Владимирский</td>
+      <td>2026-07-20</td>
+      <td>144 467.08</td>
+      <td></td>
+      <td>136 695.07</td>
+      <td></td>
+      <td>-1 685.07</td>
+      <td>OD=175 711₽, age=11д</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>new_incident</td>
+      <td>INC-000066</td>
+      <td>SYN-000133</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-07-21</td>
+      <td>227 587.71</td>
+      <td></td>
+      <td>219 857.11</td>
+      <td></td>
+      <td>-518.52</td>
+      <td>OD=174 752₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>new_incident</td>
+      <td>INC-000163</td>
+      <td>SYN-000326</td>
+      <td>model</td>
+      <td>Магнитогорский</td>
+      <td>2026-07-20</td>
+      <td>130 915.40</td>
+      <td></td>
+      <td>121 160.24</td>
+      <td></td>
+      <td>509.91</td>
+      <td>OD=243 711₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>new_incident</td>
+      <td>INC-000036</td>
+      <td>SYN-000073</td>
+      <td>model</td>
+      <td>Ярославский</td>
+      <td>2026-07-21</td>
+      <td>134 021.50</td>
+      <td></td>
+      <td>128 590.16</td>
+      <td></td>
+      <td>476.86</td>
+      <td>OD=95 348₽, age=38д</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>payment_update</td>
+      <td>INC-000063</td>
+      <td>SYN-000126; SYN-000127</td>
+      <td>control</td>
+      <td>Кемеровский</td>
+      <td>2026-06-07</td>
+      <td>288 027.13</td>
+      <td>69 433.29</td>
+      <td>288 027.13</td>
+      <td>218 593.84</td>
+      <td>4 286.15</td>
+      <td>претензия, OD=338 539₽, age=61д</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>payment_update</td>
+      <td>INC-000094</td>
+      <td>SYN-000188; SYN-000189</td>
+      <td>control</td>
+      <td>Ярославский</td>
+      <td>2026-05-27</td>
+      <td>407 225.35</td>
+      <td>184 536.30</td>
+      <td>399 427.02</td>
+      <td>214 890.72</td>
+      <td>4 213.54</td>
+      <td>OD=174 555₽, age=61д</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>payment_update</td>
+      <td>INC-000040</td>
+      <td>SYN-000080; SYN-000081</td>
+      <td>control</td>
+      <td>Пермский</td>
+      <td>2026-07-02</td>
+      <td>220 430.34</td>
+      <td>75 672.22</td>
+      <td>220 430.34</td>
+      <td>144 758.12</td>
+      <td>2 838.39</td>
+      <td>претензия, OD=151 568₽, age=42д</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>payment_update</td>
+      <td>INC-000054</td>
+      <td>SYN-000108; SYN-000109</td>
+      <td>control</td>
+      <td>Владимирский</td>
+      <td>2026-06-22</td>
+      <td>323 156.46</td>
+      <td>169 850.01</td>
+      <td>310 288.54</td>
+      <td>140 438.53</td>
+      <td>2 753.70</td>
+      <td>OD=349 736₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>payment_update</td>
+      <td>INC-000047</td>
+      <td>SYN-000094; SYN-000095</td>
+      <td>control</td>
+      <td>Мурманский</td>
+      <td>2026-05-29</td>
+      <td>204 489.74</td>
+      <td>53 550.45</td>
+      <td>189 144.57</td>
+      <td>135 594.12</td>
+      <td>2 658.71</td>
+      <td>OD=432 655₽, age=18д</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>new_incident</td>
+      <td>INC-000188</td>
+      <td>SYN-000376</td>
+      <td>control</td>
+      <td>Кемеровский</td>
+      <td>2026-07-27</td>
+      <td>39 214.50</td>
+      <td></td>
+      <td>34 333.97</td>
+      <td></td>
+      <td>-3 713.91</td>
+      <td>OD=77 675₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>new_incident</td>
+      <td>INC-000149</td>
+      <td>SYN-000298; SYN-000299</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-07-30</td>
+      <td>333 615.26</td>
+      <td></td>
+      <td>332 707.77</td>
+      <td></td>
+      <td>-1 487.22</td>
+      <td>соглашение, OD=353 016₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>new_incident</td>
+      <td>INC-000176</td>
+      <td>SYN-000353</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-07-29</td>
+      <td>89 253.71</td>
+      <td></td>
+      <td>88 882.47</td>
+      <td></td>
+      <td>1 006.27</td>
+      <td>соглашение, OD=92 080₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>new_incident</td>
+      <td>INC-000091</td>
+      <td>SYN-000182</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-07-30</td>
+      <td>95 659.05</td>
+      <td></td>
+      <td>95 312.53</td>
+      <td></td>
+      <td>940.91</td>
+      <td>соглашение, OD=80 052₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>new_incident</td>
+      <td>INC-000127</td>
+      <td>SYN-000255</td>
+      <td>model</td>
+      <td>Мурманский</td>
+      <td>2026-08-02</td>
+      <td>249 396.74</td>
+      <td></td>
+      <td>246 123.87</td>
+      <td></td>
+      <td>-627.85</td>
+      <td>OD=22 916₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>payment_update</td>
+      <td>INC-000117</td>
+      <td>SYN-000234; SYN-000235</td>
+      <td>control</td>
+      <td>Ярославский</td>
+      <td>2026-05-23</td>
+      <td>329 880.89</td>
+      <td>86 116.32</td>
+      <td>325 804.95</td>
+      <td>239 688.63</td>
+      <td>4 205.06</td>
+      <td>претензия, OD=186 394₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>payment_update</td>
+      <td>INC-000033</td>
+      <td>SYN-000066; SYN-000067</td>
+      <td>control</td>
+      <td>Пермский</td>
+      <td>2026-06-11</td>
+      <td>373 106.57</td>
+      <td>191 469.70</td>
+      <td>367 080.58</td>
+      <td>175 610.88</td>
+      <td>3 080.89</td>
+      <td>OD=114 946₽, age=55д</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>payment_update</td>
+      <td>INC-000158</td>
+      <td>SYN-000316; SYN-000317</td>
+      <td>control</td>
+      <td>Уфимский</td>
+      <td>2026-06-16</td>
+      <td>372 062.57</td>
+      <td>184 964.26</td>
+      <td>358 067.70</td>
+      <td>173 103.44</td>
+      <td>3 036.90</td>
+      <td>OD=387 382₽, age=10д</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>payment_update</td>
+      <td>INC-000173</td>
+      <td>SYN-000346; SYN-000347</td>
+      <td>control</td>
+      <td>Омский</td>
+      <td>2026-07-10</td>
+      <td>393 358.85</td>
+      <td>213 766.81</td>
+      <td>379 249.26</td>
+      <td>165 482.45</td>
+      <td>2 903.20</td>
+      <td>OD=390 464₽, age=21д</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>payment_update</td>
+      <td>INC-000079</td>
+      <td>SYN-000158; SYN-000159</td>
+      <td>control</td>
+      <td>Мурманский</td>
+      <td>2026-06-17</td>
+      <td>378 510.24</td>
+      <td>212 922.06</td>
+      <td>362 611.62</td>
+      <td>149 689.56</td>
+      <td>2 626.13</td>
+      <td>OD=452 461₽, age=6д</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>new_incident</td>
+      <td>INC-000005</td>
+      <td>SYN-000010</td>
+      <td>control</td>
+      <td>Владимирский</td>
+      <td>2026-08-08</td>
+      <td>80 734.46</td>
+      <td></td>
+      <td>74 202.84</td>
+      <td></td>
+      <td>-2 869.38</td>
+      <td>OD=133 913₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>new_incident</td>
+      <td>INC-000070</td>
+      <td>SYN-000140</td>
+      <td>control</td>
+      <td>Ярославский</td>
+      <td>2026-08-03</td>
+      <td>112 616.86</td>
+      <td></td>
+      <td>106 037.77</td>
+      <td></td>
+      <td>-2 319.68</td>
+      <td>OD=135 530₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>new_incident</td>
+      <td>INC-000170</td>
+      <td>SYN-000340</td>
+      <td>model</td>
+      <td>Уфимский</td>
+      <td>2026-08-06</td>
+      <td>47 855.76</td>
+      <td></td>
+      <td>44 534.83</td>
+      <td></td>
+      <td>1 381.08</td>
+      <td>OD=24 553₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>new_incident</td>
+      <td>INC-000085</td>
+      <td>SYN-000170</td>
+      <td>model</td>
+      <td>Уфимский</td>
+      <td>2026-08-04</td>
+      <td>116 501.47</td>
+      <td></td>
+      <td>106 107.09</td>
+      <td></td>
+      <td>721.03</td>
+      <td>OD=262 201₽, age=60д</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>new_incident</td>
+      <td>INC-000017</td>
+      <td>SYN-000034; SYN-000035</td>
+      <td>model</td>
+      <td>Курский</td>
+      <td>2026-08-06</td>
+      <td>255 223.86</td>
+      <td></td>
+      <td>241 007.60</td>
+      <td></td>
+      <td>-612.84</td>
+      <td>OD=392 814₽, age=38д</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>payment_update</td>
+      <td>INC-000106</td>
+      <td>SYN-000212; SYN-000213</td>
+      <td>control</td>
+      <td>Уфимский</td>
+      <td>2026-06-08</td>
+      <td>475 083.39</td>
+      <td>217 067.61</td>
+      <td>465 821.73</td>
+      <td>248 754.12</td>
+      <td>3 712.75</td>
+      <td>OD=226 902₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>payment_update</td>
+      <td>INC-000166</td>
+      <td>SYN-000332; SYN-000333</td>
+      <td>control</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-06-18</td>
+      <td>482 505.80</td>
+      <td>233 971.04</td>
+      <td>473 150.28</td>
+      <td>239 179.24</td>
+      <td>3 569.84</td>
+      <td>OD=230 099₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>payment_update</td>
+      <td>INC-000006</td>
+      <td>SYN-000012; SYN-000013</td>
+      <td>control</td>
+      <td>Ярославский</td>
+      <td>2026-05-30</td>
+      <td>374 958.79</td>
+      <td>169 579.72</td>
+      <td>374 958.79</td>
+      <td>205 379.07</td>
+      <td>3 065.36</td>
+      <td>претензия, OD=182 554₽, age=45д</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>payment_update</td>
+      <td>INC-000098</td>
+      <td>SYN-000196; SYN-000197</td>
+      <td>control</td>
+      <td>Курский</td>
+      <td>2026-06-10</td>
+      <td>291 424.95</td>
+      <td>90 612.49</td>
+      <td>290 489.71</td>
+      <td>199 877.22</td>
+      <td>2 983.24</td>
+      <td>соглашение, OD=365 176₽, age=19д</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>payment_update</td>
+      <td>INC-000016</td>
+      <td>SYN-000032; SYN-000033</td>
+      <td>model</td>
+      <td>Кемеровский</td>
+      <td>2026-07-05</td>
+      <td>283 557.84</td>
+      <td>33 040.16</td>
+      <td>282 375.69</td>
+      <td>249 335.52</td>
+      <td>-2 374.62</td>
+      <td>соглашение, OD=486 662₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>new_incident</td>
+      <td>INC-000087</td>
+      <td>SYN-000174</td>
+      <td>control</td>
+      <td>Пермский</td>
+      <td>2026-08-10</td>
+      <td>114 012.10</td>
+      <td></td>
+      <td>109 794.11</td>
+      <td></td>
+      <td>-2 102.22</td>
+      <td>OD=54 041₽, age=48д</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>new_incident</td>
+      <td>INC-000130</td>
+      <td>SYN-000261</td>
+      <td>model</td>
+      <td>Уфимский</td>
+      <td>2026-08-15</td>
+      <td>55 892.81</td>
+      <td></td>
+      <td>44 540.91</td>
+      <td></td>
+      <td>1 349.69</td>
+      <td>OD=298 098₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>new_incident</td>
+      <td>INC-000015</td>
+      <td>SYN-000031</td>
+      <td>model</td>
+      <td>Ярославский</td>
+      <td>2026-08-14</td>
+      <td>62 017.69</td>
+      <td></td>
+      <td>56 927.67</td>
+      <td></td>
+      <td>1 291.91</td>
+      <td>OD=82 964₽, age=69д</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>new_incident</td>
+      <td>INC-000114</td>
+      <td>SYN-000228</td>
+      <td>control</td>
+      <td>Магнитогорский</td>
+      <td>2026-08-14</td>
+      <td>190 043.10</td>
+      <td></td>
+      <td>183 180.18</td>
+      <td></td>
+      <td>-984.12</td>
+      <td>OD=144 112₽, age=30д</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>new_incident</td>
+      <td>INC-000186</td>
+      <td>SYN-000373</td>
+      <td>control</td>
+      <td>Курский</td>
+      <td>2026-08-14</td>
+      <td>197 752.80</td>
+      <td></td>
+      <td>188 379.01</td>
+      <td></td>
+      <td>-870.74</td>
+      <td>OD=230 721₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>payment_update</td>
+      <td>INC-000085</td>
+      <td>SYN-000170; SYN-000171</td>
+      <td>model</td>
+      <td>Уфимский</td>
+      <td>2026-08-04</td>
+      <td>373 416.98</td>
+      <td>106 107.09</td>
+      <td>355 001.49</td>
+      <td>248 894.40</td>
+      <td>-2 370.42</td>
+      <td>OD=532 202₽, age=67д</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>payment_update</td>
+      <td>INC-000067</td>
+      <td>SYN-000134; SYN-000135</td>
+      <td>control</td>
+      <td>Владимирский</td>
+      <td>2026-07-11</td>
+      <td>311 018.21</td>
+      <td>142 014.09</td>
+      <td>311 018.21</td>
+      <td>169 004.12</td>
+      <td>2 315.12</td>
+      <td>соглашение, претензия, OD=313 893₽, age=74д</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>payment_update</td>
+      <td>INC-000181</td>
+      <td>SYN-000362; SYN-000363</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-07-16</td>
+      <td>330 594.70</td>
+      <td>86 837.68</td>
+      <td>329 681.45</td>
+      <td>242 843.77</td>
+      <td>-2 312.80</td>
+      <td>соглашение, OD=355 815₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>payment_update</td>
+      <td>INC-000199</td>
+      <td>SYN-000398; SYN-000399</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-06-14</td>
+      <td>412 481.36</td>
+      <td>214 931.36</td>
+      <td>398 044.22</td>
+      <td>183 112.86</td>
+      <td>-1 743.93</td>
+      <td>OD=401 965₽, age=16д</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>payment_update</td>
+      <td>INC-000139</td>
+      <td>SYN-000278; SYN-000279</td>
+      <td>model</td>
+      <td>Пермский</td>
+      <td>2026-07-11</td>
+      <td>365 457.90</td>
+      <td>200 016.44</td>
+      <td>364 605.94</td>
+      <td>164 589.50</td>
+      <td>-1 567.52</td>
+      <td>соглашение, OD=320 497₽, age=86д</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>new_incident</td>
+      <td>INC-000071</td>
+      <td>SYN-000143</td>
+      <td>control</td>
+      <td>Пермский</td>
+      <td>2026-08-22</td>
+      <td>103 303.20</td>
+      <td></td>
+      <td>99 940.53</td>
+      <td></td>
+      <td>-2 063.55</td>
+      <td>OD=24 456₽, age=86д</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>new_incident</td>
+      <td>INC-000041</td>
+      <td>SYN-000082; SYN-000083</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-08-20</td>
+      <td>393 857.33</td>
+      <td></td>
+      <td>393 074.50</td>
+      <td></td>
+      <td>-1 774.28</td>
+      <td>соглашение, OD=289 113₽, age=55д</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>new_incident</td>
+      <td>INC-000135</td>
+      <td>SYN-000271</td>
+      <td>model</td>
+      <td>Уфимский</td>
+      <td>2026-08-21</td>
+      <td>45 904.71</td>
+      <td></td>
+      <td>35 152.54</td>
+      <td></td>
+      <td>1 508.29</td>
+      <td>OD=274 951₽, age=48д</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>new_incident</td>
+      <td>INC-000022</td>
+      <td>SYN-000044</td>
+      <td>model</td>
+      <td>Владимирский</td>
+      <td>2026-08-22</td>
+      <td>109 766.07</td>
+      <td></td>
+      <td>109 202.48</td>
+      <td></td>
+      <td>905.82</td>
+      <td>соглашение, OD=182 919₽, age=65д</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>new_incident</td>
+      <td>INC-000131</td>
+      <td>SYN-000262</td>
+      <td>model</td>
+      <td>Владимирский</td>
+      <td>2026-08-17</td>
+      <td>114 196.27</td>
+      <td></td>
+      <td>114 196.27</td>
+      <td></td>
+      <td>864.03</td>
+      <td>претензия, OD=132 044₽, age=67д</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>payment_update</td>
+      <td>INC-000189</td>
+      <td>SYN-000378; SYN-000379</td>
+      <td>control</td>
+      <td>Ярославский</td>
+      <td>2026-06-03</td>
+      <td>445 935.08</td>
+      <td>219 275.70</td>
+      <td>445 346.49</td>
+      <td>226 070.79</td>
+      <td>2 935.98</td>
+      <td>соглашение, OD=196 467₽, age=31д</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>payment_update</td>
+      <td>INC-000130</td>
+      <td>SYN-000260; SYN-000261</td>
+      <td>control</td>
+      <td>Ярославский</td>
+      <td>2026-08-15</td>
+      <td>257 043.26</td>
+      <td>44 540.91</td>
+      <td>242 654.06</td>
+      <td>198 113.15</td>
+      <td>2 572.90</td>
+      <td>OD=397 536₽, age=53д</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>payment_update</td>
+      <td>INC-000083</td>
+      <td>SYN-000166; SYN-000167</td>
+      <td>control</td>
+      <td>Мурманский</td>
+      <td>2026-05-26</td>
+      <td>368 211.75</td>
+      <td>156 493.86</td>
+      <td>354 299.16</td>
+      <td>197 805.31</td>
+      <td>2 568.90</td>
+      <td>OD=379 542₽, age=79д</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>payment_update</td>
+      <td>INC-000147</td>
+      <td>SYN-000294; SYN-000295</td>
+      <td>control</td>
+      <td>Ярославский</td>
+      <td>2026-07-11</td>
+      <td>300 629.94</td>
+      <td>103 995.26</td>
+      <td>284 034.15</td>
+      <td>180 038.89</td>
+      <td>2 338.17</td>
+      <td>OD=471 818₽, age=56д</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>payment_update</td>
+      <td>INC-000011</td>
+      <td>SYN-000022; SYN-000023</td>
+      <td>control</td>
+      <td>Мурманский</td>
+      <td>2026-06-27</td>
+      <td>255 620.73</td>
+      <td>64 672.32</td>
+      <td>243 078.12</td>
+      <td>178 405.80</td>
+      <td>2 316.96</td>
+      <td>OD=332 728₽, age=90д</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>new_incident</td>
+      <td>INC-000023</td>
+      <td>SYN-000047</td>
+      <td>control</td>
+      <td>Уфимский</td>
+      <td>2026-08-25</td>
+      <td>112 123.64</td>
+      <td></td>
+      <td>101 133.86</td>
+      <td></td>
+      <td>-1 963.13</td>
+      <td>OD=285 067₽, age=12д</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>new_incident</td>
+      <td>INC-000052</td>
+      <td>SYN-000105</td>
+      <td>control</td>
+      <td>Пермский</td>
+      <td>2026-08-24</td>
+      <td>113 303.93</td>
+      <td></td>
+      <td>103 806.80</td>
+      <td></td>
+      <td>-1 948.00</td>
+      <td>OD=234 922₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>new_incident</td>
+      <td>INC-000101</td>
+      <td>SYN-000203</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-08-27</td>
+      <td>62 344.95</td>
+      <td></td>
+      <td>51 669.11</td>
+      <td></td>
+      <td>1 478.16</td>
+      <td>OD=271 811₽, age=58д</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>new_incident</td>
+      <td>INC-000096</td>
+      <td>SYN-000192; SYN-000193</td>
+      <td>control</td>
+      <td>Владимирский</td>
+      <td>2026-08-28</td>
+      <td>344 694.36</td>
+      <td></td>
+      <td>331 101.61</td>
+      <td></td>
+      <td>1 018.55</td>
+      <td>OD=374 424₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>new_incident</td>
+      <td>INC-000039</td>
+      <td>SYN-000078</td>
+      <td>model</td>
+      <td>Курский</td>
+      <td>2026-08-27</td>
+      <td>117 268.77</td>
+      <td></td>
+      <td>111 551.99</td>
+      <td></td>
+      <td>969.61</td>
+      <td>OD=106 159₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>payment_update</td>
+      <td>INC-000135</td>
+      <td>SYN-000270; SYN-000271</td>
+      <td>control</td>
+      <td>Омский</td>
+      <td>2026-08-21</td>
+      <td>295 704.60</td>
+      <td>35 152.54</td>
+      <td>283 213.98</td>
+      <td>248 061.43</td>
+      <td>2 988.69</td>
+      <td>OD=333 267₽, age=55д</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>payment_update</td>
+      <td>INC-000074</td>
+      <td>SYN-000148; SYN-000149</td>
+      <td>control</td>
+      <td>Мурманский</td>
+      <td>2026-07-28</td>
+      <td>380 346.53</td>
+      <td>135 268.66</td>
+      <td>369 336.11</td>
+      <td>234 067.45</td>
+      <td>2 820.09</td>
+      <td>претензия, OD=327 514₽, age=95д</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>payment_update</td>
+      <td>INC-000193</td>
+      <td>SYN-000386; SYN-000387</td>
+      <td>control</td>
+      <td>Уфимский</td>
+      <td>2026-07-07</td>
+      <td>339 340.93</td>
+      <td>127 472.07</td>
+      <td>328 186.49</td>
+      <td>200 714.42</td>
+      <td>2 418.25</td>
+      <td>претензия, OD=354 176₽, age=33д</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>payment_update</td>
+      <td>INC-000184</td>
+      <td>SYN-000368; SYN-000369</td>
+      <td>model</td>
+      <td>Кемеровский</td>
+      <td>2026-06-12</td>
+      <td>451 214.37</td>
+      <td>204 037.17</td>
+      <td>449 893.05</td>
+      <td>245 855.88</td>
+      <td>-2 255.56</td>
+      <td>соглашение, OD=549 113₽, age=53д</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>payment_update</td>
+      <td>INC-000003</td>
+      <td>SYN-000006; SYN-000007</td>
+      <td>control</td>
+      <td>Магнитогорский</td>
+      <td>2026-07-15</td>
+      <td>351 242.12</td>
+      <td>167 822.67</td>
+      <td>350 374.50</td>
+      <td>182 551.83</td>
+      <td>2 199.42</td>
+      <td>соглашение, OD=330 285₽, age=51д</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>new_incident</td>
+      <td>INC-000160</td>
+      <td>SYN-000321</td>
+      <td>control</td>
+      <td>Магнитогорский</td>
+      <td>2026-09-05</td>
+      <td>136 454.57</td>
+      <td></td>
+      <td>132 794.07</td>
+      <td></td>
+      <td>-1 576.89</td>
+      <td>OD=36 119₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>new_incident</td>
+      <td>INC-000078</td>
+      <td>SYN-000156; SYN-000157</td>
+      <td>model</td>
+      <td>Уфимский</td>
+      <td>2026-09-04</td>
+      <td>403 020.27</td>
+      <td></td>
+      <td>402 105.33</td>
+      <td></td>
+      <td>-1 567.07</td>
+      <td>соглашение, OD=350 734₽, age=86д</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>new_incident</td>
+      <td>INC-000032</td>
+      <td>SYN-000064; SYN-000065</td>
+      <td>control</td>
+      <td>Омский</td>
+      <td>2026-09-06</td>
+      <td>339 709.46</td>
+      <td></td>
+      <td>338 649.58</td>
+      <td></td>
+      <td>842.81</td>
+      <td>соглашение, OD=421 275₽, age=74д</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>new_incident</td>
+      <td>INC-000009</td>
+      <td>SYN-000019</td>
+      <td>model</td>
+      <td>Уфимский</td>
+      <td>2026-09-02</td>
+      <td>161 507.51</td>
+      <td></td>
+      <td>150 408.82</td>
+      <td></td>
+      <td>628.50</td>
+      <td>OD=286 783₽, age=46д</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>new_incident</td>
+      <td>INC-000049</td>
+      <td>SYN-000098</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-09-04</td>
+      <td>204 878.72</td>
+      <td></td>
+      <td>201 267.82</td>
+      <td></td>
+      <td>234.21</td>
+      <td>OD=34 430₽, age=0д</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>payment_update</td>
+      <td>INC-000089</td>
+      <td>SYN-000178; SYN-000179</td>
+      <td>control</td>
+      <td>Омский</td>
+      <td>2026-08-05</td>
+      <td>440 716.74</td>
+      <td>229 659.26</td>
+      <td>429 833.86</td>
+      <td>200 174.60</td>
+      <td>2 300.86</td>
+      <td>OD=278 515₽, age=63д</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>payment_update</td>
+      <td>INC-000190</td>
+      <td>SYN-000380; SYN-000381</td>
+      <td>control</td>
+      <td>Пермский</td>
+      <td>2026-05-29</td>
+      <td>375 761.13</td>
+      <td>180 297.90</td>
+      <td>374 832.90</td>
+      <td>194 535.00</td>
+      <td>2 236.03</td>
+      <td>соглашение, OD=356 702₽, age=92д</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>payment_update</td>
+      <td>INC-000001</td>
+      <td>SYN-000002; SYN-000003</td>
+      <td>model</td>
+      <td>Мурманский</td>
+      <td>2026-08-26</td>
+      <td>428 341.48</td>
+      <td>190 347.45</td>
+      <td>427 622.37</td>
+      <td>237 274.92</td>
+      <td>-2 157.04</td>
+      <td>соглашение, OD=259 078₽, age=42д</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>payment_update</td>
+      <td>INC-000071</td>
+      <td>SYN-000142; SYN-000143</td>
+      <td>control</td>
+      <td>Уфимский</td>
+      <td>2026-08-22</td>
+      <td>287 081.60</td>
+      <td>99 940.53</td>
+      <td>283 058.63</td>
+      <td>183 118.10</td>
+      <td>2 104.81</td>
+      <td>OD=46 355₽, age=100д</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>payment_update</td>
+      <td>INC-000172</td>
+      <td>SYN-000344; SYN-000345</td>
+      <td>model</td>
+      <td>Магнитогорский</td>
+      <td>2026-07-24</td>
+      <td>385 814.39</td>
+      <td>183 395.21</td>
+      <td>384 983.52</td>
+      <td>201 588.31</td>
+      <td>-1 832.62</td>
+      <td>претензия, OD=309 353₽, age=79д</td>
+    </tr>
+    <tr>
+      <td>2026-09-06</td>
+      <td>2026-09-13</td>
+      <td>new_incident</td>
+      <td>INC-000159</td>
+      <td>SYN-000318</td>
+      <td>control</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-09-09</td>
+      <td>214 728.48</td>
+      <td></td>
+      <td>210 653.28</td>
+      <td></td>
+      <td>-722.97</td>
+      <td>OD=48 659₽, age=74д</td>
+    </tr>
+    <tr>
+      <td>2026-09-06</td>
+      <td>2026-09-13</td>
+      <td>new_incident</td>
+      <td>INC-000192</td>
+      <td>SYN-000385</td>
+      <td>control</td>
+      <td>Омский</td>
+      <td>2026-09-13</td>
+      <td>252 437.40</td>
+      <td></td>
+      <td>246 981.64</td>
+      <td></td>
+      <td>-294.46</td>
+      <td>OD=95 603₽, age=58д</td>
+    </tr>
+    <tr>
+      <td>2026-09-06</td>
+      <td>2026-09-13</td>
+      <td>payment_update</td>
+      <td>INC-000081</td>
+      <td>SYN-000162; SYN-000163</td>
+      <td>model</td>
+      <td>Мурманский</td>
+      <td>2026-06-29</td>
+      <td>454 536.43</td>
+      <td>206 046.47</td>
+      <td>453 535.31</td>
+      <td>247 488.84</td>
+      <td>-2 402.80</td>
+      <td>соглашение, OD=392 708₽, age=78д</td>
+    </tr>
+    <tr>
+      <td>2026-09-06</td>
+      <td>2026-09-13</td>
+      <td>payment_update</td>
+      <td>INC-000097</td>
+      <td>SYN-000194; SYN-000195</td>
+      <td>model</td>
+      <td>Пермский</td>
+      <td>2026-07-17</td>
+      <td>294 011.15</td>
+      <td>65 319.85</td>
+      <td>293 561.46</td>
+      <td>228 241.61</td>
+      <td>-2 215.94</td>
+      <td>соглашение, OD=128 794₽, age=43д</td>
+    </tr>
+    <tr>
+      <td>2026-09-06</td>
+      <td>2026-09-13</td>
+      <td>payment_update</td>
+      <td>INC-000175</td>
+      <td>SYN-000350; SYN-000351</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-08-24</td>
+      <td>474 130.70</td>
+      <td>234 001.70</td>
+      <td>461 308.65</td>
+      <td>227 306.95</td>
+      <td>-2 206.86</td>
+      <td>OD=346 887₽, age=19д</td>
+    </tr>
+    <tr>
+      <td>2026-09-06</td>
+      <td>2026-09-13</td>
+      <td>payment_update</td>
+      <td>INC-000056</td>
+      <td>SYN-000112; SYN-000113</td>
+      <td>model</td>
+      <td>Пермский</td>
+      <td>2026-08-04</td>
+      <td>419 004.91</td>
+      <td>193 371.69</td>
+      <td>410 541.10</td>
+      <td>217 169.41</td>
+      <td>-2 108.44</td>
+      <td>OD=196 832₽, age=65д</td>
+    </tr>
+    <tr>
+      <td>2026-09-06</td>
+      <td>2026-09-13</td>
+      <td>payment_update</td>
+      <td>INC-000167</td>
+      <td>SYN-000334; SYN-000335</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-08-19</td>
+      <td>373 524.13</td>
+      <td>146 948.48</td>
+      <td>358 811.32</td>
+      <td>211 862.83</td>
+      <td>-2 056.92</td>
+      <td>OD=404 090₽, age=110д</td>
+    </tr>
+    <tr>
+      <td>2026-09-13</td>
+      <td>2026-09-18</td>
+      <td>new_incident</td>
+      <td>INC-000154</td>
+      <td>SYN-000308; SYN-000309</td>
+      <td>control</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-09-16</td>
+      <td>259 376.95</td>
+      <td></td>
+      <td>245 605.73</td>
+      <td></td>
+      <td>-188.77</td>
+      <td>OD=374 210₽, age=87д</td>
+    </tr>
+    <tr>
+      <td>2026-09-13</td>
+      <td>2026-09-18</td>
+      <td>payment_update</td>
+      <td>INC-000091</td>
+      <td>SYN-000182; SYN-000183</td>
+      <td>model</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-07-30</td>
+      <td>333 011.00</td>
+      <td>95 312.53</td>
+      <td>332 086.73</td>
+      <td>236 774.20</td>
+      <td>-2 344.30</td>
+      <td>соглашение, OD=356 319₽, age=70д</td>
+    </tr>
+    <tr>
+      <td>2026-09-13</td>
+      <td>2026-09-18</td>
+      <td>payment_update</td>
+      <td>INC-000192</td>
+      <td>SYN-000384; SYN-000385</td>
+      <td>control</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>2026-09-13</td>
+      <td>481 837.75</td>
+      <td>246 981.64</td>
+      <td>474 812.95</td>
+      <td>227 831.32</td>
+      <td>2 301.33</td>
+      <td>OD=148 383₽, age=63д</td>
+    </tr>
+    <tr>
+      <td>2026-09-13</td>
+      <td>2026-09-18</td>
+      <td>payment_update</td>
+      <td>INC-000046</td>
+      <td>SYN-000092; SYN-000093</td>
+      <td>control</td>
+      <td>Курский</td>
+      <td>2026-08-07</td>
+      <td>398 225.03</td>
+      <td>167 039.45</td>
+      <td>389 959.39</td>
+      <td>222 919.93</td>
+      <td>2 251.72</td>
+      <td>OD=188 682₽, age=99д</td>
+    </tr>
+    <tr>
+      <td>2026-09-13</td>
+      <td>2026-09-18</td>
+      <td>payment_update</td>
+      <td>INC-000005</td>
+      <td>SYN-000010; SYN-000011</td>
+      <td>control</td>
+      <td>Владимирский</td>
+      <td>2026-08-08</td>
+      <td>285 887.26</td>
+      <td>74 202.84</td>
+      <td>276 398.69</td>
+      <td>202 195.84</td>
+      <td>2 042.38</td>
+      <td>OD=229 109₽, age=111д</td>
+    </tr>
+    <tr>
+      <td>2026-09-13</td>
+      <td>2026-09-18</td>
+      <td>payment_update</td>
+      <td>INC-000019</td>
+      <td>SYN-000038; SYN-000039</td>
+      <td>model</td>
+      <td>Омский</td>
+      <td>2026-06-29</td>
+      <td>327 250.65</td>
+      <td>118 506.77</td>
+      <td>322 262.56</td>
+      <td>203 755.80</td>
+      <td>-2 017.38</td>
+      <td>претензия, OD=269 827₽, age=97д</td>
+    </tr>
+  </tbody>
+</table></div><div class="legend"><h4>Колонки</h4><ul><li><code>prev_week_end</code> → <b>пред. неделя</b> — Конец предыдущей ok-недели</li><li><code>week_end</code> → <b>тек. неделя</b> — Конец текущей ok-недели</li><li><code>driver_kind</code> → <b>тип</b> — new_incident (новый) или payment_update (Δ оплаты)</li><li><code>incident_id</code> → <b>incident</b> — Номер инцидента — ключ единицы ITT</li><li><code>loss_ids</code> → <b>LossID</b> — LossID внутри инцидента через «; »</li><li><code>group</code> — control или model после схлопывания Result</li><li><code>filial</code> — Филиал (мода по убыткам инцидента)</li><li><code>application_date</code> → <b>дата заявл.</b> — Мин. ДатаЗаявления по убыткам инцидента</li><li><code>yult</code> → <b>Yult</b> — Yult инцидента на текущем срезе, ₽<div class="eq">paid + NPV(remaining ПСР)</div></li><li><code>paid_prev</code> → <b>paid prev</b> — Оплата на prev; пусто у new_incident<div class="eq">paid на срезе prev_week_end</div></li><li><code>paid_cur</code> → <b>paid cur</b> — Оплата на текущем срезе, ₽<div class="eq">paid на срезе week_end</div></li><li><code>delta_paid</code> → <b>Δpaid</b> — Изменение оплаты; пусто у new_incident<div class="eq">paid_cur − paid_prev</div></li><li><code>estimated_itt_pull</code> → <b>вклад ≈</b> — Оценка вклада в Δ ITT, ₽ (без страт. по филиалам)<div class="eq">new: sign×(Yult−mean_group_prev)/(N_prev+1); update: sign×Δpaid/N_cur; sign=+1 control, −1 model</div></li><li><code>severity</code> — Соглашение / претензия / ФУ / суд / OD / age</li></ul><h4>Строки</h4><ul><li>На пару недель: new_ids = cur∖prev и shared с |Δpaid|≥1.</li><li>В топ: до 5 new_incident и до 5 payment_update по |estimated_itt_pull|.</li></ul><h4>Как считается</h4><div class="eq">Пример new control Yult=400, mean_prev=100, N_prev=2: pull = +1×(400−100)/3 = +100</div><div class="eq">Пример payment_update model Δpaid=−60, N=2: pull = −1×(−60)/2 = +30</div><h4>Пояснения</h4><ul><li>Приближение без стратификации; точный ITT — в главной таблице и блоке филиалов.</li></ul></div>
+  </div>
+  <h2>Топ филиалов по вкладу в Δ Yult</h2>
+  <div class="card">
+    <div class="formula"><b>Вклад филиала в стратифицированный ITT</b><div class="eq"><b>effect_f</b> = mean(Yult|control,f) − mean(Yult|model,f)</div><div class="eq"><b>w_f</b> = N<sub>f</sub> / Σ<sub>g</sub> N<sub>g</sub>  (N — все eligible инциденты филиала)</div><div class="eq"><b>contribution_f</b> = w_f × effect_f</div><div class="eq"><b>delta_contribution</b> = contribution_f(week) − contribution_f(prev)</div><div class="note">В топ — до 5 филиалов с наибольшим |delta_contribution| на пару недель.</div></div>
+    <div class="scroll"><table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>пред. неделя</th>
+      <th>тек. неделя</th>
+      <th>filial</th>
+      <th>n prev</th>
+      <th>n cur</th>
+      <th>ITT_f prev</th>
+      <th>ITT_f cur</th>
+      <th>Δ вклад</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>2026-06-07</td>
+      <td>2026-06-14</td>
+      <td>Мурманский</td>
+      <td>9.00</td>
+      <td>13</td>
+      <td>-116 473.18</td>
+      <td>-84 886.39</td>
+      <td>13 962.01</td>
+    </tr>
+    <tr>
+      <td>2026-06-07</td>
+      <td>2026-06-14</td>
+      <td>Ярославский</td>
+      <td>0.00</td>
+      <td>9</td>
+      <td></td>
+      <td>-65 366.83</td>
+      <td>-7 262.98</td>
+    </tr>
+    <tr>
+      <td>2026-06-07</td>
+      <td>2026-06-14</td>
+      <td>Кемеровский</td>
+      <td>0.00</td>
+      <td>6</td>
+      <td></td>
+      <td>73 660.10</td>
+      <td>5 456.30</td>
+    </tr>
+    <tr>
+      <td>2026-06-07</td>
+      <td>2026-06-14</td>
+      <td>Курский</td>
+      <td>4.00</td>
+      <td>6</td>
+      <td>-51 839.35</td>
+      <td>-9 791.05</td>
+      <td>4 731.51</td>
+    </tr>
+    <tr>
+      <td>2026-06-07</td>
+      <td>2026-06-14</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>0.00</td>
+      <td>4</td>
+      <td></td>
+      <td>65 522.22</td>
+      <td>3 235.67</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>Омский</td>
+      <td>11.00</td>
+      <td>10</td>
+      <td>-15 244.44</td>
+      <td>170 854.35</td>
+      <td>20 441.67</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>Мурманский</td>
+      <td>13.00</td>
+      <td>14</td>
+      <td>-84 886.39</td>
+      <td>-42 889.09</td>
+      <td>7 167.32</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>Магнитогорский</td>
+      <td>13.00</td>
+      <td>17</td>
+      <td>22 591.71</td>
+      <td>56 979.12</td>
+      <td>6 789.71</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>Уфимский</td>
+      <td>10.00</td>
+      <td>11</td>
+      <td>9 226.20</td>
+      <td>-31 778.89</td>
+      <td>-4 897.83</td>
+    </tr>
+    <tr>
+      <td>2026-06-14</td>
+      <td>2026-06-21</td>
+      <td>Пермский</td>
+      <td>4.00</td>
+      <td>4</td>
+      <td>105 397.77</td>
+      <td>50 355.41</td>
+      <td>-3 039.00</td>
+    </tr>
+    <tr>
+      <td>2026-06-21</td>
+      <td>2026-06-28</td>
+      <td>Омский</td>
+      <td>10.00</td>
+      <td>11</td>
+      <td>170 854.35</td>
+      <td>132 777.51</td>
+      <td>-4 461.41</td>
+    </tr>
+    <tr>
+      <td>2026-06-21</td>
+      <td>2026-06-28</td>
+      <td>Пермский</td>
+      <td>4.00</td>
+      <td>5</td>
+      <td>50 355.41</td>
+      <td>-3 222.27</td>
+      <td>-2 319.27</td>
+    </tr>
+    <tr>
+      <td>2026-06-21</td>
+      <td>2026-06-28</td>
+      <td>Кемеровский</td>
+      <td>8.00</td>
+      <td>10</td>
+      <td>48 277.43</td>
+      <td>20 299.26</td>
+      <td>-2 219.63</td>
+    </tr>
+    <tr>
+      <td>2026-06-21</td>
+      <td>2026-06-28</td>
+      <td>Владимирский</td>
+      <td>5.00</td>
+      <td>7</td>
+      <td>-91 857.98</td>
+      <td>-103 358.06</td>
+      <td>-1 951.94</td>
+    </tr>
+    <tr>
+      <td>2026-06-21</td>
+      <td>2026-06-28</td>
+      <td>Мурманский</td>
+      <td>14.00</td>
+      <td>14</td>
+      <td>-42 889.09</td>
+      <td>-38 443.68</td>
+      <td>1 330.60</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>Кемеровский</td>
+      <td>10.00</td>
+      <td>12</td>
+      <td>20 299.26</td>
+      <td>163 518.49</td>
+      <td>14 695.74</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>Мурманский</td>
+      <td>14.00</td>
+      <td>14</td>
+      <td>-38 443.68</td>
+      <td>12 578.66</td>
+      <td>6 618.21</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>Владимирский</td>
+      <td>7.00</td>
+      <td>10</td>
+      <td>-103 358.06</td>
+      <td>-38 288.63</td>
+      <td>3 645.74</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>Уфимский</td>
+      <td>12.00</td>
+      <td>11</td>
+      <td>-31 245.59</td>
+      <td>-3 703.65</td>
+      <td>3 225.67</td>
+    </tr>
+    <tr>
+      <td>2026-06-28</td>
+      <td>2026-07-05</td>
+      <td>Магнитогорский</td>
+      <td>18.00</td>
+      <td>20</td>
+      <td>60 895.90</td>
+      <td>45 033.36</td>
+      <td>-2 806.53</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>Омский</td>
+      <td>13.00</td>
+      <td>11</td>
+      <td>142 159.73</td>
+      <td>89 456.13</td>
+      <td>-8 092.30</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>Владимирский</td>
+      <td>10.00</td>
+      <td>11</td>
+      <td>-38 288.63</td>
+      <td>15 270.92</td>
+      <td>4 536.95</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>9.00</td>
+      <td>13</td>
+      <td>38 992.99</td>
+      <td>69 836.29</td>
+      <td>4 009.59</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>Магнитогорский</td>
+      <td>20.00</td>
+      <td>20</td>
+      <td>45 033.36</td>
+      <td>29 611.71</td>
+      <td>-3 077.12</td>
+    </tr>
+    <tr>
+      <td>2026-07-05</td>
+      <td>2026-07-12</td>
+      <td>Кемеровский</td>
+      <td>12.00</td>
+      <td>13</td>
+      <td>163 518.49</td>
+      <td>138 018.03</td>
+      <td>-2 827.20</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>Магнитогорский</td>
+      <td>20.00</td>
+      <td>25</td>
+      <td>29 611.71</td>
+      <td>58 875.51</td>
+      <td>6 110.21</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>Мурманский</td>
+      <td>14.00</td>
+      <td>16</td>
+      <td>21 595.72</td>
+      <td>-1 730.17</td>
+      <td>-2 526.29</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>Уфимский</td>
+      <td>16.00</td>
+      <td>16</td>
+      <td>-6 889.84</td>
+      <td>13 922.56</td>
+      <td>2 462.19</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>Омский</td>
+      <td>11.00</td>
+      <td>12</td>
+      <td>89 456.13</td>
+      <td>59 701.49</td>
+      <td>-2 377.93</td>
+    </tr>
+    <tr>
+      <td>2026-07-12</td>
+      <td>2026-07-19</td>
+      <td>Владимирский</td>
+      <td>11.00</td>
+      <td>11</td>
+      <td>15 270.92</td>
+      <td>38 489.06</td>
+      <td>1 775.81</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>Ярославский</td>
+      <td>10.00</td>
+      <td>11</td>
+      <td>-86 355.46</td>
+      <td>74 081.63</td>
+      <td>11 763.71</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>Магнитогорский</td>
+      <td>25.00</td>
+      <td>27</td>
+      <td>58 875.51</td>
+      <td>43 511.56</td>
+      <td>-2 727.94</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>Мурманский</td>
+      <td>16.00</td>
+      <td>16</td>
+      <td>-1 730.17</td>
+      <td>22 205.67</td>
+      <td>2 601.21</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>14.00</td>
+      <td>16</td>
+      <td>53 979.55</td>
+      <td>31 548.70</td>
+      <td>-2 065.52</td>
+    </tr>
+    <tr>
+      <td>2026-07-19</td>
+      <td>2026-07-26</td>
+      <td>Пермский</td>
+      <td>10.00</td>
+      <td>12</td>
+      <td>36 072.45</td>
+      <td>53 930.74</td>
+      <td>1 758.82</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>Омский</td>
+      <td>13.00</td>
+      <td>14</td>
+      <td>65 316.34</td>
+      <td>133 859.46</td>
+      <td>5 975.46</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>16.00</td>
+      <td>17</td>
+      <td>31 548.70</td>
+      <td>71 994.53</td>
+      <td>4 238.75</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>Кемеровский</td>
+      <td>14.00</td>
+      <td>17</td>
+      <td>119 616.77</td>
+      <td>81 901.39</td>
+      <td>-2 613.08</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>Уфимский</td>
+      <td>16.00</td>
+      <td>16</td>
+      <td>13 924.94</td>
+      <td>36 542.96</td>
+      <td>2 148.90</td>
+    </tr>
+    <tr>
+      <td>2026-07-26</td>
+      <td>2026-08-02</td>
+      <td>Мурманский</td>
+      <td>16.00</td>
+      <td>19</td>
+      <td>22 205.67</td>
+      <td>35 364.16</td>
+      <td>1 798.88</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>Уфимский</td>
+      <td>16.00</td>
+      <td>21</td>
+      <td>36 542.96</td>
+      <td>78 156.00</td>
+      <td>5 888.01</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>17.00</td>
+      <td>19</td>
+      <td>71 994.53</td>
+      <td>121 931.26</td>
+      <td>5 819.73</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>Омский</td>
+      <td>14.00</td>
+      <td>12</td>
+      <td>133 859.46</td>
+      <td>125 384.09</td>
+      <td>-2 964.98</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>Кемеровский</td>
+      <td>17.00</td>
+      <td>18</td>
+      <td>81 901.39</td>
+      <td>55 179.67</td>
+      <td>-2 927.41</td>
+    </tr>
+    <tr>
+      <td>2026-08-02</td>
+      <td>2026-08-09</td>
+      <td>Магнитогорский</td>
+      <td>29.00</td>
+      <td>27</td>
+      <td>39 404.46</td>
+      <td>32 837.32</td>
+      <td>-1 987.36</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>19.00</td>
+      <td>21</td>
+      <td>121 931.26</td>
+      <td>83 427.01</td>
+      <td>-3 626.64</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>Уфимский</td>
+      <td>21.00</td>
+      <td>22</td>
+      <td>78 156.00</td>
+      <td>48 264.30</td>
+      <td>-3 577.05</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>Ярославский</td>
+      <td>10.00</td>
+      <td>11</td>
+      <td>103 726.08</td>
+      <td>147 388.71</td>
+      <td>3 077.70</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>Пермский</td>
+      <td>11.00</td>
+      <td>12</td>
+      <td>64 151.27</td>
+      <td>16 713.93</td>
+      <td>-2 975.92</td>
+    </tr>
+    <tr>
+      <td>2026-08-09</td>
+      <td>2026-08-16</td>
+      <td>Владимирский</td>
+      <td>15.00</td>
+      <td>15</td>
+      <td>46 128.68</td>
+      <td>69 951.20</td>
+      <td>1 871.91</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>21.00</td>
+      <td>22</td>
+      <td>83 427.01</td>
+      <td>53 652.56</td>
+      <td>-3 427.53</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>Магнитогорский</td>
+      <td>28.00</td>
+      <td>27</td>
+      <td>27 682.82</td>
+      <td>7 158.45</td>
+      <td>-3 304.18</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>Курский</td>
+      <td>20.00</td>
+      <td>20</td>
+      <td>16 071.68</td>
+      <td>251.86</td>
+      <td>-1 778.43</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>Мурманский</td>
+      <td>19.00</td>
+      <td>18</td>
+      <td>42 625.81</td>
+      <td>59 303.08</td>
+      <td>1 251.44</td>
+    </tr>
+    <tr>
+      <td>2026-08-16</td>
+      <td>2026-08-23</td>
+      <td>Владимирский</td>
+      <td>15.00</td>
+      <td>19</td>
+      <td>69 951.20</td>
+      <td>65 723.87</td>
+      <td>891.94</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>Кемеровский</td>
+      <td>18.00</td>
+      <td>21</td>
+      <td>50 041.11</td>
+      <td>-1 771.66</td>
+      <td>-5 089.10</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>Ярославский</td>
+      <td>14.00</td>
+      <td>12</td>
+      <td>123 356.71</td>
+      <td>69 076.50</td>
+      <td>-5 068.56</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>22.00</td>
+      <td>24</td>
+      <td>53 652.56</td>
+      <td>69 612.96</td>
+      <td>2 286.64</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>Магнитогорский</td>
+      <td>27.00</td>
+      <td>26</td>
+      <td>7 158.45</td>
+      <td>19 596.01</td>
+      <td>1 603.20</td>
+    </tr>
+    <tr>
+      <td>2026-08-23</td>
+      <td>2026-08-30</td>
+      <td>Владимирский</td>
+      <td>19.00</td>
+      <td>20</td>
+      <td>65 723.87</td>
+      <td>76 866.60</td>
+      <td>1 220.23</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>Магнитогорский</td>
+      <td>26.00</td>
+      <td>27</td>
+      <td>19 596.01</td>
+      <td>-25 058.74</td>
+      <td>-6 088.07</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>Мурманский</td>
+      <td>19.00</td>
+      <td>19</td>
+      <td>69 216.25</td>
+      <td>28 485.54</td>
+      <td>-4 102.19</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>Кемеровский</td>
+      <td>21.00</td>
+      <td>21</td>
+      <td>-1 771.66</td>
+      <td>17 970.65</td>
+      <td>2 109.43</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>Пермский</td>
+      <td>14.00</td>
+      <td>15</td>
+      <td>-9 368.29</td>
+      <td>14 538.23</td>
+      <td>1 790.08</td>
+    </tr>
+    <tr>
+      <td>2026-08-30</td>
+      <td>2026-09-06</td>
+      <td>Омский</td>
+      <td>15.00</td>
+      <td>16</td>
+      <td>114 220.07</td>
+      <td>128 669.79</td>
+      <td>1 526.89</td>
+    </tr>
+    <tr>
+      <td>2026-09-06</td>
+      <td>2026-09-13</td>
+      <td>Петропавловск-Камчатский</td>
+      <td>25.00</td>
+      <td>25</td>
+      <td>67 444.74</td>
+      <td>-9 832.18</td>
+      <td>-9 794.18</td>
+    </tr>
+    <tr>
+      <td>2026-09-06</td>
+      <td>2026-09-13</td>
+      <td>Владимирский</td>
+      <td>19.00</td>
+      <td>19</td>
+      <td>81 148.40</td>
+      <td>21 459.00</td>
+      <td>-5 777.65</td>
+    </tr>
+    <tr>
+      <td>2026-09-06</td>
+      <td>2026-09-13</td>
+      <td>Мурманский</td>
+      <td>19.00</td>
+      <td>21</td>
+      <td>28 485.54</td>
+      <td>-22 317.63</td>
+      <td>-5 102.46</td>
+    </tr>
+    <tr>
+      <td>2026-09-06</td>
+      <td>2026-09-13</td>
+      <td>Кемеровский</td>
+      <td>21.00</td>
+      <td>21</td>
+      <td>17 970.65</td>
+      <td>-18 380.99</td>
+      <td>-3 855.36</td>
+    </tr>
+    <tr>
+      <td>2026-09-06</td>
+      <td>2026-09-13</td>
+      <td>Курский</td>
+      <td>20.00</td>
+      <td>20</td>
+      <td>-5 958.75</td>
+      <td>-36 485.77</td>
+      <td>-3 061.96</td>
+    </tr>
+    <tr>
+      <td>2026-09-13</td>
+      <td>2026-09-18</td>
+      <td>Курский</td>
+      <td>20.00</td>
+      <td>22</td>
+      <td>-36 485.77</td>
+      <td>-3 670.64</td>
+      <td>3 263.14</td>
+    </tr>
+    <tr>
+      <td>2026-09-13</td>
+      <td>2026-09-18</td>
+      <td>Уфимский</td>
+      <td>22.00</td>
+      <td>22</td>
+      <td>25 468.88</td>
+      <td>6 674.13</td>
+      <td>-2 081.50</td>
+    </tr>
+    <tr>
+      <td>2026-09-13</td>
+      <td>2026-09-18</td>
+      <td>Омский</td>
+      <td>18.00</td>
+      <td>17</td>
+      <td>96 864.37</td>
+      <td>78 881.92</td>
+      <td>-2 056.64</td>
+    </tr>
+    <tr>
+      <td>2026-09-13</td>
+      <td>2026-09-18</td>
+      <td>Мурманский</td>
+      <td>21.00</td>
+      <td>21</td>
+      <td>-22 317.63</td>
+      <td>-38 891.91</td>
+      <td>-1 728.52</td>
+    </tr>
+    <tr>
+      <td>2026-09-13</td>
+      <td>2026-09-18</td>
+      <td>Магнитогорский</td>
+      <td>26.00</td>
+      <td>25</td>
+      <td>-35 986.80</td>
+      <td>-27 684.50</td>
+      <td>1 241.23</td>
+    </tr>
+  </tbody>
+</table></div><div class="legend"><h4>Колонки</h4><ul><li><code>prev_week_end</code> → <b>пред. неделя</b> — Конец предыдущей ok-недели</li><li><code>week_end</code> → <b>тек. неделя</b> — Конец текущей ok-недели</li><li><code>filial</code> — Филиал</li><li><code>n_prev</code> → <b>n prev</b> — N инцидентов филиала на prev</li><li><code>n_cur</code> → <b>n cur</b> — N инцидентов филиала на текущей</li><li><code>effect_prev</code> → <b>ITT_f prev</b> — Локальный ITT Yult филиала на prev<div class="eq">mean(Yult|control,f,prev) − mean(Yult|model,f,prev)</div></li><li><code>effect_cur</code> → <b>ITT_f cur</b> — Локальный ITT Yult филиала на текущей<div class="eq">mean(Yult|control,f,week) − mean(Yult|model,f,week)</div></li><li><code>delta_contribution</code> → <b>Δ вклад</b> — Изменение вклада филиала в страт. ITT; «+» усилил экономию<div class="eq">w_f,week·effect_cur − w_f,prev·effect_prev</div></li></ul><h4>Строки</h4><ul><li>До 5 филиалов с наибольшим |delta_contribution| на пару ok-недель.</li></ul><h4>Пояснения</h4><ul><li>w_f = N_f / Σ_g N_g; сумма Δ вкладов близка к delta_yult (с учётом появления/исчезновения филиалов).</li></ul></div>
+  </div>
+</div>
+</body>
+</html>
