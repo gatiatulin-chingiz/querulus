@@ -304,7 +304,7 @@ def _write_inputs(ws, result: MonitoringEffectResult) -> dict[str, str]:
         ("e_U", pilot.expected_fee, "Ожидаемые взносы ФУ/суда, ₽"),
         ("t_calc", result.t_calc.date().isoformat(), "Дата расчёта (справочно)"),
         ("N_pilot_eligible_year", n_year, "Годовой поток eligible пилота"),
-        ("network_multiplier", multiplier, "Множитель сети (full rollout)"),
+        ("network_multiplier", multiplier, "Множитель сети (шаринг на все филиалы)"),
         (
             "formula_version",
             FORMULA_VERSION,

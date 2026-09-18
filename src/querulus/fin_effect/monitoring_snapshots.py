@@ -947,12 +947,12 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
         ),
         "annual_pilot_full_y365": _c(
             "год пилот Y365",
-            "Годовой эффект пилота full rollout, Y365",
+            "Годовой эффект пилота при всём потоке в модель, Y365",
             "y365_effect × N_pilot_eligible_year",
         ),
         "annual_network_full_y365": _c(
             "год сеть Y365",
-            "Годовой эффект сети full rollout, Y365",
+            "Годовой эффект сети при всём потоке в модель, Y365",
             "annual_pilot_full_y365 × network_multiplier",
         ),
         "why_moved": _c("why", "Краткая сводка причин сдвига недели"),
