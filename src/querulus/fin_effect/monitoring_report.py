@@ -971,8 +971,8 @@ def _plan_calculation_steps() -> str:
         <span class="fx-tag sub">не финрез</span>
         Доплаты (описание, не входят в Финрез₁…₄)
       </div>
-      <p class="muted" style="margin:0">Объём колонки «Сумма рекомендованная
-      к доплате по модели» (Σ рекомендации). Это не ITT и не экономия.</p>
+      <p class="muted" style="margin:0">Σ фактических доплат по модели
+      (<code>Иные затраты</code>). Не рекомендация и не ITT.</p>
     </div>
   </div>
 """
@@ -1195,8 +1195,9 @@ def _contract_table(result: MonitoringEffectResult) -> pd.DataFrame:
         "payment": "paid_to_date; сумма СуммаПлатежа по убыткам инцидента",
         "to_pay_diagnostic_only": "Только сверка качества; в Y не прибавляется",
         "od": "OD для k_U×OD; сумма по убыткам; при пропуске используется m_U",
-        "recommended_extra": "Доплата в сценарии 100% compliance (сумма)",
+        "recommended_extra": "Рекомендация к доплате (не факт выплаты)",
         "payout_by_model": "Признак исполнения рекомендации (any/sum>0)",
+        "model_payout_amount": "Фактическая доплата по модели = Иные затраты (сумма)",
         "agreement": "При соглашении остаток ПСР равен 7%",
         "t0_primary": "Основная дата старта возраста (min по убыткам)",
         "t0_fallback": "Fallback для t0",
@@ -1734,10 +1735,11 @@ def build_monitoring_html(
 
   <h2>8. Рекомендованные доплаты и факт оплаты</h2>
   <div class="card">
-    <p>Объём колонки <code>Сумма рекомендованная к доплате по модели</code>
-    и факт оплаты: <b>исполнено = СуммаПлатежа &gt; 0</b>.
-    Это описание объёмов, не ITT и не оценка экономии от доплат.</p>
-    {_table(
+    <p><b>Σ выплаты по модели</b> = сумма <code>Иные затраты</code>
+    (фактическая доплата; флаг «Выплата по модели» — 0/1).
+    Отдельно — объём <code>Сумма рекомендованная к доплате по модели</code>
+    и факт кассы: <b>СуммаПлатежа &gt; 0</b>. Описание, не ITT.</p>
+  {_table(
       result.recommended_extra_summary,
       columns={
         "segment": _c(
@@ -1745,6 +1747,11 @@ def build_monitoring_html(
             "control / model / model_result_1 (риск) / model_result_0",
         ),
         "n": _c("n", "Число инцидентов в сегменте"),
+        "sum_model_payout": _c(
+            "Σ выплата",
+            "Сумма фактических доплат по модели, ₽",
+            "Σ Иные затраты",
+        ),
         "n_recommended_gt0": _c(
             "n рек.>0",
             "Инциденты с рекомендованной доплатой &gt; 0",
@@ -1784,11 +1791,11 @@ def build_monitoring_html(
         "control — Result=−100; model — Result∈{0,1}.",
         "model_result_1 — model с Result=1 (флаг риска / рекомендация).",
         "model_result_0 — model с Result=0.",
-        "Исполнение здесь = СуммаПлатежа &gt; 0, не флаг «Выплата по модели».",
+        "Σ выплата = Иные затраты; флаг «Выплата по модели» сам по себе не сумма.",
       ],
       notes=[
-        "У control сумма рекомендации обычно ≈ 0 (модели не было).",
-        "Не интерпретировать Σ рек. как экономию ITT.",
+        "У control Σ выплаты по модели обычно ≈ 0.",
+        "Не интерпретировать Σ рек. / Σ выплату как экономию ITT.",
       ],
     )}
   </div>
@@ -2093,6 +2100,7 @@ def _extra_row(summary: pd.DataFrame | None, segment: str) -> dict[str, Any]:
     empty = {
         "n": 0,
         "sum_recommended_extra": 0.0,
+        "sum_model_payout": 0.0,
         "n_recommended_gt0": 0,
         "n_paid_gt0": 0,
         "sum_recommended_paid": 0.0,
@@ -2209,20 +2217,21 @@ def build_conclusion_body_from_result(
     <h3>Результаты</h3>
 
     <h4>Сколько доплатили</h4>
-    <p class="muted">Колонка «Сумма рекомендованная к доплате по модели».
-    Отдельно — сумма рекомендаций при Result=1 (красная рекомендация).</p>
+    <p class="muted">Фактическая сумма доплаты по модели — колонка
+    <code>Иные затраты</code> (флаг «Выплата по модели» — 0/1).
+    Не путать с «Сумма рекомендованная к доплате».</p>
     <table class="kv">
       <tr>
         <th>Ручеек</th>
-        <td>Σ рекомендации: <b>{format_money(ctrl_x.get("sum_recommended_extra", 0))}</b> ₽</td>
+        <td>Σ выплаты по модели: <b>{format_money(ctrl_x.get("sum_model_payout", 0))}</b> ₽</td>
       </tr>
       <tr>
         <th>Модель</th>
-        <td>Σ рекомендации: <b>{format_money(model_x.get("sum_recommended_extra", 0))}</b> ₽</td>
+        <td>Σ выплаты по модели: <b>{format_money(model_x.get("sum_model_payout", 0))}</b> ₽</td>
       </tr>
       <tr>
         <th>Из них Result=1</th>
-        <td>Σ рекомендации: <b>{format_money(model1_x.get("sum_recommended_extra", 0))}</b> ₽</td>
+        <td>Σ выплаты по модели: <b>{format_money(model1_x.get("sum_model_payout", 0))}</b> ₽</td>
       </tr>
     </table>
 

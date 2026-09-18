@@ -778,6 +778,7 @@ def _prepare_monitoring_contract(
     payout_col = resolve_model_payout_loss_column(df)
     if payout_col is None:
         raise KeyError("Не найдена колонка Выплата по модели")
+    other_costs_col = resolve_column(df, "other_costs")
     loss_col = _required_existing(df, LOSS_CANDIDATES, "номера убытка")
     incident_col = _required_existing(df, INCIDENT_CANDIDATES, "номера инцидента")
     call_date_col = _required_alias(
@@ -869,6 +870,16 @@ def _prepare_monitoring_contract(
         _to_numeric(work[recommended_col]).fillna(0.0).clip(lower=0.0)
     )
     work["_payout_by_model"] = _to_numeric(work[payout_col]).fillna(0.0).gt(0)
+    # «Иные затраты» = сумма доплаты по модели (флаг «Выплата по модели» — 0/1)
+    if other_costs_col is not None:
+        work["_model_payout_amount"] = (
+            _to_numeric(work[other_costs_col]).fillna(0.0).clip(lower=0.0)
+        )
+    else:
+        work["_model_payout_amount"] = 0.0
+        warnings.append(
+            "Нет колонки «Иные затраты» — Σ выплаты по модели в описании = 0."
+        )
     work["_agreement"] = agreement_mask(work)
     for key, column in psr_columns.items():
         work[f"_psr_{key}"] = _to_numeric(work[column]).fillna(0.0).clip(lower=0.0)
@@ -910,6 +921,7 @@ def _prepare_monitoring_contract(
         "od": od_col,
         "recommended_extra": recommended_col,
         "payout_by_model": payout_col,
+        "model_payout_amount": other_costs_col or "Иные затраты",
         "agreement": resolve_column(df, "agreement") or "agreement_mask",
         "t0_primary": call_date_col,
         "t0_fallback": application_col,
@@ -1088,7 +1100,7 @@ def _compliance_a(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _recommended_extra_summary(frame: pd.DataFrame) -> pd.DataFrame:
-    """Объём рекомендованных доплат и факт оплаты (СуммаПлатежа > 0).
+    """Объём доплат: Σ «Иные затраты» (выплата по модели) и рекомендация.
 
     Описательная таблица: не ITT и не экономия от доплат.
     """
@@ -1115,6 +1127,7 @@ def _recommended_extra_summary(frame: pd.DataFrame) -> pd.DataFrame:
                     "n": 0,
                     "n_recommended_gt0": 0,
                     "sum_recommended_extra": 0.0,
+                    "sum_model_payout": 0.0,
                     "n_paid_gt0": 0,
                     "share_paid_gt0": np.nan,
                     "n_recommended_and_paid": 0,
@@ -1125,6 +1138,7 @@ def _recommended_extra_summary(frame: pd.DataFrame) -> pd.DataFrame:
             )
             continue
         rec = part["_recommended_extra"]
+        model_pay = part["_model_payout_amount"]
         paid_flag = part["_paid_to_date"].gt(0)
         rec_flag = rec.gt(0)
         rows.append(
@@ -1133,6 +1147,7 @@ def _recommended_extra_summary(frame: pd.DataFrame) -> pd.DataFrame:
                 "n": n,
                 "n_recommended_gt0": int(rec_flag.sum()),
                 "sum_recommended_extra": float(rec.sum()),
+                "sum_model_payout": float(model_pay.sum()),
                 "n_paid_gt0": int(paid_flag.sum()),
                 "share_paid_gt0": float(paid_flag.mean() * 100),
                 "n_recommended_and_paid": int((rec_flag & paid_flag).sum()),
@@ -1696,6 +1711,11 @@ def build_synthetic_claims_excel(
             "Сумма рекомендованная к доплате по модулю": np.where(
                 result == 1,
                 rng.uniform(10_000, 80_000, n_rows),
+                0.0,
+            ),
+            "Иные затраты": np.where(
+                payout,
+                rng.uniform(5_000, 60_000, n_rows),
                 0.0,
             ),
             "Выплата по модели": payout.astype(int),

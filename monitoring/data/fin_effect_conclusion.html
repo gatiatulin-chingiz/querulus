@@ -156,7 +156,7 @@ li { margin:.18rem 0; }
 <body>
 <div class="page">
   <h1>Заключение: ручеек vs модель</h1>
-  <p class="sub">Сформировано 2026-09-18 11:23 · версия ITT-U-2026-09-18-v14 ·
+  <p class="sub">Сформировано 2026-09-18 12:02 · версия ITT-U-2026-09-18-v14 ·
   источник <code>[OISUU_report].[dbo].[ВитринаСутяжность]</code> ·
   файл <code>fin_effect_conclusion.html</code></p>
   <div class="nav"><a href="fin_effect_plan.html">1. План</a><a href="fin_effect_report.html">2. Расчёт</a><a href="fin_effect_conclusion.html" style="font-weight:700">3. Заключение</a></div>
@@ -179,20 +179,21 @@ li { margin:.18rem 0; }
     <h3>Результаты</h3>
 
     <h4>Сколько доплатили</h4>
-    <p class="muted">Колонка «Сумма рекомендованная к доплате по модели».
-    Отдельно — сумма рекомендаций при Result=1 (красная рекомендация).</p>
+    <p class="muted">Фактическая сумма доплаты по модели — колонка
+    <code>Иные затраты</code> (флаг «Выплата по модели» — 0/1).
+    Не путать с «Сумма рекомендованная к доплате».</p>
     <table class="kv">
       <tr>
         <th>Ручеек</th>
-        <td>Σ рекомендации: <b>2 822 168.28</b> ₽</td>
+        <td>Σ выплаты по модели: <b>1 255 334.60</b> ₽</td>
       </tr>
       <tr>
         <th>Модель</th>
-        <td>Σ рекомендации: <b>4 588 361.26</b> ₽</td>
+        <td>Σ выплаты по модели: <b>1 873 427.44</b> ₽</td>
       </tr>
       <tr>
         <th>Из них Result=1</th>
-        <td>Σ рекомендации: <b>4 588 361.26</b> ₽</td>
+        <td>Σ выплаты по модели: <b>1 873 427.44</b> ₽</td>
       </tr>
     </table>
 
@@ -203,12 +204,12 @@ li { margin:.18rem 0; }
       <tr>
         <th>ITT Yfact / инцидент</th>
         <td><b>11 919.11</b> ₽
-        <small>(95% CI: -5 423.88 … 28 939.22)</small></td>
+        <small>(95% CI: -6 522.12 … 27 312.67)</small></td>
       </tr>
       <tr>
         <th>ITT Y365 / инцидент</th>
-        <td><b>27 172.76</b> ₽
-        <small>(95% CI: 1 072.38 … 51 570.59)</small></td>
+        <td><b>27 146.17</b> ₽
+        <small>(95% CI: 2 763.07 … 44 683.95)</small></td>
       </tr>
     </table>
 
@@ -235,30 +236,30 @@ li { margin:.18rem 0; }
         <th>1. Факт (пилот, окно)</th>
         <td><span class="million">6.79 млн ₽</span>
         <small>= ITT × 250 инцидентов окна;
-        95% CI: 0.27 … 12.89 млн</small></td>
+        95% CI: 0.69 … 11.17 млн</small></td>
       </tr>
       <tr>
         <th>2. Факт за год (те же филиалы пилота)</th>
-        <td><span class="million">8.96 млн ₽</span>
+        <td><span class="million">8.95 млн ₽</span>
         <small>= ITT × годовой поток model при <b>текущей</b> доле модели
         (~42% сейчас);
         N_year eligible ≈ 785; 95% CI:
-        0.35 … 17.00 млн</small></td>
+        0.91 … 14.73 млн</small></td>
       </tr>
       <tr>
         <th>3. Шарим на все филиалы (год, доля как сейчас)</th>
-        <td><span class="million">10.75 млн ₽</span>
+        <td><span class="million">10.74 млн ₽</span>
         <small>= пункт 2 × множитель сети 1.20
         (объём и тяжесть ПСР nonpilot / pilot);
-        95% CI: 0.42 … 20.40 млн</small></td>
+        95% CI: 1.09 … 17.67 млн</small></td>
       </tr>
       <tr>
         <th>4. Все филиалы + год + весь поток (не 50/50)</th>
-        <td><span class="million">25.59 млн ₽</span>
+        <td><span class="million">25.57 млн ₽</span>
         <small>= ITT × весь годовой eligible пилота
         (~785) × множитель сети 1.20
         (все идут в поток модели); 95% CI:
-        1.01 … 48.57 млн</small></td>
+        2.60 … 42.08 млн</small></td>
       </tr>
     </table>
   </div>
