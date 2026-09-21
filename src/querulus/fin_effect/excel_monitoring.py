@@ -1162,7 +1162,7 @@ def _recommended_extra_summary(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _payment_descriptives(frame: pd.DataFrame) -> pd.DataFrame:
-    """Mean/median СуммаПлатежа по группам и рек. доплаты при выплате по модели=1."""
+    """Mean/median СуммаПлатежа по группам и Иные затраты при выплате по модели=1."""
     rows: list[dict[str, Any]] = []
     for group in ("control", "model"):
         part = frame.loc[frame["_group"].eq(group)]
@@ -1186,15 +1186,15 @@ def _payment_descriptives(frame: pd.DataFrame) -> pd.DataFrame:
         else:
             part = paid_by_model.loc[paid_by_model["_group"].eq(group)]
         n = len(part)
-        rec = part["_recommended_extra"] if n else pd.Series(dtype=float)
+        extra = part["_model_payout_amount"] if n else pd.Series(dtype=float)
         rows.append(
             {
-                "metric": "Сумма рекомендованная к доплате",
+                "metric": "Иные затраты",
                 "segment": group,
                 "filter": "Выплата по модели = 1",
                 "n": n,
-                "mean": float(rec.mean()) if n else np.nan,
-                "median": float(rec.median()) if n else np.nan,
+                "mean": float(extra.mean()) if n else np.nan,
+                "median": float(extra.median()) if n else np.nan,
             }
         )
     return pd.DataFrame(rows)

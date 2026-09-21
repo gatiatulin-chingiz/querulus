@@ -14,7 +14,7 @@ from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_
 PLAN_FILENAME = "fin_effect_plan.html"
 REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
-FORMULA_VERSION = "ITT-U-2026-09-21-v17-ult"
+FORMULA_VERSION = "ITT-U-2026-09-21-v18-ult"
 
 
 def report_export_stamp(
@@ -495,6 +495,110 @@ def _chart_annual_ci(annual_summary: pd.DataFrame) -> str:
     )
 
 
+def _chart_feature_distributions(frame: pd.DataFrame) -> str:
+    """Гистограммы control vs model по ключевым полям финэффекта."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if frame is None or frame.empty or "_group" not in frame.columns:
+        return ""
+
+    remaining_col = (
+        "_remaining_nominal"
+        if "_remaining_nominal" in frame.columns
+        else "_remaining_nominal_100"
+        if "_remaining_nominal_100" in frame.columns
+        else None
+    )
+    yult_col = "Yult" if "Yult" in frame.columns else (
+        "Yult_100" if "Yult_100" in frame.columns else None
+    )
+    specs: list[tuple[str, str, bool]] = [
+        ("_paid_to_date", "СуммаПлатежа", False),
+        ("_od", "OD (заявлено)", False),
+        ("_model_payout_amount", "Иные затраты", True),
+        ("_observed_psr", "observed PSR", True),
+        ("_expected_open_psr", "expected open PSR", False),
+        ("_age_days", "age, дни", False),
+    ]
+    if remaining_col:
+        specs.append((remaining_col, "remaining (NPV-хвост)", True))
+    if yult_col:
+        specs.append((yult_col, "Yult", False))
+
+    control = frame.loc[frame["_group"].eq("control")]
+    model = frame.loc[frame["_group"].eq("model")]
+    n_plots = len(specs)
+    ncols = 3
+    nrows = int(np.ceil(n_plots / ncols))
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(4.2 * ncols, 3.1 * nrows), squeeze=False
+    )
+    for idx, (column, title, positive_only) in enumerate(specs):
+        ax = axes[idx // ncols][idx % ncols]
+        if column not in frame.columns:
+            ax.set_visible(False)
+            continue
+        c_vals = pd.to_numeric(control[column], errors="coerce").dropna()
+        m_vals = pd.to_numeric(model[column], errors="coerce").dropna()
+        if positive_only:
+            c_vals = c_vals.loc[c_vals.gt(0)]
+            m_vals = m_vals.loc[m_vals.gt(0)]
+        if c_vals.empty and m_vals.empty:
+            ax.text(0.5, 0.5, "нет данных", ha="center", va="center", color="#5f696a")
+            ax.set_axis_off()
+            continue
+        combined = pd.concat([c_vals, m_vals], ignore_index=True)
+        low = float(combined.quantile(0.01))
+        high = float(combined.quantile(0.99))
+        if not np.isfinite(low) or not np.isfinite(high) or low >= high:
+            low = float(combined.min())
+            high = float(combined.max())
+        if low >= high:
+            high = low + 1.0
+        bins = np.linspace(low, high, 28)
+        if not c_vals.empty:
+            ax.hist(
+                c_vals.clip(low, high),
+                bins=bins,
+                alpha=0.55,
+                color="#6b5b4b",
+                label="control",
+                density=True,
+            )
+        if not m_vals.empty:
+            ax.hist(
+                m_vals.clip(low, high),
+                bins=bins,
+                alpha=0.55,
+                color="#0b5f66",
+                label="model",
+                density=True,
+            )
+        ax.set_title(title, color="#075f66", fontsize=9)
+        ax.legend(frameon=False, fontsize=7)
+        _style_axes(ax)
+    for idx in range(n_plots, nrows * ncols):
+        axes[idx // ncols][idx % ncols].set_visible(False)
+    fig.suptitle(
+        "Распределения control vs model (плотность; хвосты 1–99%)",
+        color="#075f66",
+        fontsize=11,
+        y=1.01,
+    )
+    fig.tight_layout()
+    return _fig_to_img(
+        fig,
+        alt="Распределения признаков",
+        caption=(
+            "Гистограммы плотности: control (коричневый) и model (бирюзовый). "
+            "Для Иные затраты / observed PSR / remaining — только значения > 0."
+        ),
+    )
+
+
 def _charts_section(result: MonitoringEffectResult) -> str:
     try:
         import matplotlib  # noqa: F401
@@ -529,6 +633,23 @@ def _charts_section(result: MonitoringEffectResult) -> str:
     if not blocks:
         return "<p class='muted'>Графики недоступны: нет данных для отрисовки.</p>"
     return '<div class="charts">' + "".join(blocks) + "</div>"
+
+
+def _safe_feature_distributions(frame: pd.DataFrame) -> str:
+    try:
+        import matplotlib  # noqa: F401
+    except ImportError:
+        return (
+            "<p class='muted'>Распределения пропущены: нет <code>matplotlib</code>.</p>"
+        )
+    try:
+        block = _chart_feature_distributions(frame)
+    except Exception as exc:  # noqa: BLE001
+        return (
+            f"<p class='muted'>Распределения не построены: "
+            f"{escape(type(exc).__name__)}: {escape(str(exc))}</p>"
+        )
+    return block or "<p class='muted'>Нет данных для распределений.</p>"
 
 
 def _c(title: str, desc: str, formula: str = "") -> tuple[str, str, str]:
@@ -1552,6 +1673,9 @@ def build_monitoring_html(
         f"q={result.residual_share:.0%} при соглашении; r={result.discount_rate:.0%}; "
         "age=(t_calc−t0) в днях. Lifetime NPV-окно — 1095 дней (~3 года).",
     )}
+    <h3>Распределения control vs model</h3>
+    <p class="muted">Плотности по ключевым полям расчёта финэффекта.</p>
+    {_safe_feature_distributions(result.frame)}
     <h3>Что означают remaining и midpoint</h3>
     <p><b>remaining</b> — ещё не проявившийся хвост ПСР (номинал). Это не дисконт,
     а «сколько ещё может прийти» после вычитания уже видимых претензии/ФУ/суда.</p>
@@ -1795,15 +1919,15 @@ def build_monitoring_html(
     )}
   </div>
 
-  <h2>8b. Mean / median выплат и рек. доплат</h2>
+  <h2>8b. Mean / median выплат и доплат</h2>
   <div class="card">
     <p><code>СуммаПлатежа</code> — по всем инцидентам группы.
-    <code>Сумма рекомендованная к доплате</code> — только где
+    <code>Иные затраты</code> — фактическая доплата только где
     <b>Выплата по модели = 1</b>.</p>
     {_table(
       result.payment_descriptives,
       columns={
-        "metric": _c("metric", "СуммаПлатежа или рек. доплата"),
+        "metric": _c("metric", "СуммаПлатежа или Иные затраты"),
         "segment": _c("segment", "control / model / all"),
         "filter": _c("filter", "Условие отбора строк"),
         "n": _c("n", "Число инцидентов"),
@@ -1812,7 +1936,7 @@ def build_monitoring_html(
       },
       rows=[
         "СуммаПлатежа: filter=all, сегменты control и model.",
-        "Рек. доплата: filter=Выплата по модели=1; control, model и all.",
+        "Иные затраты: filter=Выплата по модели=1; control, model и all.",
       ],
     )}
   </div>
@@ -2237,15 +2361,9 @@ def build_conclusion_body_from_result(
 
     paid_c = _pay_desc_row(pay_desc, metric="СуммаПлатежа", segment="control")
     paid_m = _pay_desc_row(pay_desc, metric="СуммаПлатежа", segment="model")
-    rec_c = _pay_desc_row(
-        pay_desc, metric="Сумма рекомендованная к доплате", segment="control"
-    )
-    rec_m = _pay_desc_row(
-        pay_desc, metric="Сумма рекомендованная к доплате", segment="model"
-    )
-    rec_all = _pay_desc_row(
-        pay_desc, metric="Сумма рекомендованная к доплате", segment="all"
-    )
+    extra_c = _pay_desc_row(pay_desc, metric="Иные затраты", segment="control")
+    extra_m = _pay_desc_row(pay_desc, metric="Иные затраты", segment="model")
+    extra_all = _pay_desc_row(pay_desc, metric="Иные затраты", segment="all")
 
     size_html = ""
     if size_guide is not None and not size_guide.empty:
@@ -2333,34 +2451,33 @@ def build_conclusion_body_from_result(
       </tr>
     </table>
 
-    <h4>Рекомендованная доплата (где Выплата по модели = 1)</h4>
-    <p class="muted">Колонка <code>Сумма рекомендованная к доплате</code>
+    <h4>Иные затраты (где Выплата по модели = 1)</h4>
+    <p class="muted">Фактическая доплата по колонке <code>Иные затраты</code>
     только среди инцидентов с флагом выплаты по модели.</p>
     <table class="kv">
       <tr>
         <th>Ручеек</th>
-        <td>mean <b>{_fmt_money_or_dash(rec_c.get("mean"))}</b> ₽ ·
-        median <b>{_fmt_money_or_dash(rec_c.get("median"))}</b> ₽
-        <small>(n={int(rec_c.get("n", 0))})</small></td>
+        <td>mean <b>{_fmt_money_or_dash(extra_c.get("mean"))}</b> ₽ ·
+        median <b>{_fmt_money_or_dash(extra_c.get("median"))}</b> ₽
+        <small>(n={int(extra_c.get("n", 0))})</small></td>
       </tr>
       <tr>
         <th>Модель</th>
-        <td>mean <b>{_fmt_money_or_dash(rec_m.get("mean"))}</b> ₽ ·
-        median <b>{_fmt_money_or_dash(rec_m.get("median"))}</b> ₽
-        <small>(n={int(rec_m.get("n", 0))})</small></td>
+        <td>mean <b>{_fmt_money_or_dash(extra_m.get("mean"))}</b> ₽ ·
+        median <b>{_fmt_money_or_dash(extra_m.get("median"))}</b> ₽
+        <small>(n={int(extra_m.get("n", 0))})</small></td>
       </tr>
       <tr>
         <th>Всего</th>
-        <td>mean <b>{_fmt_money_or_dash(rec_all.get("mean"))}</b> ₽ ·
-        median <b>{_fmt_money_or_dash(rec_all.get("median"))}</b> ₽
-        <small>(n={int(rec_all.get("n", 0))})</small></td>
+        <td>mean <b>{_fmt_money_or_dash(extra_all.get("mean"))}</b> ₽ ·
+        median <b>{_fmt_money_or_dash(extra_all.get("median"))}</b> ₽
+        <small>(n={int(extra_all.get("n", 0))})</small></td>
       </tr>
     </table>
 
     <h4>Сколько доплатили</h4>
-    <p class="muted">Фактическая сумма доплаты по модели — колонка
-    <code>Иные затраты</code> (флаг «Выплата по модели» — 0/1).
-    Не путать с «Сумма рекомендованная к доплате».</p>
+    <p class="muted">Σ по всем инцидентам группы — колонка
+    <code>Иные затраты</code> (флаг «Выплата по модели» — 0/1).</p>
     <table class="kv">
       <tr>
         <th>Ручеек</th>
