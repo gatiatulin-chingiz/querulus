@@ -158,6 +158,8 @@ class MonitoringEffectResult:
     filial_path_shares: pd.DataFrame
     attention_filials: pd.DataFrame
     recommended_extra_summary: pd.DataFrame
+    payment_descriptives: pd.DataFrame
+    sample_size_guidance: pd.DataFrame
     contract: dict[str, str]
     t_calc: pd.Timestamp
     discount_rate: float
@@ -1159,6 +1161,106 @@ def _recommended_extra_summary(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _payment_descriptives(frame: pd.DataFrame) -> pd.DataFrame:
+    """Mean/median СуммаПлатежа по группам и рек. доплаты при выплате по модели=1."""
+    rows: list[dict[str, Any]] = []
+    for group in ("control", "model"):
+        part = frame.loc[frame["_group"].eq(group)]
+        n = len(part)
+        paid = part["_paid_to_date"] if n else pd.Series(dtype=float)
+        rows.append(
+            {
+                "metric": "СуммаПлатежа",
+                "segment": group,
+                "filter": "all",
+                "n": n,
+                "mean": float(paid.mean()) if n else np.nan,
+                "median": float(paid.median()) if n else np.nan,
+            }
+        )
+
+    paid_by_model = frame.loc[frame["_payout_by_model"]]
+    for group in ("control", "model", "all"):
+        if group == "all":
+            part = paid_by_model
+        else:
+            part = paid_by_model.loc[paid_by_model["_group"].eq(group)]
+        n = len(part)
+        rec = part["_recommended_extra"] if n else pd.Series(dtype=float)
+        rows.append(
+            {
+                "metric": "Сумма рекомендованная к доплате",
+                "segment": group,
+                "filter": "Выплата по модели = 1",
+                "n": n,
+                "mean": float(rec.mean()) if n else np.nan,
+                "median": float(rec.median()) if n else np.nan,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _sample_size_guidance(effects: pd.DataFrame) -> pd.DataFrame:
+    """Во сколько раз вырастить N, чтобы 95% CI ITT не содержал 0.
+
+    Приближение: полуширина CI сжимается как 1/√k при росте выборки в k раз
+    (та же доля model/control и тот же эффект на инцидент).
+    """
+    if effects.empty or "ult" not in set(effects["horizon"].astype(str)):
+        return pd.DataFrame()
+    row = effects.loc[effects["horizon"].astype(str).eq("ult")].iloc[0]
+    effect = float(row["effect_per_case"])
+    ci_low = float(row["ci_low"]) if pd.notna(row.get("ci_low")) else np.nan
+    ci_high = float(row["ci_high"]) if pd.notna(row.get("ci_high")) else np.nan
+    n_now = float(row["n_weighted"]) if pd.notna(row.get("n_weighted")) else np.nan
+    half = (
+        (ci_high - ci_low) / 2.0
+        if pd.notna(ci_low) and pd.notna(ci_high)
+        else np.nan
+    )
+    already = bool(pd.notna(ci_low) and ci_low > 0)
+    if already:
+        multiplier = 1.0
+        note = "95% CI уже выше 0 — текущего N достаточно по этому критерию."
+    elif not pd.notna(effect) or effect <= 0:
+        multiplier = np.nan
+        note = (
+            "Точечный ITT ≤ 0: рост N сам по себе не сделает CI выше 0 "
+            "(нужен устойчивый положительный эффект)."
+        )
+    elif not pd.notna(half) or half <= 0:
+        multiplier = np.nan
+        note = "Нет валидного bootstrap CI — оценку роста N посчитать нельзя."
+    else:
+        # нужно effect − half/√k > 0 → k > (half/effect)^2
+        multiplier = float((half / effect) ** 2)
+        note = (
+            "При том же ITT и доле model/control: N_need = N * k, "
+            "чтобы нижняя граница 95% CI стала > 0 (приближение 1/sqrt(N))."
+        )
+    n_need = (
+        float(n_now * multiplier)
+        if pd.notna(n_now) and pd.notna(multiplier)
+        else np.nan
+    )
+    return pd.DataFrame(
+        [
+            {
+                "horizon": "ult",
+                "n_current": n_now,
+                "effect_per_case": effect,
+                "ci_low": ci_low,
+                "ci_high": ci_high,
+                "ci_halfwidth": half,
+                "already_excludes_0": already,
+                "n_multiplier": multiplier,
+                "n_needed": n_need,
+                "note": note,
+            }
+        ]
+    )
+
+
 def _attention_filials(
     filial_paths: pd.DataFrame,
     filial_effects: pd.DataFrame,
@@ -1567,6 +1669,8 @@ def estimate_monitoring_effect(
 
     compliance_a = _compliance_a(current)
     recommended_extra_summary = _recommended_extra_summary(current)
+    payment_descriptives = _payment_descriptives(current)
+    sample_size_guidance = _sample_size_guidance(effects)
     current_100 = _add_outcomes(
         current,
         priors.pilot,
@@ -1669,6 +1773,8 @@ def estimate_monitoring_effect(
         filial_path_shares=filial_paths,
         attention_filials=attention,
         recommended_extra_summary=recommended_extra_summary,
+        payment_descriptives=payment_descriptives,
+        sample_size_guidance=sample_size_guidance,
         contract=contract,
         t_calc=calc_date,
         discount_rate=discount_rate,

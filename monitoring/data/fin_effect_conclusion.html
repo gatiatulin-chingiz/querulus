@@ -156,14 +156,14 @@ li { margin:.18rem 0; }
 <body>
 <div class="page">
   <h1>Заключение: ручеек vs модель</h1>
-  <p class="sub">Сформировано 2026-09-18 15:18 · версия ITT-U-2026-09-18-v16-ult ·
-  источник <code>synthetic_preview</code> ·
+  <p class="sub">Сформировано 2026-09-21 13:02 · версия ITT-U-2026-09-21-v17-ult ·
+  источник <code>synthetic_v17</code> ·
   файл <code>fin_effect_conclusion.html</code></p>
   <div class="nav"><a href="fin_effect_report.html">1. Расчёт</a><a href="fin_effect_conclusion.html" style="font-weight:700">2. Заключение</a><a href="fin_effect_weekly.html">3. Еженедельный</a></div>
 
   <div class="card">
     <p class="sub" style="margin:0">Для филиалов пилота, за период пилота
-    (<b>2026-05-22</b> … <b>2026-09-16</b>;
+    (<b>2026-05-25</b> … <b>2026-09-19</b>;
     10 филиалов; 200 инцидентов:
     ручеек 99 / модель 101)</p>
   </div>
@@ -177,6 +177,47 @@ li { margin:.18rem 0; }
 
   <div class="card">
     <h3>Результаты</h3>
+
+    <h4>Средние выплаты (СуммаПлатежа)</h4>
+    <p class="muted">Касса на инцидент по группам назначения (ITT-база).</p>
+    <table class="kv">
+      <tr>
+        <th>Ручеек</th>
+        <td>mean <b>282 742.02</b> ₽ ·
+        median <b>288 027.13</b> ₽
+        <small>(n=99)</small></td>
+      </tr>
+      <tr>
+        <th>Модель</th>
+        <td>mean <b>286 239.82</b> ₽ ·
+        median <b>294 364.28</b> ₽
+        <small>(n=101)</small></td>
+      </tr>
+    </table>
+
+    <h4>Рекомендованная доплата (где Выплата по модели = 1)</h4>
+    <p class="muted">Колонка <code>Сумма рекомендованная к доплате</code>
+    только среди инцидентов с флагом выплаты по модели.</p>
+    <table class="kv">
+      <tr>
+        <th>Ручеек</th>
+        <td>mean <b>41 392.16</b> ₽ ·
+        median <b>37 705.35</b> ₽
+        <small>(n=21)</small></td>
+      </tr>
+      <tr>
+        <th>Модель</th>
+        <td>mean <b>70 194.50</b> ₽ ·
+        median <b>65 657.86</b> ₽
+        <small>(n=55)</small></td>
+      </tr>
+      <tr>
+        <th>Всего</th>
+        <td>mean <b>62 235.96</b> ₽ ·
+        median <b>56 928.67</b> ₽
+        <small>(n=76)</small></td>
+      </tr>
+    </table>
 
     <h4>Сколько доплатили</h4>
     <p class="muted">Фактическая сумма доплаты по модели — колонка
@@ -206,7 +247,7 @@ li { margin:.18rem 0; }
         <th>ITT Yult / инцидент</th>
         <td><b>141.64</b> ₽
         <small>(касса + NPV хвоста за жизнь инцидента;
-        95% CI: -25 227.64 … 29 614.12)</small></td>
+        95% CI: -19 526.67 … 34 970.94)</small></td>
       </tr>
     </table>
 
@@ -234,16 +275,23 @@ li { margin:.18rem 0; }
         <th>1. Текущий объём (окно пилота)</th>
         <td><span class="million">0.03 млн ₽</span>
         <small>= ITT_Yult × 200 инцидентов окна;
-        95% CI: -5.05 … 5.92 млн</small></td>
+        95% CI: -3.91 … 6.99 млн</small></td>
       </tr>
       <tr>
         <th>2. Годовой объём (те же филиалы пилота)</th>
         <td><span class="million">0.09 млн ₽</span>
-        <small>= ITT_Yult × N_year eligible ≈ 631
+        <small>= ITT_Yult × N_year eligible ≈ 628
         (сезонная экстраполяция всего потока пилота);
-        95% CI: -15.93 … 18.70 млн</small></td>
+        95% CI: -12.27 … 21.97 млн</small></td>
       </tr>
     </table>
+  </div>
+
+  <div class="card">
+    <h3>Сколько нужно N для более точной оценки</h3>
+    <p class="muted">Критерий: нижняя граница 95% CI ITT_Yult &gt; 0
+    (доля model/control как сейчас).</p>
+    <p>Чтобы 95% CI ITT не содержал 0 при том же эффекте на инцидент, нужно увеличить N примерно в <b>37010.0×</b> (с ≈ 200 до ≈ 7 401 991 инцидентов). Приближение: полуширина CI сжимается как 1/√N.</p>
   </div>
 
   <div class="card">

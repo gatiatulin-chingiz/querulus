@@ -14,7 +14,7 @@ from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_
 PLAN_FILENAME = "fin_effect_plan.html"
 REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
-FORMULA_VERSION = "ITT-U-2026-09-18-v16-ult"
+FORMULA_VERSION = "ITT-U-2026-09-21-v17-ult"
 
 
 def report_export_stamp(
@@ -1795,6 +1795,56 @@ def build_monitoring_html(
     )}
   </div>
 
+  <h2>8b. Mean / median выплат и рек. доплат</h2>
+  <div class="card">
+    <p><code>СуммаПлатежа</code> — по всем инцидентам группы.
+    <code>Сумма рекомендованная к доплате</code> — только где
+    <b>Выплата по модели = 1</b>.</p>
+    {_table(
+      result.payment_descriptives,
+      columns={
+        "metric": _c("metric", "СуммаПлатежа или рек. доплата"),
+        "segment": _c("segment", "control / model / all"),
+        "filter": _c("filter", "Условие отбора строк"),
+        "n": _c("n", "Число инцидентов"),
+        "mean": _c("mean", "Среднее, ₽"),
+        "median": _c("median", "Медиана, ₽"),
+      },
+      rows=[
+        "СуммаПлатежа: filter=all, сегменты control и model.",
+        "Рек. доплата: filter=Выплата по модели=1; control, model и all.",
+      ],
+    )}
+  </div>
+
+  <h2>8c. Рост N для CI без нуля</h2>
+  <div class="card">
+    <p>Приближение: полуширина 95% CI сжимается как 1/√k при росте выборки в k раз
+    (тот же ITT на инцидент и та же доля model/control).</p>
+    {_table(
+      result.sample_size_guidance,
+      columns={
+        "horizon": _c("H", "Горизонт ITT"),
+        "n_current": _c("N now", "Текущее число eligible-инцидентов"),
+        "effect_per_case": _c("ITT", "Точечный ITT, ₽/инцидент"),
+        "ci_low": _c("CI low", "Нижняя граница 95% CI"),
+        "ci_high": _c("CI high", "Верхняя граница 95% CI"),
+        "ci_halfwidth": _c("half", "(CI high − CI low) / 2"),
+        "already_excludes_0": _c("CI>0?", "true, если ci_low > 0"),
+        "n_multiplier": _c(
+            "k",
+            "Во сколько раз вырастить N",
+            "(half / effect)^2",
+        ),
+        "n_needed": _c("N need", "N_current × k"),
+        "note": _c("note", "Пояснение / ограничение"),
+      },
+      notes=[
+        "Если точечный ITT ≤ 0, рост N сам по себе не выведет CI выше 0.",
+      ],
+    )}
+  </div>
+
   <h2>9. Non-compliance</h2>
   <div class="card">
     <h3>A. As-complied — только описательная диагностика (Yult)</h3>
@@ -2109,6 +2159,30 @@ def _extra_row(summary: pd.DataFrame | None, segment: str) -> dict[str, Any]:
     return part.iloc[0].to_dict()
 
 
+def _pay_desc_row(
+    summary: pd.DataFrame | None,
+    *,
+    metric: str,
+    segment: str,
+) -> dict[str, Any]:
+    empty = {"n": 0, "mean": np.nan, "median": np.nan}
+    if summary is None or summary.empty:
+        return empty
+    part = summary.loc[
+        summary["metric"].astype(str).eq(metric)
+        & summary["segment"].astype(str).eq(segment)
+    ]
+    if part.empty:
+        return empty
+    return part.iloc[0].to_dict()
+
+
+def _fmt_money_or_dash(value: Any) -> str:
+    if value is None or (isinstance(value, float) and not np.isfinite(value)):
+        return "—"
+    return format_money(float(value))
+
+
 def build_conclusion_body_from_result(
     result: MonitoringEffectResult,
     *,
@@ -2125,6 +2199,8 @@ def build_conclusion_body_from_result(
         else None
     )
     extras = getattr(result, "recommended_extra_summary", None)
+    pay_desc = getattr(result, "payment_descriptives", None)
+    size_guide = getattr(result, "sample_size_guidance", None)
 
     def _eff(horizon: str) -> tuple[float, float, float]:
         return (
@@ -2158,6 +2234,48 @@ def build_conclusion_body_from_result(
     ctrl_x = _extra_row(extras, "control")
     model_x = _extra_row(extras, "model")
     model1_x = _extra_row(extras, "model_result_1")
+
+    paid_c = _pay_desc_row(pay_desc, metric="СуммаПлатежа", segment="control")
+    paid_m = _pay_desc_row(pay_desc, metric="СуммаПлатежа", segment="model")
+    rec_c = _pay_desc_row(
+        pay_desc, metric="Сумма рекомендованная к доплате", segment="control"
+    )
+    rec_m = _pay_desc_row(
+        pay_desc, metric="Сумма рекомендованная к доплате", segment="model"
+    )
+    rec_all = _pay_desc_row(
+        pay_desc, metric="Сумма рекомендованная к доплате", segment="all"
+    )
+
+    size_html = ""
+    if size_guide is not None and not size_guide.empty:
+        sg = size_guide.iloc[0].to_dict()
+        already = bool(sg.get("already_excludes_0"))
+        mult = sg.get("n_multiplier")
+        n_need = sg.get("n_needed")
+        n_cur = sg.get("n_current")
+        if already:
+            size_body = (
+                f"Текущий N ≈ {_fmt_days(n_cur)}: 95% CI уже выше 0 — "
+                "дополнительный рост выборки по этому критерию не нужен."
+            )
+        elif pd.notna(mult) and float(mult) > 0:
+            size_body = (
+                f"Чтобы 95% CI ITT не содержал 0 при том же эффекте на инцидент, "
+                f"нужно увеличить N примерно в <b>{float(mult):.1f}×</b> "
+                f"(с ≈ {_fmt_days(n_cur)} до ≈ {_fmt_days(n_need)} инцидентов). "
+                "Приближение: полуширина CI сжимается как 1/√N."
+            )
+        else:
+            size_body = escape(str(sg.get("note", "—")))
+        size_html = f"""
+  <div class="card">
+    <h3>Сколько нужно N для более точной оценки</h3>
+    <p class="muted">Критерий: нижняя граница 95% CI ITT_Yult &gt; 0
+    (доля model/control как сейчас).</p>
+    <p>{size_body}</p>
+  </div>
+"""
 
     agr_c = _path_pct(paths, "control", "agreement_share")
     agr_m = _path_pct(paths, "model", "agreement_share")
@@ -2197,6 +2315,47 @@ def build_conclusion_body_from_result(
 
   <div class="card">
     <h3>Результаты</h3>
+
+    <h4>Средние выплаты (СуммаПлатежа)</h4>
+    <p class="muted">Касса на инцидент по группам назначения (ITT-база).</p>
+    <table class="kv">
+      <tr>
+        <th>Ручеек</th>
+        <td>mean <b>{_fmt_money_or_dash(paid_c.get("mean"))}</b> ₽ ·
+        median <b>{_fmt_money_or_dash(paid_c.get("median"))}</b> ₽
+        <small>(n={int(paid_c.get("n", 0))})</small></td>
+      </tr>
+      <tr>
+        <th>Модель</th>
+        <td>mean <b>{_fmt_money_or_dash(paid_m.get("mean"))}</b> ₽ ·
+        median <b>{_fmt_money_or_dash(paid_m.get("median"))}</b> ₽
+        <small>(n={int(paid_m.get("n", 0))})</small></td>
+      </tr>
+    </table>
+
+    <h4>Рекомендованная доплата (где Выплата по модели = 1)</h4>
+    <p class="muted">Колонка <code>Сумма рекомендованная к доплате</code>
+    только среди инцидентов с флагом выплаты по модели.</p>
+    <table class="kv">
+      <tr>
+        <th>Ручеек</th>
+        <td>mean <b>{_fmt_money_or_dash(rec_c.get("mean"))}</b> ₽ ·
+        median <b>{_fmt_money_or_dash(rec_c.get("median"))}</b> ₽
+        <small>(n={int(rec_c.get("n", 0))})</small></td>
+      </tr>
+      <tr>
+        <th>Модель</th>
+        <td>mean <b>{_fmt_money_or_dash(rec_m.get("mean"))}</b> ₽ ·
+        median <b>{_fmt_money_or_dash(rec_m.get("median"))}</b> ₽
+        <small>(n={int(rec_m.get("n", 0))})</small></td>
+      </tr>
+      <tr>
+        <th>Всего</th>
+        <td>mean <b>{_fmt_money_or_dash(rec_all.get("mean"))}</b> ₽ ·
+        median <b>{_fmt_money_or_dash(rec_all.get("median"))}</b> ₽
+        <small>(n={int(rec_all.get("n", 0))})</small></td>
+      </tr>
+    </table>
 
     <h4>Сколько доплатили</h4>
     <p class="muted">Фактическая сумма доплаты по модели — колонка
@@ -2265,7 +2424,7 @@ def build_conclusion_body_from_result(
       </tr>
     </table>
   </div>
-
+{size_html}
   <div class="card">
     <h3>Как читать</h3>
     <ul>
