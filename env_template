@@ -17,6 +17,12 @@ OISUU_DB_PORT=1433
 # --- Integration (сервис и тесты integration/) ---
 OUTBOXML_TRAIN_DF_PATH=
 OUTBOXML_MODEL_GROUP=querulus_ansamble_2026_04_09_v1
+# Shadow 2.0.0 (second_model): каталог results/querulus/2.0.0/
+SHADOW_MODELS_SUBDIR=querulus/2.0.0
+SHADOW_MODEL_GROUP=querulus_ansamble
+SHADOW_META_FILENAME=metadata.json
+SHADOW_DQ_BOUNDS_FILENAME=dq_bounds.json
+SHADOW_TRAIN_DF_PATH=
 SERVICE_GIT_COMMIT=
 
 # --- Monitoring (monitoring/) ---

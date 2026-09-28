@@ -25,6 +25,20 @@ python -m integration
 python -m unittest integration.tests.unit_tests -v
 ```
 
+## Как проверить **shadow 2.0.0** (`integration/tests/test_shadow_v2.py`)
+
+```bash
+python -m unittest integration.tests.test_shadow_v2 -v
+```
+
+Артефакты для second_ (класть в `integration/results/querulus/2.0.0/`):
+
+- `querulus_ansamble.pickle` — из `example_final` export
+- `metadata.json` — `best_threshold`
+- `dq_bounds.json` — frozen clip из collect
+
+В запросе ОИСУУ: `main_model` = legacy stem, `second_model` = `querulus_ansamble`, оба вектора признаков.
+
 ## Как проверить **интеграционные тесты** (`integration/tests/integration_tests.py`)
 
 Конфиг: `integration/config.py` и корневой `env_template` (скопируйте в `.env`).

@@ -401,3 +401,104 @@ class TestIncomingOutgoingVectorsPreprocessing(unittest.TestCase):
             prepared_from_outgoing.loc[:, expected_features].reset_index(drop=True),
             check_dtype=False,
         )
+
+
+class TestShadowSecondOptional(unittest.TestCase):
+    """Без second_* second_response остаётся {} (legacy контракт)."""
+
+    def test_second_response_empty_when_no_second(self):
+        from unittest import mock
+
+        from integration.main import (
+            CLASSIFICATION_FEATURES,
+            REGRESSION_FEATURES,
+            main_predict,
+        )
+
+        n_clf = len(CLASSIFICATION_FEATURES)
+        n_rg = len(REGRESSION_FEATURES)
+
+        class _DummyClf:
+            def predict_proba(self, t):
+                return np.array([[0.4, 0.6]] * len(t))
+
+        class _DummyRg:
+            def predict(self, t):
+                return np.array([100.0] * len(t))
+
+        group = [
+            {"model_config": {"name": "cf"}, "model": _DummyClf()},
+            {"model_config": {"name": "rg"}, "model": _DummyRg()},
+        ]
+
+        def fake_prepare(model_result, df):
+            return model_result["model"], df.copy()
+
+        vector = {
+            **{c: ("X" if c != "EVENT_YEAR" else 2024) for c in CLASSIFICATION_FEATURES},
+            **{c: (1 if c != "AMOUNT_REPAIR" else 1000) for c in REGRESSION_FEATURES},
+            "EVENT_DATE": "2024-01-01T00:00:00",
+            "PAYMENT_ORDER_DATE_TIME": "2024-01-10T00:00:00",
+            "FILIAL": "ТЕСТ",
+            "RECIEVE_METHOD": "ПОЧТА",
+            "APPLICANT_FORM": "ПОТЕРПЕВШИЙ",
+            "VICTIM_VEHICLE_CATEGORY": "ИНОЕ",
+            "LOSS_UNIT_ZONE": "ЗОНА",
+            "VICTIM_VEHICLE_COUNTRY": "РОССИЯ",
+            "EVENT_CREATED_BY_GIBDD_FLAG": 1,
+            "VICTIM_MAX_WEIGHT": 1500,
+            "GUILTY_CAPACITY_ENGINE": 2,
+            "VICTIM_VEHICLE_AGE": 5,
+            "APPLICANT_AGE": 40,
+            "AMOUNT_REPAIR": 1000,
+        }
+
+        with mock.patch("integration.main._get_or_load_group", return_value=group), mock.patch(
+            "integration.main._prepare_matrix", side_effect=fake_prepare
+        ), mock.patch("integration.main.score_shadow_v2") as shadow_mock:
+            result = main_predict("legacy_group", [vector])
+            shadow_mock.assert_not_called()
+            self.assertEqual(result["second_response"], {})
+            self.assertIn("main_response", result)
+            self.assertIn("oisuu_responce", result)
+
+
+class TestShadowRoundtripOptional(unittest.TestCase):
+    """Roundtrip second_ при наличии pickle 2.0.0; иначе skip."""
+
+    def test_shadow_second_roundtrip_if_artifacts_present(self):
+        from integration.model_profiles import shadow_pickle_path
+        from integration.main import main_predict
+
+        stem = (getattr(config, "shadow_model_group", None) or "querulus_ansamble").strip()
+        pkl = shadow_pickle_path(stem)
+        if not pkl.is_file():
+            self.skipTest(f"нет shadow pickle: {pkl}")
+
+        train_path = (getattr(config, "shadow_train_df_path", None) or "").strip()
+        if not train_path or not Path(train_path).is_file():
+            self.skipTest("SHADOW_TRAIN_DF_PATH не задан — skip roundtrip")
+
+        df = _load_training_dataframe(Path(train_path))
+        preds_cf_col, preds_rg_col = require_outboxml_preds_cols()
+        input_df = df.drop(columns=[preds_cf_col, preds_rg_col], errors="ignore").head(5)
+        # Legacy main всё ещё нужен — берём OUTBOXML_MODEL_GROUP; second = shadow
+        legacy = require_outboxml_model_group()
+        legacy_pkl = Path(config.base_path) / config.prod_models_path / f"{legacy}.pickle"
+        if not legacy_pkl.is_file():
+            self.skipTest(f"нет legacy pickle для main_: {legacy_pkl}")
+
+        records = input_df.to_dict(orient="records")
+        result = main_predict(
+            legacy,
+            records,
+            second_group_name=stem,
+            second_features_values=records,
+        )
+        self.assertTrue(result["second_response"])
+        self.assertIn("result", result["second_response"])
+        self.assertEqual(result["second_response"]["usage_model"], stem)
+
+
+if __name__ == "__main__":
+    unittest.main()

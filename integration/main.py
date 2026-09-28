@@ -23,15 +23,17 @@
 
 Порог классификации (число float)
     1) Если во входном векторе есть поле ``'THRESHOLD'`` — используется оно.
-    2) ``querulus_meta_*.json`` рядом с pickle (``best_threshold`` с Val).
-    3) Иначе ``config.classification_threshold``.
-    4) Иначе ``DEFAULT_CLASSIFICATION_THRESHOLD`` (0.6).
+    2) Иначе ``config.classification_threshold``.
+    3) Иначе ``DEFAULT_CLASSIFICATION_THRESHOLD`` (0.6).
 
 Ответ POST (верхний уровень)
     oisuu_responce — короткий блок для интеграций;
     main_response — usage_model, result, df (поля oisuu не дублируются; порядок ключей
     в result совпадает с порядком одноимённых метрик в oisuu);
-    second_response — всегда пустой dict (резерв под старый контракт).
+    second_response — при second_model+second_request: скоринг shadow 2.0.0;
+    иначе {}. Боевой oisuu_responce всегда от main_.
+
+# CUTOVER: после shadow-периода перенести v2 в main_ (см. shadow_v2 / model_profiles).
 
 Зависимости
     config (проектный), mldataworker (prepare_dataset, ModelConfig, ResultPickle),
@@ -58,15 +60,20 @@ from mldataworker.core.utils import ResultPickle
 
 import uvicorn
 
-from integration import config
+import config
+
+try:
+    from shadow_v2 import score_shadow_v2
+except ImportError:
+    from integration.shadow_v2 import score_shadow_v2
 
 # HTTP-приложение FastAPI
 app = FastAPI()
 
 # Версия API в oisuu_responce["version"] и GET /api/health (см. CHANGELOG.md)
-version = "1.2.0"
+version = "1.3.0"
 
-# Порог классификации, если не задан во входном векторе и нет meta
+# Порог классификации, если не задан во входном векторе
 DEFAULT_CLASSIFICATION_THRESHOLD = 0.6
 
 # Имена колонок, которые должны присутствовать в main_request для классификации
@@ -284,28 +291,6 @@ def get_threshold_from_vector(df_common: pd.DataFrame) -> Optional[float]:
         return None
 
     return float(value)
-
-# reviewed
-def _threshold_from_meta(group_name: str) -> Optional[float]:
-    """``best_threshold`` из ``querulus_meta_{version}.json`` в каталоге моделей."""
-    models_dir = _prod_models_dir()
-    candidates: List[Path] = []
-    prefix = "querulus_ansamble_"
-    if group_name.startswith(prefix):
-        version = group_name[len(prefix) :]
-        candidates.append(models_dir / f"querulus_meta_{version}.json")
-    candidates.append(models_dir / f"querulus_meta_{group_name}.json")
-    for path in candidates:
-        if not path.is_file():
-            continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            raw = payload.get("best_threshold")
-            if raw is not None and not pd.isna(raw):
-                return float(raw)
-        except Exception:
-            logger.warning("Не удалось прочитать best_threshold из meta: {}", path)
-    return None
 
 # reviewed
 def _masked_predictions(
@@ -650,7 +635,7 @@ def _shap_top_features_comment(
                 base_raw = float(v[0, -1, class_idx])
                 raw = base_raw + float(np.sum(v[0, :-1, class_idx]))
                 p = 1.0 / (1.0 + float(np.exp(-raw)))
-                proba_prefix = f"p={p:.2f} | "
+                proba_prefix = f"p={p:.4f} | "
                 base_raw_for_pct = base_raw
             v = v[:, :, class_idx]
         if v.ndim == 2 and v.shape[1] == len(feature_names) + 1:
@@ -658,7 +643,7 @@ def _shap_top_features_comment(
                 base_raw = float(v[0, -1])
                 raw = base_raw + float(np.sum(v[0, :-1]))
                 p = 1.0 / (1.0 + float(np.exp(-raw)))
-                proba_prefix = f"p={p:.2f} | "
+                proba_prefix = f"p={p:.4f} | "
                 base_raw_for_pct = base_raw
             v = v[:, :-1]
         # TreeExplainer ветка: expected_value может быть доступен отдельно.
@@ -671,7 +656,7 @@ def _shap_top_features_comment(
                 base_raw = float(ev)
                 raw = base_raw + float(np.sum(v[0]))
                 p = 1.0 / (1.0 + float(np.exp(-raw)))
-                proba_prefix = f"p={p:.2f} | "
+                proba_prefix = f"p={p:.4f} | "
                 base_raw_for_pct = base_raw
             except Exception:
                 proba_prefix = ""
@@ -701,7 +686,7 @@ def _shap_top_features_comment(
             return f"{prefix}: " + proba_prefix + ", ".join(parts)
 
         idx = np.argsort(np.abs(row))[::-1][:top_n]
-        parts = [f"{feature_names[i]}={row[i]:+.2f}" for i in idx]
+        parts = [f"{feature_names[i]}={row[i]:+.4f}" for i in idx]
         return f"{prefix}: " + proba_prefix + ", ".join(parts)
     except Exception as e:
         msg = str(e).replace("\n", " ").strip()
@@ -919,7 +904,8 @@ def main_predict(
             #   - classification_predictions: предсказанные бинарные метки (0 или 1) для каждой записи
             #   - regression_predictions: маскированная регрессия
             #   - prediction: то же, что oisuu predictions
-            - "second_response": всегда {}.
+            - "second_response": shadow 2.0.0 (если second_* заданы), иначе {}.
+              # CUTOVER: после shadow перенести логику в main_.
 
     Выбрасывает:
         Исключения из загрузки файлов / prepare_dataset пробрасываются в HTTP 500 в predict_route.
@@ -941,15 +927,11 @@ def main_predict(
         logger.exception("main_predict: входной вектор некорректен")
         raise
 
-    # Приоритет порога (контракт сервиса):
+    # Приоритет порога (контракт сервиса legacy main_):
     # 1) Если 'THRESHOLD' есть во входном векторе и он валидный — используем его.
     # 2) Если поле есть, но пустое/битое — DEFAULT.
-    # 3) Если поля нет — config → DEFAULT.
+    # 3) Если поля нет — DEFAULT.
     threshold_value = get_threshold_from_vector(df_common)
-    if threshold_value is None:
-        threshold_value = _threshold_from_meta(group_name)
-    if threshold_value is None:
-        threshold_value = getattr(config, "classification_threshold", None)
     if threshold_value is None:
         threshold_value = DEFAULT_CLASSIFICATION_THRESHOLD
 
@@ -979,7 +961,7 @@ def main_predict(
     )
 
     # Регрессия выполняется всегда вместе с классификацией.
-    # second_model / second_request — заглушки под «вторую связку» и здесь не используются.
+    # second_model / second_request — отдельный shadow-пайплайн 2.0.0 (ниже).
 
     # A3/A5: после preprocess+enrich проверяем состав/порядок колонок для mldataworker
     # Аналогично классификации: режем и фиксируем порядок признаков для регрессии.
@@ -1048,10 +1030,25 @@ def main_predict(
         "df": df_body,
     }
 
+    # Shadow 2.0.0 → second_response (# CUTOVER: потом это станет main_).
+    second_response: Dict[str, Any] = {}
+    if second_group_name and second_features_values:
+        try:
+            second_response = score_shadow_v2(
+                second_group_name,
+                second_features_values,
+            )
+        except Exception:
+            logger.exception(
+                "main_predict: shadow second_ failed || group={}",
+                second_group_name,
+            )
+            raise
+
     return {
         "oisuu_responce": oisuu,
         "main_response": main_response,
-        "second_response": {},
+        "second_response": second_response,
     }
 
 # reviewed

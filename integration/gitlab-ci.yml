@@ -1,0 +1,56 @@
+sstages:
+  - deploytest
+  - deploystage
+  - deployprod
+
+variables:
+  REGISTRY: repo.vsk.ru:5018
+  REPO_PREFIX: rtdm
+  GIT_STRATEGY: clone
+
+deploy_stage:
+  stage: deploystage
+  tags:
+    - perfstage
+  before_script:
+    - docker login $REGISTRY -u $SERVICE_USER -p $SERVICE_PASS
+  script:
+    - NAME=$(grep 'image:' docker-compose.yml | head -1 | awk -F':' '{print $3}' | awk -F'/' '{print $3'} | tr -d '\r')
+    - VERSION=$(grep 'image:' docker-compose.yml | head -1 | awk -F':' '{print $4}' | tr -d '\r')
+    - sed -i 's/XXXX/'"$CI_COMMIT_REF_NAME"'/' docker-compose.yml 
+    - docker pull $REGISTRY/$REPO_PREFIX/${NAME}:${VERSION}
+    - docker stack deploy -c docker-compose.yml rtdm-services --with-registry-auth
+  rules:
+  - if: '$CI_COMMIT_REF_NAME == "stage" && $CI_PIPELINE_SOURCE == "push"'
+
+deploy_test:
+  stage: deploytest
+  tags:
+    - perftest
+  before_script:
+    - docker login $REGISTRY -u $SERVICE_USER -p $SERVICE_PASS
+  script:
+    - NAME=$(grep 'image:' docker-compose.yml | head -1 | awk -F':' '{print $3}' | awk -F'/' '{print $3'} | tr -d '\r')
+    - VERSION=$(grep 'image:' docker-compose.yml | head -1 | awk -F':' '{print $4}' | tr -d '\r')
+    - sed -i 's/XXXX/'"$CI_COMMIT_REF_NAME"'/' docker-compose.yml
+    - docker build -t $REGISTRY/$REPO_PREFIX/${NAME}:${VERSION} . 
+    - docker push $REGISTRY/$REPO_PREFIX/${NAME}:${VERSION}
+    - docker rmi -f $REGISTRY/$REPO_PREFIX/${NAME}:${VERSION}
+    - docker stack deploy -c docker-compose.yml rtdm-services --with-registry-auth
+  rules:
+    - if: '$CI_COMMIT_REF_NAME == "test" && $CI_PIPELINE_SOURCE == "push"'
+
+deploy_prod:
+  stage: deployprod
+  tags:
+    - perfprod
+  before_script:
+    - docker login $REGISTRY -u $SERVICE_USER -p $SERVICE_PASS
+  script:
+    - NAME=$(grep 'image:' docker-compose.yml | head -1 | awk -F':' '{print $3}' | awk -F'/' '{print $3'} | tr -d '\r')
+    - VERSION=$(grep 'image:' docker-compose.yml | head -1 | awk -F':' '{print $4}' | tr -d '\r')
+    - sed -i 's/XXXX/'"$CI_COMMIT_REF_NAME"'/' docker-compose.yml
+    - docker pull $REGISTRY/$REPO_PREFIX/${NAME}:${VERSION}
+    - docker stack deploy -c docker-compose.yml rtdm-services --with-registry-auth
+  rules:
+    - if: '$CI_COMMIT_REF_NAME == "prod" && $CI_PIPELINE_SOURCE == "push"'

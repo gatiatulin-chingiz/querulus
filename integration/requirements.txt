@@ -1,0 +1,7 @@
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pandas>=2.0.0
+numpy>=1.24.0
+loguru>=0.7.0
+environs>=9.5.0
+# mldataworker / catboost / shap — из корпоративного registry (см. pip.conf)

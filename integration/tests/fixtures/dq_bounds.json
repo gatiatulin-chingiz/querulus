@@ -1,0 +1,9 @@
+{
+  "version": "2.0.0",
+  "hard_clip_nonnegative_columns": ["VALUE_BEFORE_WITHOUT", "FE_VALUE_BEFORE_WITHOUT_REAL_2022", "AMOUNT_REPAIR"],
+  "winsorize_bounds": {
+    "VALUE_BEFORE_WITHOUT": {"low_raw": 0.0, "high_raw": 1000000.0},
+    "FE_VALUE_BEFORE_WITHOUT_REAL_2022": {"low_raw": 0.0, "high_raw": 800000.0},
+    "APPLY_DELAY": {"low_raw": -1.0, "high_raw": 365.0}
+  }
+}

@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  querulus:
+    image: repo.vsk.ru:5018/rtdm/querulus:1.3.0
+    deploy:
+      placement:
+        constraints: [node.labels.type == service]
+      mode: replicated
+      replicas: 3
+      restart_policy:
+        delay: 10s
+        max_attempts: 3
+        window: 60s
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1024M
+    networks:
+      - rtdm-network
+    # volumes: ### Если нужно видеть папку на сервере - пробрасываем её здесь (раскомменчиваем)
+      # - /opt/models/osago_fl_automl_v2/:/home/model_user/list_models/ ### Путь на сервере:Путь внутри контейнера
+    ports:
+      - 10637:8080
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://perf-pydsp-master2.vsk.ru:3100/loki/api/v1/push"
+networks:
+  rtdm-network:
+    external: true
