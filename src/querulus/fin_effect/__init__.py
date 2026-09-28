@@ -70,6 +70,12 @@ from querulus.fin_effect.resolve import (
     resolve_fin_effect_config,
 )
 from querulus.fin_effect.business_report import export_business_html
+from querulus.fin_effect.bootstrap import (
+    DEFAULT_BOOTSTRAP_FOLDS,
+    DEFAULT_BOOTSTRAP_SEED,
+    BootstrapFinEffect,
+    bootstrap_fin_effect,
+)
 from querulus.fin_effect.export import export_analytics_excel
 from querulus.fin_effect.summary import (
     color_excel_table,
@@ -127,6 +133,9 @@ def __dir__() -> list[str]:
 
 __all__ = [
     "ANALYTICS_RENAME_DICT",
+    "BootstrapFinEffect",
+    "DEFAULT_BOOTSTRAP_FOLDS",
+    "DEFAULT_BOOTSTRAP_SEED",
     "FinEffectConfig",
     "FinEffectResult",
     "StackCompareReport",
@@ -135,6 +144,7 @@ __all__ = [
     "add_premiums_column",
     "align_effect_inputs",
     "apply_model_predictions",
+    "bootstrap_fin_effect",
     "color_excel_table",
     "compare_fact_bases",
     "compare_formula_summaries",

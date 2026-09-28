@@ -13,6 +13,10 @@ import pandas as pd
 
 from querulus.dataset.hadoop import load_df_final
 from querulus.fin_effect import (
+    DEFAULT_BOOTSTRAP_FOLDS,
+    DEFAULT_BOOTSTRAP_SEED,
+    BootstrapFinEffect,
+    bootstrap_fin_effect,
     create_summary_table,
     export_business_html,
     print_best_threshold_report,
@@ -114,8 +118,14 @@ class FinEffectTableResult:
 
 @dataclass
 class TestProdCompareResult:
-    parity: FinEffectResult | None
-    prod: FinEffectResult
+    """Финэффект Test_prod по bootstrap-фолдам (медиана + разброс).
+
+    ``parity`` / ``prod`` — ``BootstrapFinEffect`` (метрики по фолдам и медиана),
+    ``compare_table`` — сводка «parity train vs prod train» по медианам.
+    """
+
+    parity: BootstrapFinEffect | None
+    prod: BootstrapFinEffect
     compare_table: pd.DataFrame
     test_prod_idx: pd.Index
 
@@ -377,22 +387,18 @@ def run_parity_cross_test_metrics(
         )
 
 
-def fin_effect_table(
+def _fin_effect_common_index(
     df: pd.DataFrame,
     index: pd.Index,
     proba: pd.Series,
     sev: pd.Series,
-    *,
-    threshold: float | None = None,
-    title: str = "",
-    render: bool = True,
-) -> FinEffectTableResult:
-    """Финэффект на index с фиксированным τ; опционально печать и display."""
-    cfg = resolve_fin_effect_config(
-        df,
-        frequency_target="TARGET_FREQ",
-        severity_target="TARGET_SEV",
-    )
+) -> pd.Index:
+    """Строки выборки, на которых есть и факт, и оба предсказания.
+
+    Единая проверка покрытия для точечного и bootstrap-расчёта: severity
+    предсказывается на всех строках (без ``data_filter_condition``), иначе
+    покрытие < 95% и расчёт не имеет смысла.
+    """
     common = (
         pd.Index(index)
         .intersection(proba.dropna().index)
@@ -414,6 +420,26 @@ def fin_effect_table(
             len(index),
             len(index) - len(common),
         )
+    return common
+
+
+def fin_effect_table(
+    df: pd.DataFrame,
+    index: pd.Index,
+    proba: pd.Series,
+    sev: pd.Series,
+    *,
+    threshold: float | None = None,
+    title: str = "",
+    render: bool = True,
+) -> FinEffectTableResult:
+    """Финэффект на index с фиксированным τ; опционально печать и display."""
+    cfg = resolve_fin_effect_config(
+        df,
+        frequency_target="TARGET_FREQ",
+        severity_target="TARGET_SEV",
+    )
+    common = _fin_effect_common_index(df, index, proba, sev)
     aligned = df.loc[common]
     fe = run_fin_effect_pipeline(
         aligned,
@@ -441,6 +467,81 @@ def fin_effect_table(
         n_neg = int((aligned["TARGET_FREQ"] == 0).sum())
         print(f"выборка: n = {len(aligned)}, TARGET_FREQ=1: {n_pos}, TARGET_FREQ=0: {n_neg}")
     return FinEffectTableResult(fin_effect=fe, summary=summary)
+
+
+def render_bootstrap_fin_effect(
+    result: BootstrapFinEffect,
+    *,
+    title: str = "",
+) -> None:
+    """Display: таблица фолдов + строка медианы и печать итоговой цифры."""
+    if title:
+        _markdown(f"### {title}")
+    table = result.summary_table()
+    _display(
+        table.style.format(
+            {
+                "fold": "{:}",
+                "n": "{:,.0f}",
+                "n_fact_1": "{:,.0f}",
+                "n_pred_1": "{:,.0f}",
+                "thr": "{:.2f}",
+                "net_effect": "{:,.0f}",
+                "model_effect": "{:,.0f}",
+                "fact_effect": "{:,.0f}",
+            },
+            na_rep="—",
+        )
+    )
+    thr_text = "—" if result.threshold is None else f"{result.threshold:.2f}"
+    print(
+        f"Медиана по {result.n_folds} bootstrap-фолдам "
+        f"(n = {result.n_rows}, seed = {result.seed}, τ = {thr_text}): "
+        f"model={result.median_model_effect:,.0f} ₽, "
+        f"fact={result.median_fact_effect:,.0f} ₽, "
+        f"net={result.median_net_effect:,.0f} ₽ "
+        f"[min {result.min_net_effect:,.0f}; max {result.max_net_effect:,.0f}; "
+        f"std {result.std_net_effect:,.0f}]"
+    )
+
+
+def bootstrap_fin_effect_table(
+    df: pd.DataFrame,
+    index: pd.Index,
+    proba: pd.Series,
+    sev: pd.Series,
+    *,
+    threshold: float | None = None,
+    n_folds: int = DEFAULT_BOOTSTRAP_FOLDS,
+    seed: int = DEFAULT_BOOTSTRAP_SEED,
+    title: str = "",
+    render: bool = True,
+) -> BootstrapFinEffect:
+    """Bootstrap-финэффект на index: ``n_folds`` выборок с возвращением → медиана.
+
+    В отличие от ``fin_effect_table`` считает эффект не на всей выборке, а на
+    ``n_folds`` bootstrap-фолдах; итог — медиана метрик. τ фиксирован из collect.
+    """
+    cfg = resolve_fin_effect_config(
+        df,
+        frequency_target="TARGET_FREQ",
+        severity_target="TARGET_SEV",
+    )
+    common = _fin_effect_common_index(df, index, proba, sev)
+    aligned = df.loc[common]
+    result = bootstrap_fin_effect(
+        aligned,
+        proba.reindex(common),
+        sev.reindex(common),
+        aligned["TARGET_FREQ"],
+        threshold=threshold,
+        config=cfg,
+        n_folds=n_folds,
+        seed=seed,
+    )
+    if render:
+        render_bootstrap_fin_effect(result, title=title)
+    return result
 
 
 def run_test_fin_effect(
@@ -509,84 +610,129 @@ def run_prod_metrics(
     )
 
 
+def _bootstrap_compare_row(
+    train: str,
+    train_period: tuple[str, str],
+    *,
+    n_test_prod: int,
+    threshold: float,
+    bootstrap: BootstrapFinEffect,
+) -> dict[str, Any]:
+    """Строка сводки: медиана по фолдам + разброс net_effect."""
+    return {
+        "train": train,
+        "train_period": f"{train_period[0]} … {train_period[1]}",
+        "n_test_prod": n_test_prod,
+        "n_folds": bootstrap.n_folds,
+        "seed": bootstrap.seed,
+        "thr": threshold,
+        "net_effect": bootstrap.median_net_effect,
+        "net_effect_min": bootstrap.min_net_effect,
+        "net_effect_max": bootstrap.max_net_effect,
+        "net_effect_std": bootstrap.std_net_effect,
+        "model_effect": bootstrap.median_model_effect,
+        "fact_effect": bootstrap.median_fact_effect,
+    }
+
+
 def run_test_prod_fin_effect(
     models: ExampleDsmBundle,
     bundle: ExampleDatasetBundle,
     *,
     thresholds: ExampleThresholds,
+    n_folds: int = DEFAULT_BOOTSTRAP_FOLDS,
+    seed: int = DEFAULT_BOOTSTRAP_SEED,
 ) -> TestProdCompareResult:
-    """Финэффект на Test_prod (15% holdout, без τ-cal).
+    """Bootstrap-финэффект на Test_prod (15% holdout, без τ-cal).
+
+    Считаем не один эффект на всей выборке, а ``n_folds`` bootstrap-фолдов
+    (выборки того же размера **с возвращением**); в результатах — **медиана**
+    по фолдам и её разброс (min/max/std). τ фиксирован (collect).
 
     Если есть parity DSM — сравнивает parity vs prod; иначе только prod
     (для ``example_final``).
     """
     test_prod_idx = bundle.periods["prod_holdout_idx"]
     logger.info(
-        "Test_prod: n=%s, период %s … %s",
+        "Test_prod: n=%s, период %s … %s; bootstrap %s фолдов (seed=%s)",
         len(test_prod_idx),
         bundle.periods["prod_test_period"][0],
         bundle.periods["prod_test_period"][1],
+        n_folds,
+        seed,
     )
 
     rows: list[dict[str, Any]] = []
-    fe_parity: FinEffectResult | None = None
+    fe_parity: BootstrapFinEffect | None = None
     if models.dsm_cf is not None and models.dsm_rg is not None:
-        fe_parity = fin_effect_table(
+        fe_parity = bootstrap_fin_effect_table(
             bundle.df,
             test_prod_idx,
             predict_cf(models.dsm_cf, bundle.cf_name, bundle.df.loc[test_prod_idx]),
             predict_rg(models.dsm_rg, bundle.rg_name, bundle.df.loc[test_prod_idx]),
             threshold=thresholds.parity,
-            title=f"Финэффект Test_prod — parity train (τ = {thresholds.parity:.2f})",
-        ).fin_effect
+            n_folds=n_folds,
+            seed=seed,
+            title=(
+                f"Bootstrap-финэффект Test_prod — parity train "
+                f"(τ = {thresholds.parity:.2f}, {n_folds} фолдов)"
+            ),
+        )
         rows.append(
-            {
-                "train": "parity",
-                "train_period": (
-                    f"{bundle.periods['parity_train_period'][0]} … "
-                    f"{bundle.periods['parity_train_period'][1]}"
-                ),
-                "n_test_prod": len(test_prod_idx),
-                "thr": thresholds.parity,
-                "net_effect": fe_parity.net_effect,
-                "model_effect": fe_parity.model_effect_total,
-                "fact_effect": fe_parity.fact_effect_total,
-            }
+            _bootstrap_compare_row(
+                "parity",
+                bundle.periods["parity_train_period"],
+                n_test_prod=len(test_prod_idx),
+                threshold=thresholds.parity,
+                bootstrap=fe_parity,
+            )
         )
 
-    fe_prod = fin_effect_table(
+    fe_prod = bootstrap_fin_effect_table(
         bundle.df,
         test_prod_idx,
         predict_cf(models.dsm_cf_prod, bundle.cf_name, bundle.df.loc[test_prod_idx]),
         predict_rg(models.dsm_rg_prod, bundle.rg_name, bundle.df.loc[test_prod_idx]),
         threshold=thresholds.prod,
-        title=f"Финэффект Test_prod — prod train (τ = {thresholds.prod:.2f})",
-    ).fin_effect
+        n_folds=n_folds,
+        seed=seed,
+        title=(
+            f"Bootstrap-финэффект Test_prod — prod train "
+            f"(τ = {thresholds.prod:.2f}, {n_folds} фолдов)"
+        ),
+    )
     rows.append(
-        {
-            "train": "prod",
-            "train_period": (
-                f"{bundle.periods['prod_train_period'][0]} … "
-                f"{bundle.periods['prod_train_period'][1]}"
-            ),
-            "n_test_prod": len(test_prod_idx),
-            "thr": thresholds.prod,
-            "net_effect": fe_prod.net_effect,
-            "model_effect": fe_prod.model_effect_total,
-            "fact_effect": fe_prod.fact_effect_total,
-        }
+        _bootstrap_compare_row(
+            "prod",
+            bundle.periods["prod_train_period"],
+            n_test_prod=len(test_prod_idx),
+            threshold=thresholds.prod,
+            bootstrap=fe_prod,
+        )
     )
 
     compare = pd.DataFrame(rows)
     title = (
-        "Сводка: финэффект на Test_prod (parity train vs prod train)"
+        "Сводка: медиана финэффекта на Test_prod по bootstrap-фолдам "
+        "(parity train vs prod train)"
         if fe_parity is not None
-        else "Сводка: финэффект на Test_prod (prod)"
+        else "Сводка: медиана финэффекта на Test_prod по bootstrap-фолдам (prod)"
     )
     _markdown(f"### {title}")
     _display(
         compare.style.format(
-            {"net_effect": "{:,.0f}", "model_effect": "{:,.0f}", "fact_effect": "{:,.0f}"},
+            {
+                "n_test_prod": "{:,.0f}",
+                "n_folds": "{:,.0f}",
+                "seed": "{:,.0f}",
+                "thr": "{:.2f}",
+                "net_effect": "{:,.0f}",
+                "net_effect_min": "{:,.0f}",
+                "net_effect_max": "{:,.0f}",
+                "net_effect_std": "{:,.0f}",
+                "model_effect": "{:,.0f}",
+                "fact_effect": "{:,.0f}",
+            },
             na_rep="—",
         )
     )
@@ -595,8 +741,17 @@ def run_test_prod_fin_effect(
             f"τ parity (meta val_threshold): {thresholds.parity:.2f}; "
             f"τ prod (meta best_threshold): {thresholds.prod:.2f}"
         )
+        print(
+            f"Итог (медиана {n_folds} фолдов, seed={seed}): "
+            f"parity net={fe_parity.median_net_effect:,.0f} ₽; "
+            f"prod net={fe_prod.median_net_effect:,.0f} ₽"
+        )
     else:
         print(f"τ prod (meta best_threshold): {thresholds.prod:.2f}")
+        print(
+            f"Итог (медиана {n_folds} фолдов, seed={seed}): "
+            f"prod net={fe_prod.median_net_effect:,.0f} ₽"
+        )
     return TestProdCompareResult(
         parity=fe_parity,
         prod=fe_prod,

@@ -80,6 +80,8 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "run_prod_plots_and_email": (".example_pipeline", "run_prod_plots_and_email"),
     "run_test_fin_effect": (".example_pipeline", "run_test_fin_effect"),
     "run_test_prod_fin_effect": (".example_pipeline", "run_test_prod_fin_effect"),
+    "bootstrap_fin_effect_table": (".example_pipeline", "bootstrap_fin_effect_table"),
+    "render_bootstrap_fin_effect": (".example_pipeline", "render_bootstrap_fin_effect"),
     "payment_year_cohorts": (".start_year_eval", "payment_year_cohorts"),
     "score_stack_on_index": (".stack_eval", "score_stack_on_index"),
     "train_legacy_matching_new": (".stack_eval", "train_legacy_matching_new"),
