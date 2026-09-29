@@ -1,6 +1,8 @@
 """Шаг пайплайна: targets."""
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
@@ -11,6 +13,8 @@ from querulus.dataset.preprocess.filters import (
     ensure_victim_object_type_column,
     select_primary_loss_per_incident,
 )
+
+logger = logging.getLogger("querulus.dataset")
 
 TARGET_FREQ_CLAIMS_GROUP = ("LOSS_NUMBER", "INCOMING_CLAIM_NUMBER")
 _FU_CLAIM_ORIGIN = "Обращение к ФУ"
@@ -354,16 +358,33 @@ def build_targets(
 
     df_calc.loc[df_calc['ПроцентИзноса'] > 50, 'ПроцентИзноса'] = 50
     df_calc = df_calc.rename(columns={'Убыток': 'LOSS_NUMBER'})
-    df_calc['SHARE_WORK'] = (df_calc['Работы'] / df_calc['СуммаРемонтаБезУчётаИзноса']).round(3)
     df_calc = df_calc.rename(
         columns={'СуммаРемонтаБезУчётаИзноса': 'AMOUNT_REPAIR', 'ПроцентИзноса': 'SHARE_WEAROUT'}
     )
 
+    # `Работы` — только числитель SHARE_WORK, в датасет не пишется.
     df = df.merge(
-        df_calc[['INCIDENT_NUMBER', 'SHARE_WORK', 'AMOUNT_REPAIR', 'SHARE_WEAROUT']],
+        df_calc[['INCIDENT_NUMBER', 'Работы', 'AMOUNT_REPAIR', 'SHARE_WEAROUT']],
         how='left',
         on='INCIDENT_NUMBER',
     )
+
+    # SHARE_WORK = Работы / стоимость ремонта без износа.
+    # Числитель (`Работы`) — из df_calc (`_InfoRg14746`), знаменатель — VALUE_BEFORE_WITHOUT
+    # из общего victim-фрейма: в calc-выгрузке этой колонки нет.
+    # Фолбэк на AMOUNT_REPAIR (= СуммаРемонтаБезУчётаИзноса из calc) — только для старых
+    # выгрузок без VALUE_BEFORE_WITHOUT; нулевой знаменатель → NaN (не делим).
+    work = pd.to_numeric(df['Работы'], errors='coerce')
+    if 'VALUE_BEFORE_WITHOUT' in df.columns:
+        value_without = pd.to_numeric(df['VALUE_BEFORE_WITHOUT'], errors='coerce')
+    else:
+        logger.warning(
+            "SHARE_WORK: в общем фрейме нет VALUE_BEFORE_WITHOUT — "
+            "знаменатель берём из AMOUNT_REPAIR (calc)"
+        )
+        value_without = pd.to_numeric(df['AMOUNT_REPAIR'], errors='coerce')
+    df['SHARE_WORK'] = (work / value_without.where(value_without != 0)).round(3)
+    df = df.drop(columns=['Работы'])
 
     df['FLAG_APPLICANT_SAME_VICTIM_PH'] = (
         df['APPLICANT_ID'] == df['VICTIM_POLICYHOLDER_PERSON_ID']

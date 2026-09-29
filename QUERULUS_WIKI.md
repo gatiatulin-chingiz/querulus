@@ -412,7 +412,7 @@ TARGET_2 = 1 if TARGET_2 > 0 else 0
 
 | Фича | Описание | Как собирается |
 |------|----------|----------------|
-| `SHARE_WORK` | Доля работ в калькуляции | `Работы / СуммаРемонта` из `_InfoRg14746` |
+| `SHARE_WORK` | Доля работ в калькуляции | `Работы` (`_InfoRg14746`) / `VALUE_BEFORE_WITHOUT` (victim-строка); фолбэк — `AMOUNT_REPAIR`, если колонки нет |
 | `AMOUNT_REPAIR` | Сумма ремонта без износа | `_InfoRg14746` → **TO_DROP** |
 | `SHARE_WEAROUT` | Процент износа (cap 50) | `_InfoRg14746` → **TO_DROP** |
 | `FLAG_APPLICANT_SAME_VICTIM_PH` | Заявитель = PH victim | `APPLICANT_ID == VICTIM_POLICYHOLDER_PERSON_ID` |
