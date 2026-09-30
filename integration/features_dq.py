@@ -79,16 +79,21 @@ def apply_frozen_dq_from_path(
 
 
 def bounds_from_data_quality_report(report: dict[str, Any]) -> dict[str, Any]:
-    """Собрать service-bounds из data_quality_report.json collect."""
+    """Собрать service-bounds из data_quality_report.json collect.
+
+    Обе секции winsorize — на сырой шкале: ``winsorize_log1p_iqr`` (float-фичи)
+    и ``winsorize_iqr_integer`` (int-подобные: AGE/YEAR/COUNT, границы целые).
+    """
     winsor_bounds: dict[str, dict[str, float]] = {}
-    for row in report.get("winsorize_log1p_iqr") or []:
-        column = row.get("column")
-        if not column:
-            continue
-        winsor_bounds[str(column)] = {
-            "low_raw": float(row["low_raw"]),
-            "high_raw": float(row["high_raw"]),
-        }
+    for section in ("winsorize_log1p_iqr", "winsorize_iqr_integer"):
+        for row in report.get(section) or []:
+            column = row.get("column")
+            if not column:
+                continue
+            winsor_bounds[str(column)] = {
+                "low_raw": float(row["low_raw"]),
+                "high_raw": float(row["high_raw"]),
+            }
     money_cols = [
         str(row.get("column"))
         for row in (report.get("hard_clip_nonnegative") or [])

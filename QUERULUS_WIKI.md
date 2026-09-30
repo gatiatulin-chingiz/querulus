@@ -107,7 +107,10 @@
    - derived `FE_*`: `add_derived_features()`
    - incident pretensions FE: `add_incident_pretension_features()`
    - person history FE (опционально): `run_person_features()` + дефляция real (`features/inflation.py`)
-   - data quality: `apply_dataset_data_quality()` → clip ≥ 0, winsorize на train-period
+   - data quality: `apply_dataset_data_quality()` → clip ≥ 0, winsorize на train-period:
+     float-фичи — Tukey-fence на `log1p`; int-подобные (`AGE`/`YEAR`/`COUNT`/…,
+     `features/integer_casts.py`) — сырой IQR с целыми границами `floor`/`ceil`,
+     фичи-годы — верх = `MAX_YEAR_FEATURE_VALUE` (2026)
 4. checkpoint → `data/processed/df_final_3.parquet`
 
 Имена ключевых артефактов:
@@ -227,7 +230,7 @@ TARGET_2 = 1 if TARGET_2 > 0 else 0
 | Фича | Описание | Как собирается |
 |------|----------|----------------|
 | `FE_VICTIM_AGE_BIN` | Возраст ТС | 0-3 / 3-7 / 7-15 / 15+ из `VICTIM_VEHICLE_AGE` |
-| `FE_VICTIM_POWER_PER_TON` | Мощность на тонну | `VICTIM_CAPACITY_ENGINE / VICTIM_MAX_WEIGHT` |
+| `FE_VICTIM_POWER_PER_TON` | Мощность на тонну | `(VICTIM_CAPACITY_ENGINE / VICTIM_MAX_WEIGHT) * 1e6` |
 | `FE_VICTIM_HEAVY` | Тяжёлое ТС | `VICTIM_MAX_WEIGHT > 3500` |
 | `FE_VICTIM_DOORS_BIN` | Число дверей | 2/3/4/5+ из `VICTIM_NUM_DOORS` |
 | `FE_VICTIM_SEATS_BIN` | Число мест | le_4 / 5-7 / 8+ из `VICTIM_NUM_PLACE` |
@@ -580,14 +583,16 @@ TARGET_2 = 1 if TARGET_2 > 0 else 0
 Связка артефактов train-loop new с OutBoxML **без** ручной правки `features[]`. Код FastAPI на этом этапе не меняется; контракт DQ для сервиса уже зафиксирован артефактом.
 
 - **Версия-строка:** `2_YYYY_MM_DD_v1` (без слова `new`). Пример: `config_cf_2_….json`, `querulus_ansamble_2_….pickle`, `querulus_cf_calibrator_2_….pickle`, `querulus_dq_bounds_2_….json`.
-- **Генератор:** `src/querulus/training/build_outboxml_configs.py` → `write_outboxml_configs()`  
-  - cat: ключи `replace` в **UPPER**; неизвестное → `"ПРОЧИЕ": 0` (`default`/`fillna` = 0); бинарные 0/1 — без ПРОЧИЕ;  
-  - num: `default: "_MEDIAN_"` (медиана считается на **fit** DSM → у prod-refit своя);  
-  - линейный `clip` в JSON **не** пишем: winsorize — из DQ сборки датасета.
+- **Генератор:** `src/querulus/training/build_outboxml_configs.py` → `write_outboxml_configs()`
+  - cat, схлопывание (`_categorical_feature_spec`): код получают уровни с долей ≥ `CAT_LEVEL_SHARE_MIN` (1%) в fit-срезе (train∪val), но не более `CAT_MAX_CODES` (20) и не менее `CAT_MIN_CODES` (5); **все остальные уровни, `None` и `NaN` → `"ПРОЧИЕ": 0`**; хвост уровней прописывается в `replace` явно (`→ 0`), чтобы при `default` = мода он не уехал в моду; неизвестный на predict уровень → `default`; ключи `replace` в **UPPER**; бинарные 0/1 — как в `config_*_3` (свои коды, без ПРОЧИЕ, пропуск → мода);
+  - cat, пропуски: при NaN-доле ≥ `CAT_NAN_SHARE_MIN` (10%) `NaN` — отдельная категория `"NAN"` с кодом `K+1`, `fillna` = её код (код 0 falsy — outboxml возьмёт `default`, поэтому NaN-код всегда ≥ 1), `default` = код моды; при ≤ `CAT_SMALL_CARD_MAX` (10) уровнях `None`/`NaN` → мода (`default` = код моды, `fillna` не пишем); иначе `None`/`NaN` → `ПРОЧИЕ` (`default` = 0, `fillna` не пишем);
+  - num: `default: "_MEDIAN_"` (медиана считается на **fit** DSM → у prod-refit своя), для фич-годов — **последний (больший) год fit-среза** (≤ 2026) конкретным `int`; плейсхолдер `"_MAX_"` не используем: OutBoxML резолвит его через `series.max()`, а для целой колонки это `np.int64`, и проверка `isinstance(default_value, (int, float))` падает с `ConfigError` (в сервис `EVENT_YEAR` приходит целым);
+  - num, `clip` пишем **всем** int/float фичам, кроме бинарных: границы из `data_quality_report.json` сборки (`clip_bounds_for_outboxml`, обе секции winsorize), а для фич без записи в отчёте — квантили `CLIP_QUANTILES` (0.1%/99.9%) на fit-срезе; int-подобные — `encoding: to_int` и целые границы `floor`/`ceil` (`min` не поднимаем до 0, если в данных есть отрицательные — лаги `FE_DAYS_*`); фичи-годы — верх `MAX_YEAR_FEATURE_VALUE` = 2026; вырожденные границы (`high <= low`) → `clip` не пишем;
+  - `replace: {"_TYPE_": "_NUM_"}` — служебный маркер числовой фичи (по нему `prepare_dataset` выбирает числовую ветку), а не замена значений.
 - **Калибровка:** снаружи DSM, isotonic после `fit_models`. Severity не калибруем.
 - **Ноутбук:** `notebooks/example_2.ipynb`. Старый `example.ipynb` / `config_*_3` не трогаем.
 - **Parity / Prod-refit:** как раньше (parity для FE-таблиц; в ансамбль только prod 85/15).
-- **Сервис (TODO integration):** сырой вектор → `apply_frozen_dq_bounds(df, querulus_dq_bounds_*)` → `prepare_dataset`. Границы = `data_quality_report.json` сборки `df_final_3` (не IQR с заявки). Хелперы: `features/data_quality.py`.
+- **Сервис (TODO integration):** сырой вектор → `apply_frozen_dq_bounds(df, querulus_dq_bounds_*)` → `prepare_dataset`. Границы = `data_quality_report.json` сборки `df_final_3` (не IQR с заявки), обе секции: `winsorize_log1p_iqr` (float) + `winsorize_iqr_integer` (int-подобные, целые границы). Хелперы: `features/data_quality.py`.
 
 ---
 

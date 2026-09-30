@@ -48,7 +48,7 @@
 | Фича | Описание | Как собирается |
 |------|----------|----------------|
 | `FE_VICTIM_AGE_BIN` | Возраст ТС | 0-3 / 3-7 / 7-15 / 15+ из `VICTIM_VEHICLE_AGE` |
-| `FE_VICTIM_POWER_PER_TON` | Мощность на тонну | `VICTIM_CAPACITY_ENGINE / VICTIM_MAX_WEIGHT` |
+| `FE_VICTIM_POWER_PER_TON` | Мощность на тонну | `(VICTIM_CAPACITY_ENGINE / VICTIM_MAX_WEIGHT) * 1e6` |
 | `FE_VICTIM_HEAVY` | Тяжёлое ТС | `VICTIM_MAX_WEIGHT > 3500` |
 | `FE_VICTIM_DOORS_BIN` | Число дверей | 2/3/4/5+ из `VICTIM_NUM_DOORS` |
 | `FE_VICTIM_SEATS_BIN` | Число мест | le_4 / 5-7 / 8+ из `VICTIM_NUM_PLACE` |

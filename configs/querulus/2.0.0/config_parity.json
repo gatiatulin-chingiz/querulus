@@ -1,0 +1,262 @@
+{
+  "group_name": "UU",
+  "project": "querulus",
+  "version": "1",
+  "data_config": {
+    "source": "parquet",
+    "table_name_source": "",
+    "local_name_source": "C:/Users/grchi/Desktop/pet_projects/outboxml/examples/querulus/data/processed/df_final_3_synthetic.parquet",
+    "processing": true,
+    "showGraphs": false,
+    "separation": {
+      "kind": "date",
+      "random_state": 0,
+      "train_period": [
+        "2022-01-01",
+        "2024-04-01"
+      ],
+      "test_period": [
+        "2024-06-01",
+        "2025-06-01"
+      ],
+      "period_column": [
+        "PAYMENT_ORDER_DATE_TIME"
+      ]
+    },
+    "extra_columns": [
+      "PAYMENT_ORDER_DATE_TIME",
+      "TARGET_FREQ",
+      "TARGET_SEV"
+    ],
+    "data": {
+      "targetcolumns": [],
+      "targetslices": []
+    }
+  },
+  "models_configs": [
+    {
+      "name": "querulus_cf",
+      "column_target": "TARGET_FREQ",
+      "objective": "binary",
+      "wrapper": "catboost",
+      "params_catboost": {
+        "iterations": 1100,
+        "random_seed": 0,
+        "verbose": false,
+        "allow_writing_files": false,
+        "auto_class_weights": "Balanced",
+        "bootstrap_type": "Bernoulli",
+        "grow_policy": "SymmetricTree",
+        "learning_rate": 0.013281300533724715,
+        "depth": 10,
+        "l2_leaf_reg": 9.0,
+        "random_strength": 6.536930531051615e-06,
+        "rsm": 0.5714096390585404,
+        "leaf_estimation_method": "Newton",
+        "one_hot_max_size": 215,
+        "subsample": 0.5790231589473285
+      },
+      "cat_features_catboost": [
+        "EVENT_CREATED_BY_GIBDD_FLAG",
+        "FILIAL",
+        "VICTIM_VEHICLE_CATEGORY",
+        "APPLICANT_FORM",
+        "RECIEVE_METHOD"
+      ],
+      "relative_features": [],
+      "features": [
+        {
+          "name": "EVENT_CREATED_BY_GIBDD_FLAG",
+          "default": 0,
+          "replace": {
+            "0": 0,
+            "1": 1
+          },
+          "encoding": "to_int",
+          "fillna": 0
+        },
+        {
+          "name": "FILIAL",
+          "default": 1,
+          "replace": {
+            "ПРОЧИЕ": 0,
+            "СПБ": 1,
+            "ЕКАТЕРИНБУРГ": 2,
+            "КАЗАНЬ": 3,
+            "МОСКВА": 4
+          },
+          "encoding": "to_int"
+        },
+        {
+          "name": "VICTIM_VEHICLE_CATEGORY",
+          "default": 1,
+          "replace": {
+            "ПРОЧИЕ": 0,
+            "C": 1,
+            "B": 2,
+            "D": 3
+          },
+          "encoding": "to_int"
+        },
+        {
+          "name": "APPLICANT_FORM",
+          "default": 1,
+          "replace": {
+            "ПРОЧИЕ": 0,
+            "ЮРИСТ": 1,
+            "ПРЕДСТАВИТЕЛЬ": 2,
+            "ПОТЕРПЕВШИЙ": 3
+          },
+          "encoding": "to_int"
+        },
+        {
+          "name": "RECIEVE_METHOD",
+          "default": 1,
+          "replace": {
+            "ПРОЧИЕ": 0,
+            "ЭЛЕКТРОННО": 1,
+            "ПОЧТА": 2,
+            "ОЧНО": 3
+          },
+          "encoding": "to_int"
+        },
+        {
+          "name": "VICTIM_VEHICLE_AGE",
+          "default": "_MEDIAN_",
+          "replace": {
+            "_TYPE_": "_NUM_"
+          },
+          "encoding": "to_int",
+          "clip": {
+            "min_value": 0.0,
+            "max_value": 29.0
+          }
+        },
+        {
+          "name": "VICTIM_MAX_WEIGHT",
+          "default": "_MEDIAN_",
+          "replace": {
+            "_TYPE_": "_NUM_"
+          },
+          "encoding": "to_float",
+          "clip": {
+            "min_value": 879.3689875693901,
+            "max_value": 6073.849159949769
+          }
+        },
+        {
+          "name": "GUILTY_CAPACITY_ENGINE",
+          "default": "_MEDIAN_",
+          "replace": {
+            "_TYPE_": "_NUM_"
+          },
+          "encoding": "to_float",
+          "clip": {
+            "min_value": 735.8134353005173,
+            "max_value": 5181.557429216928
+          }
+        },
+        {
+          "name": "APPLICANT_AGE",
+          "default": "_MEDIAN_",
+          "replace": {
+            "_TYPE_": "_NUM_"
+          },
+          "encoding": "to_int",
+          "clip": {
+            "min_value": 0.0,
+            "max_value": 98.0
+          }
+        },
+        {
+          "name": "EVENT_YEAR",
+          "default": 2024,
+          "replace": {
+            "_TYPE_": "_NUM_"
+          },
+          "encoding": "to_int",
+          "clip": {
+            "min_value": 2020.0,
+            "max_value": 2026.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "querulus_rg",
+      "column_target": "TARGET_SEV",
+      "objective": "regression",
+      "wrapper": "catboost",
+      "params_catboost": {
+        "iterations": 1500,
+        "random_seed": 0,
+        "verbose": false,
+        "allow_writing_files": false,
+        "bootstrap_type": "No",
+        "grow_policy": "Depthwise",
+        "learning_rate": 0.004289847451479052,
+        "depth": 7,
+        "l2_leaf_reg": 5.0,
+        "random_strength": 1.4317391755413188e-09,
+        "rsm": 0.8441274468228888,
+        "leaf_estimation_method": "Gradient",
+        "one_hot_max_size": 230
+      },
+      "cat_features_catboost": [
+        "LOSS_UNIT_ZONE",
+        "VICTIM_VEHICLE_COUNTRY"
+      ],
+      "relative_features": [],
+      "features": [
+        {
+          "name": "LOSS_UNIT_ZONE",
+          "default": 1,
+          "replace": {
+            "ПРОЧИЕ": 0,
+            "ЦЕНТР": 1,
+            "ЮГ": 2,
+            "ВОСТОК": 3,
+            "СЕВЕР": 4
+          },
+          "encoding": "to_int"
+        },
+        {
+          "name": "VICTIM_VEHICLE_COUNTRY",
+          "default": 1,
+          "replace": {
+            "ПРОЧИЕ": 0,
+            "РОССИЯ": 1,
+            "БЕЛАРУСЬ": 2,
+            "КАЗАХСТАН": 3
+          },
+          "encoding": "to_int"
+        },
+        {
+          "name": "APPLY_DELAY",
+          "default": "_MEDIAN_",
+          "replace": {
+            "_TYPE_": "_NUM_"
+          },
+          "encoding": "to_int",
+          "clip": {
+            "min_value": 0.0,
+            "max_value": 174.0
+          }
+        },
+        {
+          "name": "FE_VALUE_BEFORE_WITHOUT_REAL_2022",
+          "default": "_MEDIAN_",
+          "replace": {
+            "_TYPE_": "_NUM_"
+          },
+          "encoding": "to_float",
+          "clip": {
+            "min_value": 10639.15580629667,
+            "max_value": 100014.10106907693
+          }
+        }
+      ],
+      "data_filter_condition": "TARGET_SEV > 0"
+    }
+  ]
+}

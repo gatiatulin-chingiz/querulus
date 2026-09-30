@@ -231,10 +231,12 @@ def _add_victim_vehicle_features(df: pd.DataFrame, config: FeatureConfig) -> pd.
     age_bins = config.vehicle_age_bins
 
     df["FE_VICTIM_AGE_BIN"] = _vehicle_age_bin(column_series(df, "VICTIM_VEHICLE_AGE"), age_bins)
+    # ×1e6: raw л.с./кг слишком мал для модели (диапазон ~0.03–0.09); после
+    # масштаба — десятки тысяч, как у FE_GUILTY_POWER_PER_TON (там ×10000).
     df["FE_VICTIM_POWER_PER_TON"] = _safe_div(
         column_series(df, "VICTIM_CAPACITY_ENGINE"),
         column_series(df, "VICTIM_MAX_WEIGHT"),
-    )
+    ) * 1e6
     weight = pd.to_numeric(column_series(df, "VICTIM_MAX_WEIGHT"), errors="coerce")
     df["FE_VICTIM_HEAVY"] = (weight > th.vehicle_weight_heavy).astype("Int64")
     df["FE_VICTIM_DOORS_BIN"] = _doors_bin(column_series(df, "VICTIM_NUM_DOORS"))

@@ -3,11 +3,19 @@
 Без NaN/drop строк: отрицательные денежные → 0; выбросы зажимаются в Tukey-fence
 на шкале ``log1p``, затем ``expm1`` обратно.
 
+Исключение — целочисленные по смыслу фичи (``AGE``/``YEAR``/``MONTH``/``COUNT``/…,
+см. ``integer_casts.is_integer_like_feature``): их winsorize идёт по **сырой**
+шкале с округлением границ ``floor``/``ceil``. Причина: ``expm1`` от ``log1p``-забора
+даёт дробные границы (``EVENT_YEAR``: ``expm1(q3 + 1.5·IQR) = 2024.5009269176796``),
+и такие значения попадали в parquet уже **после** ``cast_integer_like_columns``.
+Для фич-годов верхняя граница = ``MAX_YEAR_FEATURE_VALUE`` (текущий год).
+
 Вызов на этапе сборки датасета: ``apply_dataset_data_quality`` (см. ``features.pipeline``).
 """
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -20,11 +28,15 @@ from querulus.features.inflation import (
     MONETARY_COLUMNS_FOR_REAL,
     real_feature_name,
 )
+from querulus.features.integer_casts import is_integer_like_feature, is_year_feature
 
 IQR_K: float = 1.5
+# Верхняя граница фич-годов: «сейчас» (модель 2.0.0). Год выше — мусор/опечатка.
+MAX_YEAR_FEATURE_VALUE: int = 2026
 # Совпадает с TrainingConfig.train_period / date_column (без импорта training).
 DEFAULT_DQ_DATE_COLUMN: str = "PAYMENT_ORDER_DATE_TIME"
 DEFAULT_DQ_TRAIN_PERIOD: tuple[str, str] = ("2022-01-01", "2024-05-31")
+_MIN_TRAIN_FINITE: int = 20
 
 
 def _default_monetary_columns(base_year: int = INFLATION_BASE_YEAR) -> tuple[str, ...]:
@@ -53,6 +65,8 @@ class DataQualityReport:
         default_factory=lambda: {
             "negatives": "clip_to_zero",
             "outliers": "winsorize_iqr_log1p_expm1",
+            "outliers_integer": "winsorize_iqr_raw_floor_ceil",
+            "outliers_year_max": str(MAX_YEAR_FEATURE_VALUE),
             "fit_on": "train",
             "no_row_drop": "true",
             "no_nan_impute": "true",
@@ -60,6 +74,7 @@ class DataQualityReport:
     )
     hard_clip_nonnegative: list[dict[str, Any]] = field(default_factory=list)
     winsorize_log1p_iqr: list[dict[str, Any]] = field(default_factory=list)
+    winsorize_iqr_integer: list[dict[str, Any]] = field(default_factory=list)
     skipped_columns: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -79,10 +94,15 @@ class DataQualityReport:
                 "n_winsorize_cells": int(
                     sum(int(r.get("n_clipped_total", 0)) for r in self.winsorize_log1p_iqr)
                 ),
+                "n_winsorize_integer_columns": len(self.winsorize_iqr_integer),
+                "n_winsorize_integer_cells": int(
+                    sum(int(r.get("n_clipped_total", 0)) for r in self.winsorize_iqr_integer)
+                ),
                 "n_skipped_columns": len(self.skipped_columns),
             },
             "hard_clip_nonnegative": self.hard_clip_nonnegative,
             "winsorize_log1p_iqr": self.winsorize_log1p_iqr,
+            "winsorize_iqr_integer": self.winsorize_iqr_integer,
             "skipped_columns": self.skipped_columns,
         }
 
@@ -189,6 +209,98 @@ def _winsorize_log1p_iqr_column(
     return out, detail, None
 
 
+def integer_iqr_fence(
+    values: np.ndarray,
+    *,
+    iqr_k: float = IQR_K,
+    year: bool = False,
+    max_year: int = MAX_YEAR_FEATURE_VALUE,
+    nonnegative: bool | None = None,
+) -> dict[str, float] | None:
+    """Целочисленный Tukey-fence на сырой шкале: ``floor(q1−k·IQR) … ceil(q3+k·IQR)``.
+
+    Для фич-годов верхняя граница — ``max_year`` (текущий год), а не IQR-забор:
+    год выше текущего — мусор, а ``ceil(2024.5) = 2025`` срезал бы валидный 2026.
+
+    ``nonnegative`` — не опускать нижнюю границу ниже 0 (возрасты/счётчики). ``None``
+    (по умолчанию) — вывести из данных: нет отрицательных → 0. Лаги ``FE_DAYS_*``
+    с реальными отрицательными значениями границу сохраняют.
+
+    ``None`` — границы не определены (мало наблюдений / нулевой IQR / нет конечных).
+    """
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size < _MIN_TRAIN_FINITE:
+        return None
+    q1, q3 = np.quantile(finite, [0.25, 0.75])
+    iqr = float(q3 - q1)
+    if not np.isfinite(iqr) or iqr <= 0:
+        return None
+    low_raw = float(math.floor(q1 - iqr_k * iqr))
+    high_raw = (
+        float(max_year) if year else float(math.ceil(q3 + iqr_k * iqr))
+    )
+    if nonnegative is None:
+        nonnegative = bool(finite.min() >= 0.0)
+    if nonnegative:
+        low_raw = max(0.0, low_raw)
+    if high_raw < low_raw:
+        high_raw = low_raw
+    return {
+        "q1": float(q1),
+        "q3": float(q3),
+        "iqr": iqr,
+        "low_raw": low_raw,
+        "high_raw": high_raw,
+        "nonnegative": bool(nonnegative),
+    }
+
+
+def _winsorize_iqr_integer_column(
+    series: pd.Series,
+    train_mask: np.ndarray,
+    *,
+    iqr_k: float,
+    year: bool = False,
+    max_year: int = MAX_YEAR_FEATURE_VALUE,
+) -> tuple[pd.Series, dict[str, Any] | None, str | None]:
+    """Winsorize целочисленной фичи по сырой шкале (границы — целые).
+
+    Возвращает ``(series, detail|None, skip_reason|None)``.
+    """
+    values = pd.to_numeric(series, errors="coerce")
+    train_vals = values.to_numpy(dtype=float)[train_mask]
+    fence = integer_iqr_fence(train_vals, iqr_k=iqr_k, year=year, max_year=max_year)
+    if fence is None:
+        train_finite = train_vals[np.isfinite(train_vals)]
+        if train_finite.size < _MIN_TRAIN_FINITE:
+            return series, None, "too_few_train_finite"
+        return series, None, "zero_iqr"
+
+    low_raw = fence["low_raw"]
+    high_raw = fence["high_raw"]
+    arr = values.to_numpy(dtype=float, copy=True)
+    finite = np.isfinite(arr)
+    n_low = int(((arr < low_raw) & finite).sum())
+    n_high = int(((arr > high_raw) & finite).sum())
+    detail: dict[str, Any] = {
+        **fence,
+        "scale": "raw",
+        "integer_rounded": True,
+        "year_capped": bool(year),
+        "n_clipped_low": n_low,
+        "n_clipped_high": n_high,
+        "n_clipped_total": n_low + n_high,
+        "n_train_finite": int(np.isfinite(train_vals).sum()),
+    }
+    if n_low == 0 and n_high == 0:
+        return series, detail, None
+
+    arr = np.where(finite, np.clip(arr, low_raw, high_raw), arr)
+    out = pd.Series(arr, index=series.index, dtype=float)
+    return out, detail, None
+
+
 def apply_data_quality(
     df: pd.DataFrame,
     *,
@@ -230,6 +342,24 @@ def apply_data_quality(
                 )
                 continue
             series = coerced
+
+        # Целочисленные по смыслу (AGE/YEAR/COUNT/…) — сырой IQR с floor/ceil:
+        # log1p-забор давал дробные границы (EVENT_YEAR → 2024.5009269176796).
+        if is_integer_like_feature(column):
+            new_series, detail, skip = _winsorize_iqr_integer_column(
+                series,
+                train_mask,
+                iqr_k=iqr_k,
+                year=is_year_feature(column),
+            )
+            if skip is not None:
+                report.skipped_columns.append({"column": column, "reason": skip})
+                continue
+            if detail is None:
+                continue
+            result[column] = new_series
+            report.winsorize_iqr_integer.append({"column": column, **detail})
+            continue
 
         new_series, detail, skip = _winsorize_log1p_iqr_column(
             series, train_mask, iqr_k=iqr_k
@@ -350,6 +480,19 @@ def apply_dataset_data_quality(
     return result, report
 
 
+# Секции отчёта DQ с границами winsorize (обе — на сырой шкале, low_raw/high_raw).
+# ``winsorize_log1p_iqr`` — float-фичи (забор на log1p); ``winsorize_iqr_integer`` —
+# int-подобные (сырой забор, целые границы). Читать нужно обе.
+WINSORIZE_SECTIONS: tuple[str, ...] = ("winsorize_log1p_iqr", "winsorize_iqr_integer")
+
+
+def _iter_winsorize_rows(payload: dict[str, Any]):
+    """Все строки winsorize из обеих секций отчёта DQ."""
+    for section in WINSORIZE_SECTIONS:
+        for row in payload.get(section) or []:
+            yield row
+
+
 def build_service_dq_bounds(
     report: dict[str, Any] | DataQualityReport,
     *,
@@ -366,7 +509,7 @@ def build_service_dq_bounds(
     """
     payload = report.to_dict() if isinstance(report, DataQualityReport) else dict(report)
     winsor_bounds: dict[str, dict[str, float]] = {}
-    for row in payload.get("winsorize_log1p_iqr") or []:
+    for row in _iter_winsorize_rows(payload):
         column = row.get("column")
         if not column:
             continue
@@ -405,8 +548,9 @@ def clip_bounds_for_outboxml(
 ) -> dict[str, dict[str, float]]:
     """``column → {min_value, max_value}`` для OutBoxML ``feature.clip``.
 
-    Границы = ``low_raw``/``high_raw`` winsorize log1p-IQR из
-    ``data_quality_report.json`` (уже на сырой шкале).
+    Границы = ``low_raw``/``high_raw`` winsorize из ``data_quality_report.json``
+    (уже на сырой шкале): log1p-забор для float-фич и целочисленный забор для
+    ``AGE``/``YEAR``/``COUNT``-подобных.
     Для ``*_REAL_{base}`` дублируем clip на ``*_REAL_2020`` (legacy FS).
     """
     from querulus.features.inflation import (
@@ -423,7 +567,7 @@ def clip_bounds_for_outboxml(
         report = json.loads(path.read_text(encoding="utf-8"))
     payload = report.to_dict() if isinstance(report, DataQualityReport) else dict(report)
     clips: dict[str, dict[str, float]] = {}
-    for row in payload.get("winsorize_log1p_iqr") or []:
+    for row in _iter_winsorize_rows(payload):
         column = row.get("column")
         if not column:
             continue

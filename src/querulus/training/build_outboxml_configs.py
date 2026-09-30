@@ -1,7 +1,28 @@
-"""Генерация AllModelsConfig JSON из артефактов train_loop (без ручной правки features[])."""
+"""Генерация AllModelsConfig JSON из артефактов train_loop (без ручной правки features[]).
+
+Правила ``features[]`` (см. QUERULUS_WIKI §7.4):
+
+* **categorical** — схлопывание высококардинальных: код получают уровни с долей
+  ≥ ``CAT_LEVEL_SHARE_MIN`` (не более ``CAT_MAX_CODES``, но не менее
+  ``CAT_MIN_CODES``); все прочие уровни + ``None``/``NaN`` → ``"ПРОЧИЕ": 0``.
+  Если NaN-доля ≥ ``CAT_NAN_SHARE_MIN`` — ``NaN`` отдельная категория ``"NAN"``
+  (``fillna`` = её код, ``default`` = код моды). Если уровней ≤
+  ``CAT_SMALL_CARD_MAX`` — ``NaN`` уходит в моду (``default`` = код моды).
+* **numerical** — ``default: "_MEDIAN_"`` (кроме фич-годов: последний/больший год
+  fit-среза, ≤ ``MAX_YEAR_FEATURE_VALUE`` — плейсхолдер ``"_MAX_"`` ломает целые
+  колонки, см. ``_latest_year_default``), ``clip`` пишем **всем** int/float фичам,
+  кроме бинарных: границы из DQ-отчёта сборки датасета, иначе квантили
+  ``CLIP_QUANTILES`` на fit-срезе.
+* **int-подобные** (``AGE``/``YEAR``/``MONTH``/``COUNT``/…, см.
+  ``features.integer_casts``) — ``encoding: to_int`` и целые границы ``clip``
+  (``floor``/``ceil``); фичи-годы — верхняя граница
+  ``data_quality.MAX_YEAR_FEATURE_VALUE`` (текущий год = 2026).
+"""
 from __future__ import annotations
 
 import json
+import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,6 +31,8 @@ import numpy as np
 import pandas as pd
 
 from querulus import PROJECT_ROOT
+from querulus.features.data_quality import MAX_YEAR_FEATURE_VALUE
+from querulus.features.integer_casts import is_integer_like_feature, is_year_feature
 from querulus.training.catboost_fit import strip_hpo_meta
 from querulus.training.config import TrainingConfig
 from querulus.training.feature_selection_io import load_feature_selection_latest
@@ -23,10 +46,54 @@ PROD_FIT_TEST_FRACTION = 0.70
 PROD_TAU_CAL_FRACTION = 0.15
 PROD_HOLDOUT_FRACTION = 0.15
 PROD_CAL_FRACTION = PROD_HOLDOUT_FRACTION  # alias: доля Test_prod (holdout)
-_NA_KEY = "N/A"
+
 _OTHER_KEY = "ПРОЧИЕ"
+# Категория для пропусков: outboxml делает str.upper(), поэтому ключ в UPPER.
+_NAN_KEY = "NAN"
+# Строковые значения, которые тоже считаем пропуском (иначе «NaN» станет уровнем).
+_NA_LIKE_KEYS: frozenset[str] = frozenset({"NAN", "N/A", "NA", "NONE", "NULL", ""})
+
+CAT_LEVEL_SHARE_MIN: float = 0.01  # доля уровня в fit-срезе
+CAT_MAX_CODES: int = 20  # максимум «своих» кодов (плюс ПРОЧИЕ/NAN)
+CAT_MIN_CODES: int = 5  # минимум уровней, даже если доля ниже порога
+CAT_NAN_SHARE_MIN: float = 0.10  # NaN-доля ≥ → отдельная категория
+CAT_SMALL_CARD_MAX: int = 10  # уровней ≤ → None/NaN в моду
+# Cap на число ключей replace: хвост уровней уходит в default (только для «монстров»).
+CAT_MAX_REPLACE_KEYS: int = 5000
+# Фолбэк-gраницы числовых фич, которых нет в DQ-отчёте (как в FS depth=0.01).
+CLIP_QUANTILES: tuple[float, float] = (0.001, 0.999)
+CLIP_MIN_FINITE: int = 20
+
+# Имена, которые обязаны быть категориальными даже если пришли числовым кодом.
+KNOWN_CATEGORICAL: frozenset[str] = frozenset(
+    {
+        "FILIAL",
+        "REGION",
+        "REGION_EVENT",
+        "VICTIM_TS_REGION",
+        "GUILTY_TS_REGION",
+        "VIC_TS_COUNTRY",
+        "GUIL_TS_COUNTRY",
+        "VICTIM_VEHICLE_COUNTRY",
+        "GUILTY_VEHICLE_COUNTRY",
+        "PAYMENT_RECIPIENT_TYPE",
+        "RECIEVE_METHOD",
+        "APPLICANT_FORM",
+        "VICTIM_VEHICLE_CATEGORY",
+        "GUILTY_VEHICLE_CATEGORY",
+        "LOSS_UNIT_TYPE",
+        "LOSS_UNIT_ZONE",
+        "LOSS_UNIT",
+        "ACCEPTED_UNIT",
+    }
+)
+# Числовой код с большим числом значений — скорее ID, чем категория.
+KNOWN_CATEGORICAL_MAX_NUNIQUE: int = 200
+
 _load_subset_patched = False
 _replace_default_patched = False
+
+logger = logging.getLogger("querulus.training.outboxml_configs")
 
 
 def _patch_model_data_subset_load_subset() -> None:
@@ -219,10 +286,18 @@ def catboost_params_from_hpo(
     return merged
 
 
-def _level_key(value: Any) -> str:
-    """Ключ для replace: outboxml делает .upper() на строках перед матчем."""
-    if pd.isna(value):
-        return _NA_KEY
+def _level_key(value: Any) -> str | None:
+    """Ключ уровня для ``replace`` (outboxml делает ``.upper()`` на строках).
+
+    ``None`` — пропуск: NaN/None/пустая строка и строки вида ``"NaN"``/``"N/A"``.
+    Пропуски обрабатываются политикой ``fillna``/``default``, а не ключом replace
+    (иначе литеральный ``"NaN"`` в данных становится отдельным уровнем).
+    """
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
     if isinstance(value, (bool, np.bool_)):
         return "1" if bool(value) else "0"
     if isinstance(value, (int, np.integer)):
@@ -233,59 +308,220 @@ def _level_key(value: Any) -> str:
             return str(int(number))
         return str(number)
     text = str(value).strip()
-    if not text:
-        return _NA_KEY
+    if not text or text.upper() in _NA_LIKE_KEYS:
+        return None
     return text.upper()
 
 
-def _is_binary_level_keys(keys: list[str]) -> bool:
-    levels = {key for key in keys if key != _NA_KEY}
-    return bool(levels) and levels <= {"0", "1"}
+def _categorical_level_stats(series: pd.Series) -> tuple[dict[str, int], int, int, float]:
+    """``(частоты по уровням, n_total, n_nan, nan_share)`` на fit-срезе."""
+    keyed = series.astype("object").map(_level_key)
+    is_na = keyed.isna()
+    counts = keyed[~is_na].value_counts()
+    freq = {str(key): int(value) for key, value in counts.items()}
+    n_total = int(len(series))
+    n_nan = int(is_na.sum())
+    nan_share = (n_nan / n_total) if n_total else 0.0
+    return freq, n_total, n_nan, nan_share
 
 
-def _categorical_feature_spec(series: pd.Series, name: str) -> dict[str, Any]:
-    counts = series.astype("object").where(series.notna(), other=np.nan)
-    present = counts.dropna()
-    keys: list[str] = []
-    seen: set[str] = set()
-    for value in present.tolist():
-        key = _level_key(value)
-        if key not in seen:
-            seen.add(key)
-            keys.append(key)
-    if series.isna().any() and _NA_KEY not in seen:
-        keys.append(_NA_KEY)
-        seen.add(_NA_KEY)
+def _ordered_levels(freq: dict[str, int]) -> list[str]:
+    """Уровни по убыванию частоты; тай-брейк — по имени (детерминизм конфига)."""
+    return sorted(freq, key=lambda key: (-freq[key], key))
 
-    if present.empty:
-        replace = {_OTHER_KEY: 0, _NA_KEY: 0}
-        default = 0
-    elif _is_binary_level_keys(keys):
-        ordered = sorted(key for key in keys if key != _NA_KEY)
-        if _NA_KEY in seen:
-            ordered.append(_NA_KEY)
-        replace = {key: index for index, key in enumerate(ordered)}
-        mode_key = _level_key(present.mode().iloc[0])
-        default = int(replace.get(mode_key, 0))
+
+def _categorical_feature_spec(
+    series: pd.Series,
+    name: str,
+    *,
+    log: bool = True,
+) -> dict[str, Any]:
+    """``features[]``-спека категориальной фичи: схлопывание + политика NaN.
+
+    * бинарные ``0/1`` — как в ``config_*_3``: свои коды, пропуск в моду;
+    * полностью пустая фича — единственная категория ``"NAN"``;
+    * ``nan_share ≥ CAT_NAN_SHARE_MIN`` — ``"NAN"`` отдельная категория
+      (``fillna`` = её код; ``default`` = код моды, а не NaN-категория);
+    * ``уровней ≤ CAT_SMALL_CARD_MAX`` — пропуск уходит в моду (``default``);
+    * иначе — пропуск и хвост уровней уходят в ``"ПРОЧИЕ"`` (``default`` = 0).
+    """
+    freq, n_total, n_nan, nan_share = _categorical_level_stats(series)
+    # Литеральный "ПРОЧИЕ" в данных — тот же бакет, что и схлопнутый хвост.
+    freq.pop(_OTHER_KEY, None)
+    ordered = _ordered_levels(freq)
+    n_levels = len(ordered)
+
+    # Всё пусто: единственная «категория» — пропуски.
+    if n_levels == 0:
+        if log:
+            logger.warning("%s || нет ни одного уровня: все значения — NaN", name)
+        return {
+            "name": name,
+            "default": 0,
+            "replace": {_OTHER_KEY: 0, _NAN_KEY: 1},
+            "encoding": "to_int",
+            "fillna": 1,
+        }
+
+    # Бинарные 0/1 (флаги): без ПРОЧИЕ, пропуск → мода.
+    if n_levels <= 2 and set(ordered) <= {"0", "1"}:
+        replace = {key: index for index, key in enumerate(sorted(ordered))}
+        mode_code = int(replace[ordered[0]])
+        return {
+            "name": name,
+            "default": mode_code,
+            "replace": replace,
+            "encoding": "to_int",
+            "fillna": mode_code,
+        }
+
+    shares = {key: (freq[key] / n_total if n_total else 0.0) for key in ordered}
+    selected = [key for key in ordered if shares[key] >= CAT_LEVEL_SHARE_MIN]
+    if len(selected) < CAT_MIN_CODES:
+        selected = ordered[:CAT_MIN_CODES]
+    selected = selected[:CAT_MAX_CODES]
+    selected_set = set(selected)
+
+    nan_bucket = nan_share >= CAT_NAN_SHARE_MIN
+    small_card = n_levels <= CAT_SMALL_CARD_MAX
+
+    replace = {_OTHER_KEY: 0}
+    for code, key in enumerate(selected, start=1):
+        replace[key] = code
+    nan_code = len(selected) + 1
+    if nan_bucket:
+        replace[_NAN_KEY] = nan_code
+
+    # Хвост уровней — явно в ПРОЧИЕ: при default=мода они иначе ушли бы в моду.
+    leftover = [key for key in ordered if key not in selected_set]
+    kept_leftover = 0
+    for key in leftover:
+        if len(replace) >= CAT_MAX_REPLACE_KEYS:
+            break
+        replace[key] = 0
+        kept_leftover += 1
+    if kept_leftover < len(leftover) and log:
+        logger.warning(
+            "%s || replace обрезан до %s ключей: %s хвостовых уровней уйдут в default",
+            name,
+            CAT_MAX_REPLACE_KEYS,
+            len(leftover) - kept_leftover,
+        )
+
+    mode_code = int(replace[ordered[0]])  # мода всегда в selected (макс. доля)
+    if nan_bucket:
+        default, fillna = mode_code, nan_code
+    elif small_card:
+        default, fillna = mode_code, None
     else:
-        # Неизвестный уровень → ПРОЧИЕ (как config_*_3), не мода.
-        others = sorted(key for key in keys if key not in {_OTHER_KEY, _NA_KEY})
-        replace = {_OTHER_KEY: 0}
-        code = 1
-        for key in others:
-            replace[key] = code
-            code += 1
-        if _NA_KEY in seen:
-            replace[_NA_KEY] = code
-        default = 0
+        default, fillna = 0, None
 
-    return {
+    spec: dict[str, Any] = {
         "name": name,
         "default": default,
         "replace": replace,
         "encoding": "to_int",
-        "fillna": default,
     }
+    if fillna is not None:
+        # ВАЖНО: код 0 falsy → outboxml проигнорирует fillna и возьмёт default.
+        spec["fillna"] = fillna
+
+    if log:
+        logger.info(
+            "%s || cat || уровней=%s (кодов=%s, хвост→ПРОЧИЕ=%s) | NaN=%s (%.1f%%) | "
+            "default=%s (%s) | fillna=%s",
+            name,
+            n_levels,
+            len(selected),
+            kept_leftover,
+            n_nan,
+            100.0 * nan_share,
+            default,
+            "мода" if nan_bucket or small_card else "ПРОЧИЕ",
+            fillna,
+        )
+    return spec
+
+
+def _finite_values(series: pd.Series) -> np.ndarray:
+    """Конечные числовые значения серии (без NaN/inf)."""
+    values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
+    return values[np.isfinite(values)]
+
+
+def _clip_for_feature(
+    series: pd.Series,
+    name: str,
+    *,
+    dq_bounds: dict[str, dict[str, float]] | None = None,
+    log: bool = True,
+) -> dict[str, float] | None:
+    """``clip`` числовой фичи: DQ-границы сборки, иначе квантили ``CLIP_QUANTILES``.
+
+    * int-подобные (``AGE``/``YEAR``/``COUNT``/…) — целые ``floor``/``ceil``;
+      ``min`` не ниже 0, если в данных нет отрицательных значений (лаги
+      ``FE_DAYS_*`` остаются знаковыми);
+    * фичи-годы — верх = ``MAX_YEAR_FEATURE_VALUE`` (2026), ``min`` ≤ верх;
+    * ``None`` — границы вырождены (нет конечных/одно значение) → clip не пишем.
+    """
+    integer_like = is_integer_like_feature(name)
+    year = is_year_feature(name)
+    finite = _finite_values(series)
+    bounds = (dq_bounds or {}).get(name)
+
+    if bounds is not None:
+        low = float(bounds["min_value"])
+        high = float(bounds["max_value"])
+        source = "DQ"
+    elif finite.size >= CLIP_MIN_FINITE:
+        low, high = (float(q) for q in np.quantile(finite, list(CLIP_QUANTILES)))
+        source = f"quantile{CLIP_QUANTILES}"
+    elif year and finite.size:
+        low = high = float(finite.min())
+        source = "observed_min"
+    else:
+        if log:
+            logger.warning(
+                "%s || clip не задан: нет DQ-границ и мало конечных значений (%s)",
+                name,
+                int(finite.size),
+            )
+        return None
+
+    if integer_like:
+        low = float(math.floor(low))
+        high = float(math.ceil(high))
+        if finite.size and float(finite.min()) >= 0.0:
+            low = max(0.0, low)
+    if year:
+        low = min(max(0.0, low), float(MAX_YEAR_FEATURE_VALUE))
+        high = float(MAX_YEAR_FEATURE_VALUE)
+
+    if not (np.isfinite(low) and np.isfinite(high)) or high <= low:
+        if log:
+            logger.warning(
+                "%s || clip не задан: вырожденные границы [%s, %s]", name, low, high
+            )
+        return None
+    if log:
+        logger.info("%s || clip [%s, %s] (%s)", name, low, high, source)
+    return {"min_value": low, "max_value": high}
+
+
+def _latest_year_default(series: pd.Series) -> int:
+    """Последний (больший) год fit-среза, не выше ``MAX_YEAR_FEATURE_VALUE``.
+
+    Пишем конкретное число, а не ``"_MAX_"``: OutBoxML резолвит плейсхолдеры через
+    ``series.max()``, а для **целой** колонки это ``np.int64`` — и проверка
+    ``isinstance(default_value, (int, float))`` в ``prepare_numerical_feature_series``
+    падает с ``ConfigError`` (``np.int64`` не наследник ``int``). В сервис
+    ``EVENT_YEAR`` приходит именно целым, поэтому ``"_MAX_"`` ломал бы инференс.
+    """
+    finite = _finite_values(series)
+    if finite.size == 0:
+        return int(MAX_YEAR_FEATURE_VALUE)
+    latest = int(math.floor(float(finite.max())))
+    return int(min(max(latest, 0), MAX_YEAR_FEATURE_VALUE))
 
 
 def _numeric_feature_spec(
@@ -294,13 +530,19 @@ def _numeric_feature_spec(
     *,
     clip: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    """default=_MEDIAN_: на fit DSM считает медиану по своему train (prod ≠ parity)."""
-    _ = series
+    """Числовая фича.
+
+    ``default``: ``_MEDIAN_`` (медиана на fit DSM → у prod-refit своя), для фич-годов —
+    последний (больший) год fit-среза (``_latest_year_default``, п.11).
+    ``clip`` — см. ``_clip_for_feature``.
+    ``encoding``: ``to_int`` для целочисленных по смыслу, иначе ``to_float``.
+    """
+    year = is_year_feature(name)
     spec: dict[str, Any] = {
         "name": name,
-        "default": "_MEDIAN_",
+        "default": _latest_year_default(series) if year else "_MEDIAN_",
         "replace": {"_TYPE_": "_NUM_"},
-        "encoding": "to_float",
+        "encoding": "to_int" if is_integer_like_feature(name) else "to_float",
     }
     if clip is not None:
         spec["clip"] = {
@@ -327,7 +569,13 @@ def _is_categorical(
         return True
     numeric = pd.to_numeric(series, errors="coerce")
     nunique = int(numeric.nunique(dropna=True))
-    return bool(nunique <= 2 and nunique > 0)
+    if nunique <= 2 and nunique > 0:
+        return True
+    # Известные категориальные бизнес-фичи (могут прийти числовым кодом):
+    # 0/1 уже отсеяны выше, «монстры» (nunique > 200) — скорее ID, чем категория.
+    if str(name).upper() in KNOWN_CATEGORICAL:
+        return 0 < nunique <= KNOWN_CATEGORICAL_MAX_NUNIQUE
+    return False
 
 
 def build_features_block(
@@ -339,7 +587,11 @@ def build_features_block(
     fit_index: pd.Index | None = None,
     clip_bounds: dict[str, dict[str, float]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """features[] + cat_features_catboost по train-срезу."""
+    """``features[]`` + ``cat_features_catboost`` по train-срезу.
+
+    ``clip_bounds`` — границы из DQ-отчёта сборки (``clip_bounds_for_outboxml``);
+    для фич без записи в отчёте границы считаются квантилями на ``fit_index``.
+    """
     types = mvp_types or DEFAULT_MVP_INPUT_TYPES
     mvp_cats = set(types.get("CATEGORIAL") or ()) | set(types.get("BINARY") or ())
     json_cats = set(categorical_names or ())
@@ -357,7 +609,11 @@ def build_features_block(
             cat_features.append(name)
         else:
             features.append(
-                _numeric_feature_spec(series, name, clip=clips.get(name))
+                _numeric_feature_spec(
+                    series,
+                    name,
+                    clip=_clip_for_feature(series, name, dq_bounds=clips),
+                )
             )
     return features, cat_features
 
@@ -728,7 +984,9 @@ def write_outboxml_configs(
 
     Вызывать из collect после ``save_df_final``; example читает через ``load_outboxml_configs``.
     Имена моделей стабильные: ``querulus_cf`` / ``querulus_rg``.
-    Numeric ``feature.clip`` — из ``data_quality_report.json`` (log1p-IQR → low_raw/high_raw).
+    Numeric ``feature.clip`` — из ``data_quality_report.json`` (обе секции winsorize →
+    ``low_raw``/``high_raw``), для фич без записи в отчёте — квантили ``CLIP_QUANTILES``
+    на fit-срезе; см. ``build_features_block`` и ``_clip_for_feature``.
     """
     from querulus.features.data_quality import clip_bounds_for_outboxml
     from querulus.naming import (

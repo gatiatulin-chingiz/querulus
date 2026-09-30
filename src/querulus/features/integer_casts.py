@@ -1,14 +1,15 @@
-"""Приведение age/year и бинарных float-флагов к Int64 (без полного copy)."""
+"""Приведение age/year/счётчиков и бинарных float-флагов к Int64 (без полного copy)."""
 from __future__ import annotations
 
 import re
 
 import pandas as pd
 
-# Колонки возраста / года / счётчиков — целые.
+# Колонки возраста / года / счётчиков / лагов в днях — целые.
+# ``DAYS`` отдельной альтернативой: ``_DAY_`` не матчит ``FE_DAYS_*`` (после DAY идёт S).
 _INT_NAME_RE = re.compile(
     r"(?:^|_)("
-    r"AGE|YEAR|MONTH|HOUR|DAY|DOORS|SEATS|PLACE|COUNT|PARTICIPANTS"
+    r"AGE|YEAR|MONTH|HOUR|DAYS|DAY|DOORS|SEATS|PLACE|COUNT|PARTICIPANTS"
     r")(?:$|_)",
     re.IGNORECASE,
 )
@@ -33,6 +34,23 @@ _BINARY_NAME_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+
+
+def is_integer_like_feature(name: str) -> bool:
+    """Целочисленная по смыслу фича (возраст/год/счётчик/календарь/лаг в днях).
+
+    Используется и для ``Int64``-каста на сборке, и для ``encoding: to_int`` +
+    целых границ ``clip`` в конфигах OutBoxML, и для целочисленного winsorize
+    в DQ (чтобы ``EVENT_YEAR`` не превращался в ``2024.5009``).
+    """
+    upper = str(name).upper()
+    return upper in _INT_EXACT or bool(_INT_NAME_RE.search(upper))
+
+
+def is_year_feature(name: str) -> bool:
+    """Фича-год: верхняя граница — не «текущий год» (см. ``MAX_YEAR_FEATURE_VALUE``)."""
+    upper = str(name).upper()
+    return upper == "EVENT_YEAR" or upper.endswith("_YEAR") or "_YEAR_" in upper
 
 
 def _is_binary_values(series: pd.Series) -> bool:
@@ -61,7 +79,7 @@ def cast_integer_like_columns(df: pd.DataFrame) -> pd.DataFrame:
         if pd.api.types.is_integer_dtype(df[col]):
             continue
         upper = str(col).upper()
-        as_int = upper in _INT_EXACT or bool(_INT_NAME_RE.search(upper))
+        as_int = is_integer_like_feature(upper)
         as_bin = False
         if _should_try_binary(upper):
             # Бинарная проверка только для кандидатов по имени
