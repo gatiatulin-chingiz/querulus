@@ -3,25 +3,40 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass, replace
-import importlib
 import io
 import logging
-from pathlib import Path
-import sys
+import time
 
 import numpy as np
 import pandas as pd
 
-from querulus import PROJECT_ROOT
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover
+    tqdm = None
+
+try:
+    from querulus.AutoMVP import MVP
+except Exception:  # noqa: BLE001 — поверхность импорта для понятной ошибки ниже
+    MVP = None
+
 from querulus.features.config import is_fe_categorical
+from querulus.fin_effect.threshold_policy import pick_threshold_on_val_from_training
+from querulus.training.calibration import fit_probability_calibrator
+from querulus.training.catboost_fit import catboost_fit_stats
+from querulus.training.catboost_runtime import (
+    make_pool,
+    require_catboost,
+    require_model_diagnostics,
+    stringify_categorical_columns,
+)
 from querulus.training.config import TrainingConfig, resolve_features_config
+from querulus.training.hpo import fold_metrics_bundle
 from querulus.training.severity_training import (
     severity_predict,
     severity_sample_weights,
     severity_train_target,
 )
-
-from querulus.training.catboost_fit import catboost_fit_stats
 
 logger = logging.getLogger("querulus.training")
 
@@ -106,109 +121,6 @@ class TrainingArtifacts:
     severity_target_transform: str = "raw"
 
 
-def require_catboost():
-    """Импортировать CatBoost только при запуске обучения."""
-    try:
-        from catboost import (
-            CatBoostClassifier,
-            CatBoostRegressor,
-            EFeaturesSelectionAlgorithm,
-            EShapCalcType,
-            Pool,
-        )
-    except ImportError as exc:
-        raise ImportError(
-            "Для обучения нужен catboost. Установите зависимости окружения проекта."
-        ) from exc
-    return CatBoostClassifier, CatBoostRegressor, Pool, EFeaturesSelectionAlgorithm, EShapCalcType
-
-
-def require_model_diagnostics(config: TrainingConfig):
-    """Импортировать ModelDiagnostics из внешнего проекта."""
-    candidates: list[Path] = []
-    if config.modeldiagnostics_root is not None:
-        candidates.append(Path(config.modeldiagnostics_root))
-    candidates.extend([PROJECT_ROOT.parent])
-    if len(PROJECT_ROOT.parents) > 2:
-        candidates.append(PROJECT_ROOT.parents[2])
-    for path in candidates:
-        if path.exists():
-            sys.path.insert(0, str(path))
-    module = importlib.import_module("modeldiagnostics.src.modeldiagnostics")
-    return module.ModelDiagnostics
-
-
-def stringify_categorical_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    """Привести категориальные признаки к строкам (CatBoost не принимает float в cat).
-
-    Целочисленные/бинарные float (0.0/1.0) → ``\"0\"``/``\"1\"``, не ``\"1.0\"``.
-    """
-    result = df.copy()
-    for column in columns:
-        if column not in result.columns:
-            continue
-        series = result[column]
-        numeric = pd.to_numeric(series, errors="coerce")
-        # Если все non-null — целые (в т.ч. 0.0/1.0) — пишем без десятичной точки
-        finite = numeric.dropna()
-        if not finite.empty and bool((finite == finite.round()).all()):
-            as_int = numeric.round().astype("Int64")
-            result[column] = as_int.astype(str).replace({"<NA>": "nan", "None": "nan"})
-            continue
-        try:
-            result[column] = series.map(
-                lambda value: (
-                    "nan"
-                    if value is None or (isinstance(value, float) and pd.isna(value))
-                    or value is pd.NA
-                    else str(int(float(value)))
-                    if _looks_numeric(value)
-                    else str(value)
-                )
-            )
-        except (ValueError, TypeError):
-            result[column] = series.astype(str).replace({"<NA>": "nan", "None": "nan"})
-    return result
-
-
-def make_pool(
-    features: pd.DataFrame,
-    label: pd.Series | np.ndarray | None = None,
-    *,
-    cat_features: list[str],
-    feature_names: list[str] | None = None,
-    weight: pd.Series | np.ndarray | None = None,
-):
-    """Pool с гарантированным stringify cat-колонок (защита от float 1.0)."""
-    from catboost import Pool
-
-    names = feature_names or list(features.columns)
-    data = stringify_categorical_columns(features[names], cat_features)
-    kwargs: dict[str, object] = {
-        "data": data,
-        "cat_features": cat_features,
-        "feature_names": names,
-    }
-    if label is not None:
-        kwargs["label"] = label
-    if weight is not None:
-        kwargs["weight"] = weight
-    return Pool(**kwargs)
-
-
-def _looks_numeric(value: object) -> bool:
-    """True, если значение можно привести к float (для cat→str)."""
-    if value is None or value is pd.NA:
-        return False
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return not pd.isna(value)
-    try:
-        float(value)
-        return True
-    except (TypeError, ValueError):
-        return False
-
-
 def _fe_categorical_in_frame(df: pd.DataFrame) -> list[str]:
     """Категориальные FE_* колонки, присутствующие во фрейме."""
     return [column for column in df.columns if is_fe_categorical(column)]
@@ -229,13 +141,11 @@ def _apply_mvp_types(
     config: TrainingConfig,
 ) -> tuple[pd.DataFrame, dict[str, list[str]]]:
     """value_type → stringify cat → correct_types → stringify финальных cat."""
-    try:
-        from querulus.AutoMVP import MVP
-    except Exception as exc:
+    if MVP is None:
         raise ImportError(
             "Не удалось импортировать querulus.AutoMVP.MVP. "
             "Проверьте, что AutoMVP.py является валидным Python-модулем."
-        ) from exc
+        )
 
     fe_cat = _fe_categorical_in_frame(df)
     mvp = MVP(df, print_col_type=False, cutoff_nan=config.mvp_cutoff_nan)
@@ -459,13 +369,6 @@ def _select_features_by_shap(
     Один вызов ``select_features`` с ``steps≈n_features`` молчит минутами.
     Здесь режем elimination на ~``n_progress_steps`` батчей (``steps=1``) + tqdm/ETA.
     """
-    import time
-
-    try:
-        from tqdm.auto import tqdm
-    except ImportError:  # pragma: no cover
-        tqdm = None
-
     feature_names = list(train_pool.get_feature_names())
     if len(feature_names) != feature_count:
         feature_count = len(feature_names)
@@ -612,8 +515,6 @@ def _fit_frequency_calibrator(
     balance: bool = True,
 ) -> object:
     """Пост-калибровка на отдельном Cal-set (не на train)."""
-    from querulus.training.calibration import fit_probability_calibrator
-
     return fit_probability_calibrator(
         model, x_cal, y_cal, method=method, balance=balance
     )
@@ -653,8 +554,6 @@ def frequency_metrics_table_at_threshold(
     Proba — как в fin-effect / проде: ``frequency_predict_proba`` (калибратор, если есть).
     Строки признаков — из ``training.feature_frame`` (как при fit).
     """
-    from querulus.training.hpo import fold_metrics_bundle
-
     feature_frame = training.feature_frame
     if feature_frame is None:
         raise ValueError("training.feature_frame должен быть заполнен")
@@ -714,8 +613,6 @@ def _apply_val_threshold_policy(
         return artifacts
     if split is None or not split.has_val or split.x_val is None or len(split.x_val) == 0:
         return artifacts
-
-    from querulus.fin_effect.threshold_policy import pick_threshold_on_val_from_training
 
     thr_result = pick_threshold_on_val_from_training(
         data,
@@ -795,8 +692,6 @@ def _diagnostics_metrics(
         "test": test_metrics,
     }
     if split.has_val and split.x_val is not None and split.y_val is not None:
-        from querulus.training.hpo import fold_metrics_bundle
-
         x_val = split.x_val[features] if features[0] in split.x_val.columns else split.x_val
         y_val = split.y_val
         if task_type == "classification":
@@ -1089,9 +984,6 @@ def format_features_table(features: list[str], cat_features: list[str]) -> pd.Da
 
 def log_training_summary(summary: TrainingSummary) -> None:
     """Вывести сводку обучения в лог."""
-    import logging
-
-    logger = logging.getLogger("querulus.training")
     table = format_training_summary(summary)
     logger.info("Training summary:\n%s", table.to_string(index=False))
 

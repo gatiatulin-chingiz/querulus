@@ -49,23 +49,27 @@ from querulus.training.outboxml_metrics import (
     display_dsm_collect_metrics_cross_test,
     predict_dsm_series,
 )
+from outboxml.datasets_manager import DataSetsManager
+from outboxml.export_results import ResultExport
+
+try:
+    from IPython.display import Markdown, display as ipy_display
+except ImportError:  # pragma: no cover
+    Markdown = None
+    ipy_display = None
 
 logger = logging.getLogger(__name__)
 
 
 def _display(obj: Any) -> None:
-    try:
-        from IPython.display import display as ipy_display
-    except ImportError:
+    if ipy_display is None:
         print(obj)
         return
     ipy_display(obj)
 
 
 def _markdown(title: str) -> None:
-    try:
-        from IPython.display import Markdown, display as ipy_display
-    except ImportError:
+    if ipy_display is None or Markdown is None:
         print(title)
         return
     ipy_display(Markdown(title))
@@ -282,8 +286,6 @@ def _create_dsm(
     config_key: str,
     external_config: Any,
 ) -> Any:
-    from outboxml.datasets_manager import DataSetsManager
-
     config_path = built[config_key]
     dsm = DataSetsManager(
         config_name=str(config_path),
@@ -800,8 +802,6 @@ def run_prod_plots_and_email(
     send_email: bool = True,
 ) -> None:
     """FactorsPlot, cohort и опционально QuerulusEMailDSResult."""
-    from outboxml.export_results import ResultExport
-
     export_cf = ResultExport(ds_manager=models.dsm_cf_prod, config=external_config)
     export_rg = ResultExport(ds_manager=models.dsm_rg_prod, config=external_config)
     cf_plot_feats = _plot_features(models.dsm_cf_prod, bundle.cf_name)

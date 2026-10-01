@@ -26,9 +26,10 @@ from querulus.training.severity_training import (
     fit_severity_model,
     severity_predict,
 )
+from querulus.fin_effect.threshold_policy import resolve_val_threshold
+from querulus.fin_effect.calculator import feature_rows_for_predict
 
 SegmentSide = Literal["all", "le", "gt"]
-
 
 @dataclass(frozen=True)
 class SeverityZooModel:
@@ -44,7 +45,6 @@ class SeverityZooModel:
     y_true: np.ndarray
     fin_effect: FinEffectResult | None
 
-
 @dataclass(frozen=True)
 class SeverityZooCompare:
     """Сводные таблицы по всем severity-вариантам."""
@@ -57,7 +57,6 @@ class SeverityZooCompare:
     value_column: str
     value_threshold: float
     models: dict[str, SeverityZooModel]
-
 
 def _shared_quantile_edges(
     y_true: pd.Series | np.ndarray,
@@ -73,7 +72,6 @@ def _shared_quantile_edges(
         q_vals = [*q_vals, 1.0]
     edges = np.unique(yt.quantile(q_vals).to_numpy(dtype=float))
     return edges if len(edges) >= 2 else None
-
 
 def _quantile_table_for_preds(
     *,
@@ -125,7 +123,6 @@ def _quantile_table_for_preds(
     table.insert(1, "bin_axis", bin_axis)
     return table
 
-
 def segment_indices(
     df: pd.DataFrame,
     index: pd.Index,
@@ -139,7 +136,6 @@ def segment_indices(
     if side == "gt":
         mask = ~mask.fillna(False)
     return index[mask.to_numpy()]
-
 
 def run_severity_zoo_compare(
     df: pd.DataFrame,
@@ -161,10 +157,7 @@ def run_severity_zoo_compare(
     if training.severity_split is None:
         raise ValueError("severity_split отсутствует")
 
-    from querulus.fin_effect.threshold_policy import resolve_val_threshold
-
     use_threshold = resolve_val_threshold(training, explicit=threshold)
-    from querulus.fin_effect.calculator import feature_rows_for_predict
 
     sev_target = fin_config.severity_target_column
     cat = training.severity_categorical_features

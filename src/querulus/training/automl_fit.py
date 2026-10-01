@@ -15,15 +15,21 @@ from querulus.training.build_outboxml_configs import (
     prepare_datasets_from_config,
 )
 from querulus.training.outboxml_metrics import enrich_dsm_model_metrics
+from outboxml.extractors import Extractor
+import mlflow
+from querulus.training.hpo import (
+    _configure_mlflow,
+    _is_mlflow_auth_error,
+    _looks_like_login_html,
+)
+from outboxml.automl_manager import AutoMLManager
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_AUTOML_CONFIG = PROJECT_ROOT / "configs" / "automl_querulus.json"
 _LOCAL_MLRUNS = PROJECT_ROOT / "data" / "processed" / "mlruns"
 
-
 def _make_extractor(data: pd.DataFrame) -> Any:
-    from outboxml.extractors import Extractor
 
     class _FrameExtractor(Extractor):
         def __init__(self, frame: pd.DataFrame, *params: Any) -> None:
@@ -35,12 +41,10 @@ def _make_extractor(data: pd.DataFrame) -> Any:
 
     return _FrameExtractor(data)
 
-
 def _set_tracking_uri(external_config: Any, uri: str) -> None:
     if hasattr(external_config, "mlflow_tracking_uri"):
         external_config.mlflow_tracking_uri = uri
     os.environ["MLFLOW_TRACKING_URI"] = uri
-
 
 def _use_local_mlflow(external_config: Any, *, reason: str) -> None:
     """File store: AutoMLManager.__init__ всегда зовёт set_experiment."""
@@ -48,7 +52,6 @@ def _use_local_mlflow(external_config: Any, *, reason: str) -> None:
     uri = _LOCAL_MLRUNS.resolve().as_uri()
     _set_tracking_uri(external_config, uri)
     logger.warning("MLflow → local %s (%s)", uri, reason)
-
 
 def _prepare_mlflow_for_automl(external_config: Any, *, log_mlflow: bool) -> None:
     """До ``AutoMLManager(...)``: без Keycloak remote URI падает на HTML login.
@@ -61,13 +64,6 @@ def _prepare_mlflow_for_automl(external_config: Any, *, log_mlflow: bool) -> Non
         return
 
     try:
-        import mlflow
-
-        from querulus.training.hpo import (
-            _configure_mlflow,
-            _is_mlflow_auth_error,
-            _looks_like_login_html,
-        )
 
         _configure_mlflow(mlflow)
         # Проба API до AutoMLManager (тот же set_experiment упадёт так же).
@@ -77,10 +73,6 @@ def _prepare_mlflow_for_automl(external_config: Any, *, log_mlflow: bool) -> Non
             external_config.mlflow_tracking_uri = mlflow.get_tracking_uri()
         logger.info("MLflow remote OK: %s exp=%s", mlflow.get_tracking_uri(), exp)
     except Exception as exc:  # noqa: BLE001
-        from querulus.training.hpo import (
-            _is_mlflow_auth_error,
-            _looks_like_login_html,
-        )
 
         msg = str(exc)
         if (
@@ -97,7 +89,6 @@ def _prepare_mlflow_for_automl(external_config: Any, *, log_mlflow: bool) -> Non
         else:
             raise
 
-
 def create_querulus_automl(
     data: pd.DataFrame,
     models_config: str | Path,
@@ -109,7 +100,6 @@ def create_querulus_automl(
     log_mlflow: bool = False,
 ) -> Any:
     """AutoMLManager с extractor=df; runtime-патчи Querulus через prepare_datasets_from_config."""
-    from outboxml.automl_manager import AutoMLManager
 
     config_path = str(models_config)
     # side-effect: ensure_outboxml_runtime_patches (severity X/y + default replace)
@@ -129,7 +119,6 @@ def create_querulus_automl(
         retro=retro,
         hp_tune=hp_tune,
     )
-
 
 def fit_automl_bundle(
     data: pd.DataFrame,

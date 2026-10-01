@@ -8,7 +8,12 @@ import numpy as np
 import pandas as pd
 
 from querulus.fin_effect.config import FinEffectConfig
-
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix, precision_score, recall_score
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import plotly.io as pio
 
 def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
     """Числовая колонка или нули."""
@@ -16,15 +21,10 @@ def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
         return pd.Series(0.0, index=df.index, dtype=float)
     return pd.to_numeric(df[column], errors="coerce").fillna(0.0)
 
-
 def _plot_deps():
     """Отложенный импорт matplotlib / seaborn / sklearn."""
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix, precision_score, recall_score
 
     return plt, sns, ConfusionMatrixDisplay, confusion_matrix, precision_score, recall_score
-
 
 def plot_confusion_matrix(
     y_true: pd.Series | np.ndarray,
@@ -39,7 +39,6 @@ def plot_confusion_matrix(
     disp.plot(cmap=plt.cm.Blues, values_format="d")
     plt.title(title)
     plt.show()
-
 
 def plot_precision_recall_vs_threshold(
     model: Any,
@@ -97,7 +96,6 @@ def plot_precision_recall_vs_threshold(
     plt.tight_layout()
     return fig, ax, thresholds, precisions, recalls
 
-
 def plot_cost_confusion_heatmaps(
     effect_df: pd.DataFrame,
     y_true: pd.Series | np.ndarray,
@@ -151,7 +149,6 @@ def plot_cost_confusion_heatmaps(
     plt.tight_layout()
     plt.show()
 
-
 def _build_severity_bins(
     effect_df: pd.DataFrame,
     y_true_sev: pd.Series | np.ndarray,
@@ -197,7 +194,6 @@ def _build_severity_bins(
         n_claims=("fact_sev", "count"),
     ).reset_index()
 
-
 def plot_severity_fact_vs_pred_binned(
     effect_df: pd.DataFrame,
     y_true_sev: pd.Series | np.ndarray,
@@ -220,16 +216,12 @@ def plot_severity_fact_vs_pred_binned(
 
     if use_plotly is None:
         try:
-            import plotly.graph_objects as go  # noqa: F401
-            from plotly.subplots import make_subplots  # noqa: F401
 
             use_plotly = True
         except ImportError:
             use_plotly = False
 
     if use_plotly:
-        from plotly.subplots import make_subplots
-        import plotly.graph_objects as go
 
         fig = make_subplots(
             rows=1, cols=2,
@@ -457,7 +449,6 @@ def plot_severity_fact_vs_pred_binned(
     plt.show()
     return fig
 
-
 def plot_target_monthly_share(
     df: pd.DataFrame,
     *,
@@ -488,7 +479,6 @@ def plot_target_monthly_share(
     plt.tight_layout()
     plt.show()
 
-
 def plot_positive_cases_by_month(
     df: pd.DataFrame,
     *,
@@ -518,9 +508,7 @@ def plot_positive_cases_by_month(
     plt.tight_layout()
     plt.show()
 
-
 def export_plot_html(fig: Any, path: str | Path) -> None:
     """Сохранить plotly-фигуру в HTML."""
-    import plotly.io as pio
 
     pio.write_html(fig, file=str(path), auto_open=False)

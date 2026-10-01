@@ -8,6 +8,14 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover
+    tqdm = None
+
+import concurrent.futures
+import os
+
 from querulus.fin_effect.excel_explore import (
     ALLOWED_REFUND_FORM_NEEDLES,
     VITRINA_TABLE_DEFAULT,
@@ -17,6 +25,7 @@ from querulus.fin_effect.excel_explore import (
     resolve_column,
     resolve_model_payout_loss_column,
 )
+from querulus.fin_effect.excel_synthetic import build_synthetic_claims_excel
 from querulus.fin_effect.monitoring_analytics import (
     agreement_mask,
     compare_path_shares,
@@ -426,8 +435,6 @@ def filter_retro_lookback(
 
 
 def _resolve_n_jobs(n_jobs: int | None) -> int:
-    import os
-
     cpu = os.cpu_count() or 2
     if n_jobs is None or n_jobs < 0:
         return max(1, cpu - 1)
@@ -581,11 +588,6 @@ def _bootstrap_ci(
     workers = _resolve_n_jobs(n_jobs)
     results: list[dict[str, float] | None]
 
-    try:
-        from tqdm.auto import tqdm
-    except ImportError:  # pragma: no cover
-        tqdm = None  # type: ignore[assignment]
-
     if workers == 1:
         _bootstrap_worker_init(payload)
         iterator: Any = seeds
@@ -593,7 +595,9 @@ def _bootstrap_ci(
             iterator = tqdm(seeds, total=iterations, desc=progress_desc, leave=True)
         results = [_bootstrap_one_seed(item) for item in iterator]
     else:
-        from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+        ProcessPoolExecutor = concurrent.futures.ProcessPoolExecutor
+        ThreadPoolExecutor = concurrent.futures.ThreadPoolExecutor
+        as_completed = concurrent.futures.as_completed
 
         def _collect(executor_cls: Any, init: bool) -> list[dict[str, float] | None]:
             collected: list[dict[str, float] | None] = []
@@ -1785,65 +1789,6 @@ def estimate_monitoring_effect(
         bootstrap_compliance_samples=bootstrap_compliance_samples,
         warnings=warnings,
     )
-
-
-def build_synthetic_claims_excel(
-    n_rows: int = 300,
-    *,
-    seed: int = 42,
-) -> pd.DataFrame:
-    """Сохранить совместимость synthetic-источника загрузчика мониторинга."""
-    if n_rows < 20:
-        raise ValueError("n_rows должен быть не меньше 20")
-    rng = np.random.default_rng(seed)
-    result = rng.choice([RESULT_OUT_OF_MODEL, 0, 1], size=n_rows)
-    payout = (result == 1) & (rng.random(n_rows) < 0.6)
-    agreement = (result == 1) & (rng.random(n_rows) < 0.5)
-    today = pd.Timestamp.today().normalize()
-    psr = np.where(rng.random(n_rows) < 0.08, rng.uniform(1_000, 30_000, n_rows), 0.0)
-    frame = pd.DataFrame(
-        {
-            "Убыток": [f"SYN-{index:06d}" for index in range(n_rows)],
-            "НомерИнцидент": [f"INC-{index // 2:06d}" for index in range(n_rows)],
-            "Филиал": rng.choice(PILOT_FILIALS, size=n_rows),
-            "ФормаВозмещения": np.where(agreement, "Соглашение", "Денежная"),
-            "УбытокСтатус": "Первичный",
-            "ТипОбъектаАвтотранспорт": 1,
-            "РезультатПроверки": result,
-            "СуммаПлатежа": rng.uniform(30_000, 250_000, n_rows),
-            "СуммаКВыплате": rng.uniform(30_000, 250_000, n_rows),
-            "СуммаОсновногоДолгаЗаявлено": rng.uniform(
-                20_000,
-                300_000,
-                n_rows,
-            ),
-            "Сумма рекомендованная к доплате по модулю": np.where(
-                result == 1,
-                rng.uniform(10_000, 80_000, n_rows),
-                0.0,
-            ),
-            "Иные затраты": np.where(
-                payout,
-                rng.uniform(5_000, 60_000, n_rows),
-                0.0,
-            ),
-            "Выплата по модели": payout.astype(int),
-            "Заключено соглашение": agreement.astype(int),
-            "Дата вызова модели сутяжности": today - pd.to_timedelta(
-                rng.integers(0, 120, n_rows),
-                unit="D",
-            ),
-            "ДатаЗаявления": today - pd.to_timedelta(
-                rng.integers(0, 120, n_rows),
-                unit="D",
-            ),
-            "Cумма выплаты по претензии": psr,
-            "Сумма выплат по ФУ": 0.0,
-            "Сумма выплаты по суду": 0.0,
-        }
-    )
-    frame["СуммаКВыплате"] = frame["СуммаПлатежа"]
-    return frame
 
 
 __all__ = [

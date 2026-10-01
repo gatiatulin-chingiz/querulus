@@ -10,10 +10,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+
 from querulus.fin_effect.config import FinEffectConfig
+from querulus.fin_effect.signed_effects import (
+    economy_from_signed_effects,
+    recompute_fin_effect_model,
+)
 
 _EFFECT_COLS = ("pred_freq", "fin_effect_model", "fin_effect_fact")
-
 
 def _neg_column_sum(group: pd.DataFrame, column: str) -> float:
     """Сумма колонки с инверсией знака (расходы отрицательные)."""
@@ -21,12 +27,10 @@ def _neg_column_sum(group: pd.DataFrame, column: str) -> float:
         return 0.0
     return float(-pd.to_numeric(group[column], errors="coerce").fillna(0).sum())
 
-
 def _sum_col(group: pd.DataFrame, column: str) -> float:
     if column not in group.columns:
         return 0.0
     return float(pd.to_numeric(group[column], errors="coerce").fillna(0).sum())
-
 
 def create_summary_table(
     effect_df: pd.DataFrame,
@@ -57,7 +61,6 @@ def create_summary_table(
 
     work = effect_df
     if "fin_effect_economy" not in work.columns:
-        from querulus.fin_effect.calculator import economy_from_signed_effects
 
         work = work.copy()
         work["fin_effect_economy"] = economy_from_signed_effects(
@@ -127,7 +130,6 @@ def create_summary_table(
         _verify_summary_matches_frame(summary, work)
     return summary
 
-
 def _verify_summary_matches_frame(summary: pd.DataFrame, frame: pd.DataFrame) -> None:
     """Суммы квадрантов должны сходиться с итогами кадра."""
     checks = (
@@ -144,16 +146,11 @@ def _verify_summary_matches_frame(summary: pd.DataFrame, frame: pd.DataFrame) ->
                 "Нарушен контракт calculator → summary."
             )
 
-
 def compare_formula_summaries(
     effect_df: pd.DataFrame,
     config: FinEffectConfig | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Две сводки на тех же pred: старые квадранты модели и новые (coverage)."""
-    from querulus.fin_effect.calculator import (
-        economy_from_signed_effects,
-        recompute_fin_effect_model,
-    )
 
     config = config or FinEffectConfig()
     old_frame = effect_df.copy()
@@ -177,11 +174,8 @@ def compare_formula_summaries(
         create_summary_table(new_frame, config),
     )
 
-
 def color_excel_table(writer, sheet_name: str, summary_df: pd.DataFrame) -> None:
     """Раскрасить лист Excel как в Litigant."""
-    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-    from openpyxl.utils import get_column_letter
 
     worksheet = writer.book[sheet_name]
     colors = {
@@ -259,7 +253,6 @@ def color_excel_table(writer, sheet_name: str, summary_df: pd.DataFrame) -> None
     for col_num, col_name in enumerate(summary_df.columns, 1):
         width = column_widths.get(col_name, 15)
         worksheet.column_dimensions[get_column_letter(col_num)].width = width
-
 
 def export_summary_excel(
     summary_df: pd.DataFrame,

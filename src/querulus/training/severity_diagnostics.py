@@ -6,8 +6,9 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from querulus.training.catboost_runtime import require_catboost
 from querulus.training.config import TrainingConfig
-from querulus.training.pipeline import TrainingArtifacts, require_catboost
+from querulus.training.pipeline import TrainingArtifacts
 
 
 def severity_error_by_quantile(

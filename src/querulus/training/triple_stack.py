@@ -12,6 +12,14 @@ from querulus.training.config import TrainingConfig, resolve_features_config
 from querulus.training.pipeline import TrainingArtifacts, format_metric_value, train_models
 
 from querulus.training.splits import default_inner_periods_from_train
+from querulus.training.feature_selection_io import save_feature_selection
+from querulus.training.feature_selection_report import (
+                    save_feature_selection_report,
+                )
+from querulus.fin_effect.threshold_policy import (
+        resolve_or_pick_val_threshold,
+        val_index_from_trainings,
+    )
 
 # Стеки new/new_claims: train_core + Val + holdout Test; legacy — train + Test (test-tuned).
 _NEW_STACKS_WITH_VAL = frozenset({"new", "new_claims"})
@@ -21,7 +29,6 @@ TARGET_STACKS: tuple[tuple[str, str, str], ...] = (
     ("new_claims", "TARGET_FREQ_CLAIMS", "TARGET_SEV_CLAIMS"),
 )
 
-
 @dataclass(frozen=True)
 class TripleStackResult:
     """Три обученных стека + сводки метрик и фин. эффекта."""
@@ -30,7 +37,6 @@ class TripleStackResult:
     metrics_summary: pd.DataFrame
     fin_effects: dict[str, FinEffectResult] | None = None
     fin_effect_summary: pd.DataFrame | None = None
-
 
 def train_triple_stacks(
     df: pd.DataFrame,
@@ -103,10 +109,6 @@ def train_triple_stacks(
                     f"  select@{stack_name}: "
                     f"freq={len(shared_freq)} sev={len(shared_sev)} → reuse on other stacks"
                 )
-                from querulus.training.feature_selection_io import save_feature_selection
-                from querulus.training.feature_selection_report import (
-                    save_feature_selection_report,
-                )
 
                 freq_path = save_feature_selection(
                     stack=stack_name,
@@ -171,7 +173,6 @@ def train_triple_stacks(
         trainings[stack_name] = train_models(df, stack_cfg)
     return trainings
 
-
 def build_metrics_summary(
     trainings: dict[str, TrainingArtifacts],
     *,
@@ -220,7 +221,6 @@ def build_metrics_summary(
             wide[col] = wide[col].map(format_metric_value)
     return wide
 
-
 def run_triple_fin_effects(
     df: pd.DataFrame,
     trainings: dict[str, TrainingArtifacts],
@@ -231,10 +231,6 @@ def run_triple_fin_effects(
     stacks: Iterable[tuple[str, str, str]] = TARGET_STACKS,
 ) -> tuple[dict[str, FinEffectResult], pd.DataFrame]:
     """Фин. эффект по каждому стеку + одна сводная таблица."""
-    from querulus.fin_effect.threshold_policy import (
-        resolve_or_pick_val_threshold,
-        val_index_from_trainings,
-    )
 
     shared_val_index = val_index_from_trainings(trainings)
     results: dict[str, FinEffectResult] = {}
@@ -283,7 +279,6 @@ def run_triple_fin_effects(
             }
         )
     return results, pd.DataFrame(rows)
-
 
 def run_triple_stack(
     df: pd.DataFrame,

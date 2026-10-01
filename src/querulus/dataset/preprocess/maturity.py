@@ -13,7 +13,10 @@ from querulus.dataset.constants import RENAME_DICT
 from querulus.dataset.load.io import read_artifact, read_parquet_path
 from querulus.dataset.paths import DataPaths
 from querulus.dataset.preprocess.filters import load_dataset_filters
-from querulus.dataset.preprocess.targets import CLAIM_PERIOD_COL, is_void_claim_instance
+from querulus.dataset.preprocess.claim_instance import (
+    CLAIM_PERIOD_COL,
+    is_void_claim_instance,
+)
 
 logger = logging.getLogger("querulus.dataset")
 

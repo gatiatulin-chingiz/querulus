@@ -25,10 +25,12 @@ import pandas as pd
 
 from querulus.features.inflation import (
     INFLATION_BASE_YEAR,
+    LEGACY_INFLATION_ALIAS_YEAR,
     MONETARY_COLUMNS_FOR_REAL,
     real_feature_name,
 )
 from querulus.features.integer_casts import is_integer_like_feature, is_year_feature
+from querulus.training.mvp_types import DEFAULT_OTHER_COLS
 
 IQR_K: float = 1.5
 # Верхняя граница фич-годов: «сейчас» (модель 2.0.0). Год выше — мусор/опечатка.
@@ -37,7 +39,6 @@ MAX_YEAR_FEATURE_VALUE: int = 2026
 DEFAULT_DQ_DATE_COLUMN: str = "PAYMENT_ORDER_DATE_TIME"
 DEFAULT_DQ_TRAIN_PERIOD: tuple[str, str] = ("2022-01-01", "2024-05-31")
 _MIN_TRAIN_FINITE: int = 20
-
 
 def _default_monetary_columns(base_year: int = INFLATION_BASE_YEAR) -> tuple[str, ...]:
     """Номинал + REAL + DIFF износа."""
@@ -51,7 +52,6 @@ def _default_monetary_columns(base_year: int = INFLATION_BASE_YEAR) -> tuple[str
             ]
         )
     )
-
 
 @dataclass
 class DataQualityReport:
@@ -106,7 +106,6 @@ class DataQualityReport:
             "skipped_columns": self.skipped_columns,
         }
 
-
 def clip_nonnegative_columns(
     df: pd.DataFrame,
     columns: list[str] | tuple[str, ...],
@@ -138,7 +137,6 @@ def clip_nonnegative_columns(
             }
         )
     return result, details
-
 
 def _winsorize_log1p_iqr_column(
     series: pd.Series,
@@ -208,7 +206,6 @@ def _winsorize_log1p_iqr_column(
     }
     return out, detail, None
 
-
 def integer_iqr_fence(
     values: np.ndarray,
     *,
@@ -255,7 +252,6 @@ def integer_iqr_fence(
         "nonnegative": bool(nonnegative),
     }
 
-
 def _winsorize_iqr_integer_column(
     series: pd.Series,
     train_mask: np.ndarray,
@@ -299,7 +295,6 @@ def _winsorize_iqr_integer_column(
     arr = np.where(finite, np.clip(arr, low_raw, high_raw), arr)
     out = pd.Series(arr, index=series.index, dtype=float)
     return out, detail, None
-
 
 def apply_data_quality(
     df: pd.DataFrame,
@@ -375,12 +370,10 @@ def apply_data_quality(
     report.rows_out = int(len(result))
     return result, report
 
-
 def clip_negative_value_before_diff(df: pd.DataFrame) -> pd.DataFrame:
     """``FE_VALUE_BEFORE_DIFF < 0`` → 0 (без удаления строк)."""
     out, _ = clip_nonnegative_columns(df, ["FE_VALUE_BEFORE_DIFF"])
     return out
-
 
 def train_index_by_period(
     df: pd.DataFrame,
@@ -396,7 +389,6 @@ def train_index_by_period(
     end = pd.Timestamp(train_period[1])
     mask = (dates >= start) & (dates <= end)
     return df.index[mask]
-
 
 def infer_numeric_feature_columns(
     df: pd.DataFrame,
@@ -423,7 +415,6 @@ def infer_numeric_feature_columns(
         out.append(column)
     return out
 
-
 def apply_dataset_data_quality(
     df: pd.DataFrame,
     *,
@@ -439,7 +430,6 @@ def apply_dataset_data_quality(
     ``exclude_columns`` по умолчанию — ``DEFAULT_OTHER_COLS`` + дата.
     """
     if exclude_columns is None:
-        from querulus.training.mvp_types import DEFAULT_OTHER_COLS
 
         exclude = list(DEFAULT_OTHER_COLS)
     else:
@@ -479,19 +469,16 @@ def apply_dataset_data_quality(
 
     return result, report
 
-
 # Секции отчёта DQ с границами winsorize (обе — на сырой шкале, low_raw/high_raw).
 # ``winsorize_log1p_iqr`` — float-фичи (забор на log1p); ``winsorize_iqr_integer`` —
 # int-подобные (сырой забор, целые границы). Читать нужно обе.
 WINSORIZE_SECTIONS: tuple[str, ...] = ("winsorize_log1p_iqr", "winsorize_iqr_integer")
-
 
 def _iter_winsorize_rows(payload: dict[str, Any]):
     """Все строки winsorize из обеих секций отчёта DQ."""
     for section in WINSORIZE_SECTIONS:
         for row in payload.get(section) or []:
             yield row
-
 
 def build_service_dq_bounds(
     report: dict[str, Any] | DataQualityReport,
@@ -540,7 +527,6 @@ def build_service_dq_bounds(
         ),
     }
 
-
 def clip_bounds_for_outboxml(
     report: dict[str, Any] | DataQualityReport | None = None,
     *,
@@ -553,10 +539,6 @@ def clip_bounds_for_outboxml(
     ``AGE``/``YEAR``/``COUNT``-подобных.
     Для ``*_REAL_{base}`` дублируем clip на ``*_REAL_2020`` (legacy FS).
     """
-    from querulus.features.inflation import (
-        INFLATION_BASE_YEAR,
-        LEGACY_INFLATION_ALIAS_YEAR,
-    )
 
     if report is None:
         if report_path is None:
@@ -584,7 +566,6 @@ def clip_bounds_for_outboxml(
             clips.setdefault(legacy, fence)
     return clips
 
-
 def write_service_dq_bounds(
     out_path: Path | str,
     *,
@@ -609,7 +590,6 @@ def write_service_dq_bounds(
         encoding="utf-8",
     )
     return path
-
 
 def apply_frozen_dq_bounds(
     df: pd.DataFrame,

@@ -22,14 +22,17 @@ from querulus.training.build_outboxml_configs import (
     unwrap_estimator,
 )
 from querulus.training.collect_metrics import metrics_bundle as _collect_metrics_bundle
+from querulus.training.catboost_runtime import stringify_categorical_columns
 from querulus.training.pipeline import (
     _model_metrics_table,
     bundles_metrics_table,
     format_metrics_table,
 )
+from outboxml.core.prepared_datasets import PrepareDataset
+from outboxml.datasets_manager import DataPreprocessor
+from IPython.display import Markdown, display
 
 TaskKind = Literal["classification", "regression"]
-
 
 def _model_config_without_row_filter(model_config: Any) -> Any:
     """Копия model_config без ``data_filter_condition`` (для score на полном index)."""
@@ -47,7 +50,6 @@ def _model_config_without_row_filter(model_config: Any) -> Any:
         "нужен pydantic model_copy/copy(update=...)."
     )
 
-
 def prepare_dsm_features(
     dsm: Any,
     model_name: str,
@@ -60,8 +62,6 @@ def prepare_dsm_features(
     Severity в OutBoxML обычно с ``TARGET_SEV > 0``: без ``ignore_row_filter``
     на полном Test остаются только позитивы → финэффект/F1 ломаются.
     """
-    from outboxml.core.prepared_datasets import PrepareDataset
-    from outboxml.datasets_manager import DataPreprocessor
 
     result = dsm.get_result()[model_name]
     model_config = result.model_config
@@ -83,7 +83,6 @@ def prepare_dsm_features(
     cat = list(result.data_subset.features_categorical or [])
     cols = [c for c in num + cat if c in subset.X.columns]
     return subset.X[cols]
-
 
 def predict_dsm_series(
     dsm: Any,
@@ -107,7 +106,6 @@ def predict_dsm_series(
     else:
         scores = _predict_scores(estimator, X, task_type="regression")
     return pd.Series(scores, index=X.index, dtype=float)
-
 
 def pick_threshold_on_val_dsm(
     dsm_cf: Any,
@@ -142,12 +140,10 @@ def pick_threshold_on_val_dsm(
         config=config,
     )
 
-
 def _is_categorical_series(series: pd.Series) -> bool:
     return isinstance(series.dtype, pd.CategoricalDtype) or pd.api.types.is_categorical_dtype(
         series.dtype
     )
-
 
 def _model_feature_names(X: pd.DataFrame, estimator: Any) -> list[str]:
     """Порядок признаков из модели или исходного кадра для других estimator."""
@@ -155,7 +151,6 @@ def _model_feature_names(X: pd.DataFrame, estimator: Any) -> list[str]:
     if names and all(name in X.columns for name in names):
         return names
     return list(X.columns)
-
 
 def _model_cat_feature_names(
     feature_names: list[str],
@@ -175,10 +170,8 @@ def _model_cat_feature_names(
             names.append(feature_names[int(idx)])
     return names
 
-
 def _frame_for_catboost_predict(X: pd.DataFrame, estimator: Any) -> pd.DataFrame:
     """Подготовка кадра под CatBoost predict."""
-    from querulus.training.pipeline import stringify_categorical_columns
 
     feature_names = _model_feature_names(X, estimator)
     out = X.loc[:, feature_names].copy()
@@ -200,7 +193,6 @@ def _frame_for_catboost_predict(X: pd.DataFrame, estimator: Any) -> pd.DataFrame
         out = stringify_categorical_columns(out, cat_names)
     return out
 
-
 def _predict_scores(
     estimator: Any,
     X: pd.DataFrame,
@@ -213,7 +205,6 @@ def _predict_scores(
             return np.asarray(estimator.predict_proba(frame)[:, 1], dtype=float)
         return np.asarray(estimator.predict(frame), dtype=float)
     return np.asarray(estimator.predict(frame), dtype=float)
-
 
 def collect_style_metrics_bundle(
     y_true: pd.Series | np.ndarray,
@@ -229,7 +220,6 @@ def collect_style_metrics_bundle(
     return _collect_metrics_bundle(
         y_true, y_score, task_type=task_type, threshold=threshold
     )
-
 
 def enrich_dsm_model_metrics(
     dsm: Any,
@@ -277,7 +267,6 @@ def enrich_dsm_model_metrics(
     )
     return table
 
-
 def metrics_bundle_on_index(
     dsm: Any,
     model_name: str,
@@ -307,7 +296,6 @@ def metrics_bundle_on_index(
     )
     return bundle, int(len(preds))
 
-
 def display_dsm_collect_metrics_cross_test(
     dsm: Any,
     model_name: str,
@@ -320,7 +308,6 @@ def display_dsm_collect_metrics_cross_test(
     ignore_row_filter: bool = False,
 ) -> pd.DataFrame:
     """Одна модель (parity train): метрики train + несколько test-срезов."""
-    from IPython.display import Markdown, display
 
     result = dsm.get_result()[model_name]
     result.model = ensure_predictable_model(result.model)
@@ -373,7 +360,6 @@ def display_dsm_collect_metrics_cross_test(
     display(format_metrics_table(table))
     return table
 
-
 def display_dsm_collect_metrics(
     dsm: Any,
     model_name: str,
@@ -383,7 +369,6 @@ def display_dsm_collect_metrics(
     title: str | None = None,
 ) -> pd.DataFrame:
     """Enrich + человекочитаемая таблица (для ноутбука)."""
-    from IPython.display import Markdown, display
 
     table = enrich_dsm_model_metrics(
         dsm, model_name, task_type=task_type, val_threshold=val_threshold

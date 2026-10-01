@@ -5,7 +5,12 @@ import numpy as np
 import pandas as pd
 
 from querulus.features.config import FeatureConfig, FeatureThresholds
-
+from querulus.features.inflation import (
+        INFLATION_BASE_YEAR,
+        deflate_to_base_year,
+        real_feature_name,
+    )
+from querulus.features.data_quality import clip_negative_value_before_diff
 
 def column_series(df: pd.DataFrame, column: str) -> pd.Series:
     """Колонка или NA-series, если колонки нет."""
@@ -13,23 +18,19 @@ def column_series(df: pd.DataFrame, column: str) -> pd.Series:
         return df[column]
     return pd.Series(pd.NA, index=df.index)
 
-
 def _to_datetime(series: pd.Series) -> pd.Series:
     """Привести к datetime64."""
     return pd.to_datetime(series, errors="coerce")
 
-
 def _days_between(later: pd.Series, earlier: pd.Series) -> pd.Series:
     """Разница в днях (later − earlier)."""
     return (_to_datetime(later) - _to_datetime(earlier)).dt.days
-
 
 def _safe_div(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     """Деление с защитой от нуля."""
     num = pd.to_numeric(numerator, errors="coerce")
     den = pd.to_numeric(denominator, errors="coerce")
     return num / den.where(den != 0)
-
 
 def _as_flag(series: pd.Series) -> pd.Series:
     """Привести к int 0/1 для известных флагов."""
@@ -40,7 +41,6 @@ def _as_flag(series: pd.Series) -> pd.Series:
         return (numeric.fillna(0) != 0).astype(int)
     text = series.fillna("").astype(str).str.strip().str.lower()
     return text.isin({"1", "true", "да", "y", "yes"}).astype(int)
-
 
 def _vehicle_age_bin(age: pd.Series, bins: tuple[float, ...]) -> pd.Series:
     """Бакеты возраста ТС: 0–3 / 3–7 / 7–15 / 15+."""
@@ -54,7 +54,6 @@ def _vehicle_age_bin(age: pd.Series, bins: tuple[float, ...]) -> pd.Series:
         right=False,
     ).astype(str).replace("nan", np.nan)
 
-
 def _participants_bin(count: pd.Series) -> pd.Series:
     """2 / 3 / 4+ участников."""
     values = pd.to_numeric(count, errors="coerce")
@@ -64,7 +63,6 @@ def _participants_bin(count: pd.Series) -> pd.Series:
     result = result.mask(values >= 4, "4+")
     return result
 
-
 def _count_bin(count: pd.Series) -> pd.Series:
     """0 / 1 / 2 / 3+ для истории убытков."""
     values = pd.to_numeric(count, errors="coerce").fillna(0)
@@ -73,7 +71,6 @@ def _count_bin(count: pd.Series) -> pd.Series:
     result = result.mask(values == 2, "2")
     result = result.mask(values >= 3, "3+")
     return result
-
 
 def _amount_bins(amount: pd.Series, edges: tuple[float, ...]) -> pd.Series:
     """Трёхуровневые бакеты суммы (ordered: ``<low``, ``low-high``, ``>high``)."""
@@ -88,7 +85,6 @@ def _amount_bins(amount: pd.Series, edges: tuple[float, ...]) -> pd.Series:
         ordered=True,
     )
 
-
 def _tier_from_bins(value: pd.Series, edges: tuple[float, ...], labels: tuple[str, ...]) -> pd.Series:
     """Универсальные tier-бакеты (ordered по порядку ``labels``)."""
     values = pd.to_numeric(value, errors="coerce")
@@ -100,7 +96,6 @@ def _tier_from_bins(value: pd.Series, edges: tuple[float, ...], labels: tuple[st
         right=False,
         ordered=True,
     )
-
 
 def _season(month: pd.Series) -> pd.Series:
     """Сезон по номеру месяца."""
@@ -116,7 +111,6 @@ def _season(month: pd.Series) -> pd.Series:
     result = result.mask(autumn, "autumn")
     return result
 
-
 def _hour_bucket(hour: pd.Series) -> pd.Series:
     """night / morning / day / evening."""
     values = pd.to_numeric(hour, errors="coerce")
@@ -126,7 +120,6 @@ def _hour_bucket(hour: pd.Series) -> pd.Series:
     result = result.mask((values >= 12) & (values < 18), "day")
     result = result.mask((values >= 18) & (values <= 23), "evening")
     return result
-
 
 def _kbm_bin(kbm: pd.Series, thresholds: FeatureThresholds) -> pd.Series:
     """Бакеты КБМ."""
@@ -140,7 +133,6 @@ def _kbm_bin(kbm: pd.Series, thresholds: FeatureThresholds) -> pd.Series:
     result = result.mask(values > thresholds.kbm_mid, "gt_1.17")
     return result
 
-
 def _doors_bin(doors: pd.Series) -> pd.Series:
     """Бакеты числа дверей."""
     values = pd.to_numeric(doors, errors="coerce")
@@ -149,7 +141,6 @@ def _doors_bin(doors: pd.Series) -> pd.Series:
         result = result.mask(values == door_count, str(door_count))
     result = result.mask(values >= 5, "5+")
     return result
-
 
 def _seats_bin(seats: pd.Series) -> pd.Series:
     """Бакеты числа мест."""
@@ -160,12 +151,10 @@ def _seats_bin(seats: pd.Series) -> pd.Series:
     result = result.mask(values > 7, "8+")
     return result
 
-
 def _equals(left: pd.Series, right: pd.Series) -> pd.Series:
     """1 если значения равны и оба не NA."""
     both = left.notna() & right.notna()
     return (left == right).where(both).astype("Int64")
-
 
 def _pick_column(df: pd.DataFrame, *names: str) -> pd.Series:
     """Первый существующий столбец из списка."""
@@ -173,7 +162,6 @@ def _pick_column(df: pd.DataFrame, *names: str) -> pd.Series:
         if name in df.columns:
             return df[name]
     return pd.Series(pd.NA, index=df.index)
-
 
 def _add_timeline_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
     """Блок A: timeline. As-of история — t0_column (PAYMENT_ORDER_DATE_TIME)."""
@@ -211,7 +199,6 @@ def _add_timeline_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFr
     df["FE_HIGH_APPLY_DELAY"] = (apply_delay > th.apply_delay_high).astype("Int64")
     return df
 
-
 def _add_accident_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
     """Блок B: ДТП."""
     th = config.thresholds
@@ -223,7 +210,6 @@ def _add_accident_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFr
         (not_notify == 1) & (apply_delay > th.apply_delay_notify)
     ).astype("Int64")
     return df
-
 
 def _add_victim_vehicle_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
     """Блок C: ТС потерпевшего."""
@@ -250,7 +236,6 @@ def _add_victim_vehicle_features(df: pd.DataFrame, config: FeatureConfig) -> pd.
     df["FE_VICTIM_BODY_BUCKET"] = column_series(df, "VICTIM_TYPE_BODY").astype("string")
     return df
 
-
 def _add_guilty_vehicle_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
     """Блок D: ТС виновника."""
     th = config.thresholds
@@ -266,7 +251,6 @@ def _add_guilty_vehicle_features(df: pd.DataFrame, config: FeatureConfig) -> pd.
     df["FE_GUILTY_HEAVY"] = (weight > th.vehicle_weight_heavy).astype("Int64")
     df["FE_GUILTY_ENGINE_BUCKET"] = column_series(df, "GUILTY_TYPE_ENGINE").astype("string")
     return df
-
 
 def _add_victim_guilty_diff_features(df: pd.DataFrame) -> pd.DataFrame:
     """Блок E: victim vs guilty."""
@@ -318,7 +302,6 @@ def _add_victim_guilty_diff_features(df: pd.DataFrame) -> pd.DataFrame:
     )
     return df
 
-
 def _add_geo_features(df: pd.DataFrame) -> pd.DataFrame:
     """Блок F: гео."""
     region = column_series(df, "REGION")
@@ -337,7 +320,6 @@ def _add_geo_features(df: pd.DataFrame) -> pd.DataFrame:
     df["FE_SAME_ACCEPTED_LOSS_UNIT"] = _equals(accepted, loss_unit).where(both_filled)
     return df
 
-
 def _add_policy_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
     """Блок G: полис."""
     th = config.thresholds
@@ -350,12 +332,6 @@ def _add_policy_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
 
     franchise = pd.to_numeric(column_series(df, "FRANCHISE_VALUE"), errors="coerce")
     df["FE_HAS_FRANCHISE"] = (franchise > 0).astype("Int64")
-
-    from querulus.features.inflation import (
-        INFLATION_BASE_YEAR,
-        deflate_to_base_year,
-        real_feature_name,
-    )
 
     # Премия в руб. base_year; номинал PREMIUM_SUM_ALL → TO_DROP.
     base_year = getattr(config, "inflation_base_year", INFLATION_BASE_YEAR)
@@ -372,7 +348,6 @@ def _add_policy_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
         th.insurance_amount_bins,
     )
     return df
-
 
 def _add_process_features(df: pd.DataFrame) -> pd.DataFrame:
     """Блок H: refund / minimization."""
@@ -401,14 +376,8 @@ def _add_process_features(df: pd.DataFrame) -> pd.DataFrame:
     df["FE_HAS_MINIMIZATION"] = minim_kind.notna().astype("Int64")
     return df
 
-
 def _add_repair_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
     """Блок I: калькуляция от VALUE_BEFORE_WITH/WITHOUT (без AMOUNT_REPAIR/REPAIR_VALUE/SHARE_WEAROUT)."""
-    from querulus.features.inflation import (
-        INFLATION_BASE_YEAR,
-        deflate_to_base_year,
-        real_feature_name,
-    )
 
     th = config.thresholds
     base_year = getattr(config, "inflation_base_year", INFLATION_BASE_YEAR)
@@ -455,13 +424,10 @@ def _add_repair_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFram
     )
     return df
 
-
 def drop_negative_value_before_diff(df: pd.DataFrame) -> pd.DataFrame:
     """Устаревший alias: клип ``FE_VALUE_BEFORE_DIFF < 0`` → 0 (без drop строк)."""
-    from querulus.features.data_quality import clip_negative_value_before_diff
 
     return clip_negative_value_before_diff(df)
-
 
 def _add_frequency_risk_features(df: pd.DataFrame) -> pd.DataFrame:
     """Блок K: сигналы ПСР из victim (Losses)."""
@@ -485,7 +451,6 @@ def _add_frequency_risk_features(df: pd.DataFrame) -> pd.DataFrame:
     )
     return df
 
-
 def _add_loss_history_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
     """Блок J: история убытков (past only)."""
     th = config.thresholds
@@ -507,7 +472,6 @@ def _add_loss_history_features(df: pd.DataFrame, config: FeatureConfig) -> pd.Da
         pd.to_numeric(guilty_count, errors="coerce").fillna(0) > 0
     ).astype("Int64")
     return df
-
 
 def add_derived_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
     """Добавить все FE_* колонки по каталогу v4 (мутирует df, без полного copy)."""

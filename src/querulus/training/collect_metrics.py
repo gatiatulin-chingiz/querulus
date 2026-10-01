@@ -23,9 +23,9 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+from querulus.training.calibration import expected_calibration_error
 
 TaskKind = Literal["classification", "regression"]
-
 
 def gini_index(
     y_true: np.ndarray,
@@ -72,7 +72,6 @@ def gini_index(
         return float("nan")
     return float(g_pred / g_true)
 
-
 def _to_finite_arrays(
     y_true: pd.Series | np.ndarray,
     y_score: np.ndarray,
@@ -83,7 +82,6 @@ def _to_finite_arrays(
         raise ValueError(f"Длины y_true={len(y)} и y_score={len(s)} не совпадают")
     mask = np.isfinite(y) & np.isfinite(s)
     return y[mask], s[mask]
-
 
 def classification_gini(
     y_true: pd.Series | np.ndarray,
@@ -100,7 +98,6 @@ def classification_gini(
     except Exception:  # noqa: BLE001
         return float("nan")
 
-
 def _finalize_metrics(raw: dict[str, float | int]) -> dict[str, float]:
     out: dict[str, float] = {}
     for key, value in raw.items():
@@ -114,7 +111,6 @@ def _finalize_metrics(raw: dict[str, float | int]) -> dict[str, float]:
             continue
         out[str(key)] = number
     return out
-
 
 def regression_metrics_bundle(
     y_true: pd.Series | np.ndarray,
@@ -155,7 +151,6 @@ def regression_metrics_bundle(
     raw["shift"] = float(np.mean(pred) / y_mean) if y_mean != 0 else float("nan")
     return _finalize_metrics(raw)
 
-
 def classification_metrics_at_threshold(
     y_true: pd.Series | np.ndarray,
     proba: np.ndarray,
@@ -185,7 +180,6 @@ def classification_metrics_at_threshold(
     raw["gini"] = classification_gini(y_int, p)
 
     if include_ece:
-        from querulus.training.calibration import expected_calibration_error
 
         try:
             raw["ece"] = float(
@@ -229,7 +223,6 @@ def classification_metrics_at_threshold(
     )
     return _finalize_metrics(raw)
 
-
 def classification_metrics_threshold_free(
     y_true: pd.Series | np.ndarray,
     proba: np.ndarray,
@@ -250,7 +243,6 @@ def classification_metrics_threshold_free(
         raw["pr_auc"] = float("nan")
     raw["gini"] = classification_gini(y_int, p)
     return _finalize_metrics(raw)
-
 
 def metrics_bundle(
     y_true: pd.Series | np.ndarray,

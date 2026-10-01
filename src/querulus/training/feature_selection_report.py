@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Iterable
 
 import matplotlib
+import re
+from querulus.training.feature_selection_io import load_feature_selection_latest
+from querulus.training.feature_selection_io import (
+        drop_zero_importance_features,
+        save_feature_selection,
+    )
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -49,7 +55,6 @@ _DISCRETE_INT_FEATURES = frozenset(
     }
 )
 
-
 def _importance_map(frame: pd.DataFrame | None) -> dict[str, float]:
     """feature → importance из DataFrame (колонки feature / importance)."""
     if frame is None or getattr(frame, "empty", True):
@@ -61,13 +66,11 @@ def _importance_map(frame: pd.DataFrame | None) -> dict[str, float]:
         out[str(row.feature)] = float(row.importance)
     return out
 
-
 def _fmt_weight(value: float | None) -> str:
     """Формат веса для таблицы."""
     if value is None:
         return "—"
     return f"{value:.2f}"
-
 
 def _ensure_exposure(df: pd.DataFrame) -> pd.DataFrame:
     """Добавить колонку экспозиции для EDA."""
@@ -76,13 +79,11 @@ def _ensure_exposure(df: pd.DataFrame) -> pd.DataFrame:
         result[_EXPOSURE] = 1
     return result
 
-
 def _is_binary_series(series: pd.Series) -> bool:
     """Ненулевые значения ⊆ {0, 1} (с учётом float)."""
     values = pd.to_numeric(series, errors="coerce")
     uniq = {float(x) for x in values.dropna().unique().tolist()}
     return bool(uniq) and uniq.issubset({0.0, 1.0})
-
 
 def _pretty_edges(lo: float, hi: float, n_bins: int) -> np.ndarray:
     """Границы бинов с «круглыми» шагами (0, 50, 100, …)."""
@@ -110,7 +111,6 @@ def _pretty_edges(lo: float, hi: float, n_bins: int) -> np.ndarray:
     edges[0] = min(edges[0], lo)
     edges[-1] = max(edges[-1], hi)
     return np.unique(edges)
-
 
 def _bin_continuous(
     series: pd.Series,
@@ -145,10 +145,8 @@ def _bin_continuous(
         index=series.index,
     )
 
-
 def _infer_amount_bin_order(levels: list[str]) -> list[str] | None:
     """Порядок ``<a``, ``a-b``, ``>b`` (и опционально NaN), иначе None."""
-    import re
 
     clean = [str(x) for x in levels if str(x) not in {"nan", "NaN", "<NA>", "None"}]
     if len(clean) < 2:
@@ -182,7 +180,6 @@ def _infer_amount_bin_order(levels: list[str]) -> list[str] | None:
         ordered = ordered + ["NaN"]
     return ordered
 
-
 def _infer_numeric_level_order(levels: list[str]) -> list[str] | None:
     """Если уровни — числа/годы, вернуть ascending (+ NaN в конце), иначе None."""
     parsed: list[tuple[float, str]] = []
@@ -204,7 +201,6 @@ def _infer_numeric_level_order(levels: list[str]) -> list[str] | None:
         ordered.append("NaN")
     return ordered
 
-
 def _as_ordered_string_categories(
     series: pd.Series,
     categories: list[str],
@@ -216,7 +212,6 @@ def _as_ordered_string_categories(
         pd.Categorical(mapped, categories=present, ordered=True),
         index=series.index,
     )
-
 
 def _as_discrete_int_categories(series: pd.Series) -> pd.Series:
     """Год/месяц/… → целые строковые уровни по возрастанию (+ NaN)."""
@@ -238,7 +233,6 @@ def _as_discrete_int_categories(series: pd.Series) -> pd.Series:
         pd.Categorical(mapped, categories=numeric_order, ordered=True),
         index=series.index,
     )
-
 
 def _prepare_feature_column(
     series: pd.Series,
@@ -314,7 +308,6 @@ def _prepare_feature_column(
 
     return _bin_continuous(series, numeric_bins, method=bin_method), True
 
-
 def _looks_like_whole_number(text: str) -> bool:
     """True, если строка — целое (в т.ч. ``2024.0``)."""
     try:
@@ -322,7 +315,6 @@ def _looks_like_whole_number(text: str) -> bool:
     except ValueError:
         return False
     return bool(np.isfinite(num) and abs(num - round(num)) < 1e-9)
-
 
 def _group_for_plot(
     df: pd.DataFrame,
@@ -428,7 +420,6 @@ def _group_for_plot(
                     grouped = grouped.sort_values(by="ratio", ascending=False)
     return grouped
 
-
 def _format_tick_label(value: object) -> str:
     """Короткий текст для оси X."""
     if isinstance(value, pd.Interval):
@@ -449,7 +440,6 @@ def _format_tick_label(value: object) -> str:
     if len(text) > 28:
         return text[:25] + "…"
     return text
-
 
 def _plot_to_base64(
     grouped: pd.DataFrame,
@@ -493,7 +483,6 @@ def _plot_to_base64(
     fig.savefig(buf, format="png", bbox_inches="tight")
     plt.close(fig)
     return base64.b64encode(buf.getvalue()).decode("ascii")
-
 
 def _render_feature_plots(
     df: pd.DataFrame,
@@ -572,10 +561,8 @@ def _render_feature_plots(
         return []
     return out
 
-
 def _badge(text: str, kind: str) -> str:
     return f'<span class="badge badge-{html.escape(kind)}">{html.escape(text)}</span>'
-
 
 def _build_html(
     *,
@@ -761,7 +748,6 @@ def _build_html(
 </html>
 """
 
-
 def save_feature_selection_report(
     df: pd.DataFrame,
     *,
@@ -941,14 +927,12 @@ def save_feature_selection_report(
     latest.write_text(content, encoding="utf-8")
     return latest
 
-
 def _importance_frame_from_payload(payload: dict) -> pd.DataFrame | None:
     """DataFrame importance из JSON FS (или None)."""
     rows = payload.get("importance") or []
     if not rows:
         return None
     return pd.DataFrame(rows)
-
 
 def rebuild_feature_selection_report(
     df: pd.DataFrame,
@@ -963,7 +947,6 @@ def rebuild_feature_selection_report(
 
     Нужны ранее сохранённые списки фич (+ опционально importance / categorical).
     """
-    from querulus.training.feature_selection_io import load_feature_selection_latest
 
     out_dir = Path(directory) if directory is not None else DEFAULT_FEATURE_SELECTION_DIR
     freq_payload = load_feature_selection_latest(stack, "frequency", directory=out_dir)
@@ -978,10 +961,6 @@ def rebuild_feature_selection_report(
     sev_feats = list(sev_payload.get("selected_features") or [])
     freq_imp = _importance_frame_from_payload(freq_payload)
     sev_imp = _importance_frame_from_payload(sev_payload)
-    from querulus.training.feature_selection_io import (
-        drop_zero_importance_features,
-        save_feature_selection,
-    )
 
     freq_feats, freq_zero, freq_imp = drop_zero_importance_features(freq_feats, freq_imp)
     sev_feats, sev_zero, sev_imp = drop_zero_importance_features(sev_feats, sev_imp)

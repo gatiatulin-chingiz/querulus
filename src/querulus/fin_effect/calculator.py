@@ -26,36 +26,22 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
-from querulus.fin_effect.config import FinEffectConfig
+from catboost import Pool
+from sklearn.metrics import average_precision_score
+
+from querulus.fin_effect.config import ANALYTICS_RENAME_DICT, FinEffectConfig
+from querulus.fin_effect.signed_effects import (
+    compute_fin_effect_model,
+    economy_from_signed_effects,
+    recompute_fin_effect_model,
+)
+from querulus.fin_effect.summary import create_summary_table
+from querulus.training.calibration import apply_severity_calibrator
+from querulus.training.catboost_runtime import stringify_categorical_columns
+from querulus.training.severity_training import severity_predict
 
 SplitName = Literal["train", "test", "all"]
 logger = logging.getLogger("querulus.fin_effect")
-
-
-def economy_from_signed_effects(
-    fin_effect_fact: np.ndarray | pd.Series | float,
-    fin_effect_model: np.ndarray | pd.Series | float,
-) -> np.ndarray:
-    """Универсальная экономия при знаковой конвенции «фин. эффект ≤ 0 = расход».
-
-    Считаем в шкале положительных расходов::
-
-        расход_факт   = −fin_effect_fact
-        расход_модель = −fin_effect_model
-        экономия      = расход_факт − расход_модель
-
-    Примеры (одинаковая формула):
-    - 1–1: fact=−1000, model=−400 → economy = 1000 − 400 = +600 (сэкономили);
-    - 0–1: fact=0, model=−200 → economy = 0 − 200 = −200 (ложный штраф).
-
-    Алгебраически то же, что ``model − fact``, без «минус на минус» в интерпретации.
-    """
-    fact = np.asarray(fin_effect_fact, dtype=float)
-    model = np.asarray(fin_effect_model, dtype=float)
-    cost_fact = -fact
-    cost_model = -model
-    return cost_fact - cost_model
-
 
 @dataclass
 class ThresholdMetrics:
@@ -70,7 +56,6 @@ class ThresholdMetrics:
     precision: float
     recall: float
 
-
 @dataclass
 class ThresholdStrategyResult:
     """Результат подбора порога по одной стратегии."""
@@ -80,7 +65,6 @@ class ThresholdStrategyResult:
     net_effect: float
     average_precision: float
     f1: float
-
 
 @dataclass
 class FinEffectResult:
@@ -96,7 +80,6 @@ class FinEffectResult:
 
     def summary_table(self, config: FinEffectConfig | None = None) -> pd.DataFrame:
         """Сводка по квадрантам: только агрегация колонок ``frame``."""
-        from querulus.fin_effect.summary import create_summary_table
 
         return create_summary_table(self.frame, config)
 
@@ -105,7 +88,6 @@ def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
     if column not in df.columns:
         return pd.Series(0.0, index=df.index, dtype=float)
     return pd.to_numeric(df[column], errors="coerce").fillna(0.0)
-
 
 def align_effect_inputs(
     frame: pd.DataFrame,
@@ -165,7 +147,6 @@ def align_effect_inputs(
         y_true.loc[valid].to_numpy(dtype=float).astype(int),
     )
 
-
 def _fee_base_amount(row: pd.Series, config: FinEffectConfig) -> float:
     """Денежная база факта, к которой привязывается взнос ФУ."""
     if config.uses_legacy_psr_fact:
@@ -175,7 +156,6 @@ def _fee_base_amount(row: pd.Series, config: FinEffectConfig) -> float:
             + float(row.get(config.court_recovery_column, 0) or 0)
         )
     return float(row.get(config.fact_amount_column, 0) or 0)
-
 
 def payments_fee(row: pd.Series, config: FinEffectConfig) -> float:
     """Судебные взносы: ФУ — boolean-триггер из ПСР; суд — по исковой сумме icnl.
@@ -192,12 +172,10 @@ def payments_fee(row: pd.Series, config: FinEffectConfig) -> float:
         payments += config.court_fee_amount
     return payments
 
-
 def add_premiums_column(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.Series:
     """Рассчитать колонку Взносы."""
     config = config or FinEffectConfig()
     return df.apply(lambda row: payments_fee(row, config), axis=1)
-
 
 def compute_fin_effect_fact(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.Series:
     """Фактический фин. эффект: icnl (TARGET_FREQ_AMOUNT) или legacy ПСР."""
@@ -212,7 +190,6 @@ def compute_fin_effect_fact(df: pd.DataFrame, config: FinEffectConfig | None = N
         )
     return _numeric_series(df, config.fact_amount_column) + premiums
 
-
 def prepare_effect_frame(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.DataFrame:
     """Подготовить _df_effect: fillna, взносы, fin_effect_fact."""
     config = config or FinEffectConfig()
@@ -226,115 +203,14 @@ def prepare_effect_frame(df: pd.DataFrame, config: FinEffectConfig | None = None
     result["fin_effect_fact"] = compute_fin_effect_fact(result, config)
     return result
 
-
-def compute_fin_effect_model_legacy(
-    pred_freq: np.ndarray,
-    y_true_freq: np.ndarray,
-    y_pred_sev: np.ndarray,
-    y_true_sev: np.ndarray,
-    base_sum: np.ndarray,
-) -> np.ndarray:
-    """Старые квадранты Litigant (режим legacy_psr и сравнение формул)."""
-    pred_freq = np.asarray(pred_freq, dtype=int)
-    y_true_freq = np.asarray(y_true_freq, dtype=int)
-    y_pred_sev = np.nan_to_num(np.asarray(y_pred_sev, dtype=float), nan=0.0)
-    y_true_sev = np.nan_to_num(np.asarray(y_true_sev, dtype=float), nan=0.0)
-    base_sum = np.nan_to_num(np.asarray(base_sum, dtype=float), nan=0.0)
-
-    fin_effect_model = np.zeros(len(base_sum), dtype=float)
-    # Имена mask_XY: X=pred, Y=fact (как в Litigant).
-    mask_00 = (pred_freq == 0) & (y_true_freq == 0)
-    mask_01 = (pred_freq == 0) & (y_true_freq == 1)  # пропуск
-    mask_10 = (pred_freq == 1) & (y_true_freq == 0)  # ложная тревога
-    mask_11 = (pred_freq == 1) & (y_true_freq == 1)
-    fin_effect_model[mask_00] = -base_sum[mask_00]
-    fin_effect_model[mask_01] = -base_sum[mask_01]
-    fin_effect_model[mask_10] = -y_pred_sev[mask_10] - base_sum[mask_10]
-    mask_11_over = mask_11 & (y_pred_sev >= y_true_sev)
-    mask_11_under = mask_11 & (y_pred_sev < y_true_sev)
-    fin_effect_model[mask_11_over] = -y_pred_sev[mask_11_over]
-    fin_effect_model[mask_11_under] = -base_sum[mask_11_under]
-    return fin_effect_model
-
-
-def compute_fin_effect_model_coverage(
-    pred_freq: np.ndarray,
-    y_true_freq: np.ndarray,
-    y_pred_sev: np.ndarray,
-    y_true_sev: np.ndarray,
-    psr: np.ndarray,
-    premiums: np.ndarray,
-) -> np.ndarray:
-    """Новые квадранты (расход отрицательный).
-
-    Порядок в комментарии — fact, pred (как маски ниже):
-    fact0 pred0 → 0;
-    fact0 pred1 (ложная тревога) → −pred_sev;
-    fact1 pred0 (пропуск) → −(ПСР+взносы);
-    fact1 pred1 хватило → −pred_sev;
-    fact1 pred1 не хватило → −(ПСР×(1−pred_sev/T)+взносы); при T=0 — как пропуск.
-    """
-    pred_freq = np.asarray(pred_freq, dtype=int)
-    y_true_freq = np.asarray(y_true_freq, dtype=int)
-    y_pred_sev = np.nan_to_num(np.asarray(y_pred_sev, dtype=float), nan=0.0)
-    y_true_sev = np.nan_to_num(np.asarray(y_true_sev, dtype=float), nan=0.0)
-    psr = np.maximum(np.nan_to_num(np.asarray(psr, dtype=float), nan=0.0), 0.0)
-    premiums = np.maximum(np.nan_to_num(np.asarray(premiums, dtype=float), nan=0.0), 0.0)
-    fact = psr + premiums
-
-    out = np.zeros(len(fact), dtype=float)
-    # Маски: fact & pred (не путать с legacy mask_XY, где X=pred, Y=fact).
-    m00 = (y_true_freq == 0) & (pred_freq == 0)
-    m01 = (y_true_freq == 0) & (pred_freq == 1)  # ложная тревога
-    m10 = (y_true_freq == 1) & (pred_freq == 0)  # пропуск
-    m11 = (y_true_freq == 1) & (pred_freq == 1)
-    covered = m11 & (y_pred_sev >= y_true_sev)
-    short = m11 & ~covered
-
-    out[m00] = 0.0
-    out[m01] = -y_pred_sev[m01]
-    out[m10] = -fact[m10]
-    out[covered] = -y_pred_sev[covered]
-    share = np.zeros(len(fact), dtype=float)
-    need = short & (y_true_sev > 0)
-    share[need] = np.clip(y_pred_sev[need] / y_true_sev[need], 0.0, 1.0)
-    out[short] = -(psr[short] * (1.0 - share[short]) + premiums[short])
-    return out
-
-
-def compute_fin_effect_model(
-    pred_freq: np.ndarray,
-    y_true_freq: np.ndarray,
-    y_pred_sev: np.ndarray,
-    y_true_sev: np.ndarray,
-    base_sum: np.ndarray,
-    *,
-    formula: str = "coverage",
-    psr: np.ndarray | None = None,
-    premiums: np.ndarray | None = None,
-) -> np.ndarray:
-    """Модельный фин. эффект. ``legacy`` — старые квадранты; иначе покрытие."""
-    if formula == "legacy":
-        return compute_fin_effect_model_legacy(
-            pred_freq, y_true_freq, y_pred_sev, y_true_sev, base_sum
-        )
-    psr_arr = base_sum if psr is None else psr
-    prem_arr = np.zeros(len(np.asarray(base_sum)), dtype=float) if premiums is None else premiums
-    return compute_fin_effect_model_coverage(
-        pred_freq, y_true_freq, y_pred_sev, y_true_sev, psr_arr, prem_arr
-    )
-
-
 def _formula_from_config(config: FinEffectConfig | None) -> str:
     if config is not None and config.uses_legacy_psr_fact:
         return "legacy"
     return "coverage"
 
-
 def _threshold_grid(config: FinEffectConfig) -> np.ndarray:
     """Сетка порогов для подбора."""
     return np.arange(config.threshold_start, config.threshold_stop, config.threshold_step)
-
 
 def evaluate_threshold(
     threshold: float,
@@ -382,7 +258,6 @@ def evaluate_threshold(
         recall=recall,
     )
 
-
 def search_best_threshold(
     y_proba_freq: np.ndarray,
     y_true_freq: np.ndarray,
@@ -415,7 +290,6 @@ def search_best_threshold(
     best_threshold = max(results, key=lambda key: results[key].net_effect)
     return best_threshold, results
 
-
 def _signed_effect_totals(
     fin_effect_model: np.ndarray,
     fact_before_negate: np.ndarray,
@@ -427,12 +301,10 @@ def _signed_effect_totals(
     net_effect = model_total - fact_signed
     return model_total, fact_signed, net_effect
 
-
 def _f1_score(precision: float, recall: float) -> float:
     if precision + recall <= 0:
         return 0.0
     return 2 * precision * recall / (precision + recall)
-
 
 def search_best_threshold_by_f1(
     y_proba_freq: np.ndarray,
@@ -471,7 +343,6 @@ def search_best_threshold_by_f1(
             best_threshold = metrics.threshold
     return best_threshold, results
 
-
 def search_threshold_strategies(
     y_proba_freq: np.ndarray,
     y_true_freq: np.ndarray,
@@ -485,7 +356,6 @@ def search_threshold_strategies(
     premiums: np.ndarray | None = None,
 ) -> dict[str, ThresholdStrategyResult]:
     """Сравнить пороги: ``best_net_effect`` и ``pr_auc`` (порог по F1 на PR)."""
-    from sklearn.metrics import average_precision_score
 
     config = config or FinEffectConfig()
     formula = formula or _formula_from_config(config)
@@ -528,7 +398,6 @@ def search_threshold_strategies(
             f1=_f1_score(metrics.precision, metrics.recall),
         )
     return strategies
-
 
 def apply_model_predictions(
     effect_df: pd.DataFrame,
@@ -632,36 +501,6 @@ def apply_model_predictions(
         threshold_strategies=threshold_strategies,
     )
 
-
-def recompute_fin_effect_model(
-    frame: pd.DataFrame,
-    config: FinEffectConfig | None = None,
-    *,
-    formula: str,
-) -> np.ndarray:
-    """Пересчитать ``fin_effect_model`` по уже посчитанным pred_* (сравнение формул)."""
-    config = config or FinEffectConfig()
-    pred_freq = pd.to_numeric(frame["pred_freq"], errors="coerce").fillna(0).to_numpy()
-    y_true = pd.to_numeric(
-        frame[config.frequency_target_column], errors="coerce"
-    ).fillna(0).to_numpy()
-    pred_sev = pd.to_numeric(frame["pred_sev"], errors="coerce").fillna(0).to_numpy()
-    y_sev = _numeric_series(frame, config.severity_target_column).to_numpy()
-    psr = _numeric_series(frame, config.fact_amount_column).to_numpy()
-    premiums = _numeric_series(frame, config.premiums_column).to_numpy()
-    base = psr + premiums
-    return compute_fin_effect_model(
-        pred_freq,
-        y_true,
-        pred_sev,
-        y_sev,
-        base,
-        formula=formula,
-        psr=psr,
-        premiums=premiums,
-    )
-
-
 def feature_rows_for_predict(
     training: object,
     effect_index: pd.Index,
@@ -671,14 +510,12 @@ def feature_rows_for_predict(
     feature_frame = getattr(training, "feature_frame", None)
     if feature_frame is not None:
         return feature_frame.loc[effect_index]
-    from querulus.training.pipeline import stringify_categorical_columns
 
     cat_features = getattr(training, "severity_categorical_features", []) + getattr(
         training, "frequency_categorical_features", []
     )
     cat_features = list(dict.fromkeys(cat_features))
     return stringify_categorical_columns(effect_frame, cat_features)
-
 
 def frequency_proba_from_training(training: object, features: pd.DataFrame) -> np.ndarray:
     """Вероятность frequency с учётом калибратора, если он есть."""
@@ -691,7 +528,6 @@ def frequency_proba_from_training(training: object, features: pd.DataFrame) -> n
         getattr(training, "frequency_categorical_features", []),
     )
 
-
 def _catboost_predict(
     model: object,
     features: pd.DataFrame,
@@ -700,12 +536,10 @@ def _catboost_predict(
     """predict с явным Pool для категориальных признаков."""
     cat_features = [column for column in cat_features if column in features.columns]
     if cat_features:
-        from catboost import Pool
 
         pool = Pool(features, cat_features=cat_features)
         return np.asarray(model.predict(pool), dtype=float)
     return np.asarray(model.predict(features), dtype=float)
-
 
 def _catboost_predict_proba(
     model: object,
@@ -715,12 +549,10 @@ def _catboost_predict_proba(
     """predict_proba[:, 1] с явным Pool для категориальных признаков."""
     cat_features = [column for column in cat_features if column in features.columns]
     if cat_features:
-        from catboost import Pool
 
         pool = Pool(features, cat_features=cat_features)
         return np.asarray(model.predict_proba(pool)[:, 1], dtype=float)
     return np.asarray(model.predict_proba(features)[:, 1], dtype=float)
-
 
 def run_fin_effect_pipeline(
     df: pd.DataFrame,
@@ -742,7 +574,6 @@ def run_fin_effect_pipeline(
         threshold=threshold,
         config=config,
     )
-
 
 def run_fin_effect_from_training(
     df: pd.DataFrame,
@@ -791,7 +622,6 @@ def run_fin_effect_from_training(
         index=effect_index,
     )
     # Lazy: training.__init__ тянет outboxml_metrics → threshold_policy → calculator.
-    from querulus.training.severity_training import severity_predict
 
     sev_raw = severity_predict(
         training.severity_model,
@@ -801,7 +631,6 @@ def run_fin_effect_from_training(
     )
     sev_calibrator = getattr(training, "severity_calibrator", None)
     if sev_calibrator is not None:
-        from querulus.training.calibration import apply_severity_calibrator
 
         sev_raw = apply_severity_calibrator(sev_calibrator, sev_raw)
     sev_pred = pd.Series(np.asarray(sev_raw, dtype=float), index=effect_index)
@@ -833,7 +662,6 @@ def run_fin_effect_from_training(
         config=config,
     )
 
-
 def print_best_threshold_report(result: FinEffectResult) -> None:
     """Вывод оптимального порога и чистого эффекта (как в Litigant fin_effect.py)."""
     print("\n" + "=" * 70)
@@ -852,7 +680,6 @@ def print_best_threshold_report(result: FinEffectResult) -> None:
                 f"PR-AUC={strategy.average_precision:.2f}"
             )
 
-
 def prepare_analytics_export(
     df: pd.DataFrame,
     config: FinEffectConfig | None = None,
@@ -860,7 +687,6 @@ def prepare_analytics_export(
     rename: bool = True,
 ) -> pd.DataFrame:
     """Таблица для Excel с человекочитаемыми заголовками."""
-    from querulus.fin_effect.config import ANALYTICS_RENAME_DICT
 
     config = config or FinEffectConfig()
     columns = [column for column in config.export_columns if column in df.columns]

@@ -105,7 +105,6 @@ def enrich_dataset(paths: DataPaths, df_victim, df_claims, df_claims_, df_claims
     df_pretensions = df_pretensions.merge(pretension_fio_id[['PRETENSION_NUMBER','VICTIM_PERSON_ID']],how='left',on='PRETENSION_NUMBER')
 
 
-    import numpy as np
 
     df_pretensions['VICTIM_POLICYHOLDER_PERSON_ID'] = np.where(
         df_pretensions['VICTIM_POLICYHOLDER_PERSON_ID'] == '00000000000000000000000000000000',

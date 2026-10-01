@@ -38,15 +38,41 @@ from querulus.naming import (
     resolve_dataset_partitions,
     write_latest_dataset_pointer,
 )
+try:
+    from pyspark.sql import SparkSession
+    from pyspark.sql.types import (
+        BooleanType,
+        DoubleType,
+        LongType,
+        StringType,
+        StructField,
+        StructType,
+    )
+except ImportError:  # pragma: no cover
+    SparkSession = None  # type: ignore[assignment, misc]
+    BooleanType = None  # type: ignore[assignment, misc]
+    DoubleType = None  # type: ignore[assignment, misc]
+    LongType = None  # type: ignore[assignment, misc]
+    StringType = None  # type: ignore[assignment, misc]
+    StructField = None  # type: ignore[assignment, misc]
+    StructType = None  # type: ignore[assignment, misc]
+from querulus.synthetic_dataset import write_synthetic_final_dataset
+from querulus.dataset.dtypes import cast_object_columns
+from querulus.features.inflation import ensure_legacy_real_column_aliases
 
 logger = logging.getLogger("querulus.dataset.hadoop")
 
+
+def _require_pyspark() -> None:
+    if SparkSession is None or StructType is None:
+        raise ImportError(
+            "Для Hive/Spark нужен pyspark. Установите зависимости окружения проекта."
+        )
 
 def _patch_pandas_iteritems() -> None:
     """Pandas 2.x: Spark иногда ждёт устаревший ``DataFrame.iteritems``."""
     if not hasattr(pd.DataFrame, "iteritems"):
         pd.DataFrame.iteritems = pd.DataFrame.items  # type: ignore[attr-defined, method-assign]
-
 
 def build_spark_session(
     app_name: str = DEFAULT_APP_NAME,
@@ -58,7 +84,7 @@ def build_spark_session(
     executor_instances: int = 2,
 ) -> Any:
     """SparkSession с Hive (как в рабочем примере на jovyan)."""
-    from pyspark.sql import SparkSession
+    _require_pyspark()
 
     spark = (
         SparkSession.builder.appName(app_name)
@@ -75,12 +101,10 @@ def build_spark_session(
     print(f"[hive] SparkSession ready app={app_name} enableHiveSupport=True")
     return spark
 
-
 def _is_nested_value(value: Any) -> bool:
     if value is None:
         return False
     return isinstance(value, (np.ndarray, list, tuple, dict, set))
-
 
 def _cell_to_spark_scalar(value: Any) -> Any:
     """Скаляр, который Spark умеет инферить; nested → JSON-строка."""
@@ -118,11 +142,9 @@ def _cell_to_spark_scalar(value: Any) -> Any:
         pass
     return value
 
-
 def _object_column_has_nested(series: pd.Series, *, sample_n: int = 200) -> bool:
     sample = series.dropna().head(sample_n)
     return any(_is_nested_value(v) for v in sample)
-
 
 def _to_spark_string_or_none(value: Any) -> str | None:
     """Значение для StringType: None или str (без nested)."""
@@ -136,7 +158,6 @@ def _to_spark_string_or_none(value: Any) -> str | None:
             return None
         return str(scalar)
     return str(scalar)
-
 
 def _datetime_to_iso_or_none(value: Any) -> str | None:
     """Datetime → ISO-строка без tz (обход Spark DST NonExistentTimeError)."""
@@ -156,7 +177,6 @@ def _datetime_to_iso_or_none(value: Any) -> str | None:
     if ts.tzinfo is not None:
         ts = ts.tz_convert("UTC").tz_localize(None)
     return ts.isoformat(sep=" ", timespec="seconds")
-
 
 def _prepare_frame_for_spark(df: pd.DataFrame) -> pd.DataFrame:
     """Копия кадра: index → колонка; nested/ndarray → JSON; типы под Spark schema."""
@@ -235,17 +255,9 @@ def _prepare_frame_for_spark(df: pd.DataFrame) -> pd.DataFrame:
     out.columns = [str(c) for c in out.columns]
     return out
 
-
 def _spark_schema_for_pandas(df: pd.DataFrame) -> Any:
     """Явная схема: без inference NullType (CANNOT_DETERMINE_TYPE)."""
-    from pyspark.sql.types import (
-        BooleanType,
-        DoubleType,
-        LongType,
-        StringType,
-        StructField,
-        StructType,
-    )
+    _require_pyspark()
 
     fields: list[Any] = []
     for col in df.columns:
@@ -271,7 +283,6 @@ def _spark_schema_for_pandas(df: pd.DataFrame) -> Any:
         # datetime уже в ISO-строках на этапе prepare; object/string → StringType
         fields.append(StructField(name, StringType(), True))
     return StructType(fields)
-
 
 def pandas_to_hive_table(
     df: pd.DataFrame,
@@ -327,7 +338,6 @@ def pandas_to_hive_table(
         if own_spark and stop_spark:
             spark.stop()
 
-
 def hive_table_to_pandas(
     table_name: str = DEFAULT_HIVE_TABLE,
     *,
@@ -363,7 +373,6 @@ def hive_table_to_pandas(
     finally:
         if own_spark and stop_spark:
             spark.stop()
-
 
 def load_df_final(
     *,
@@ -430,7 +439,6 @@ def load_df_final(
     resolved: Path | None = next((c for c in candidates if c.is_file()), None)
     if resolved is None and generate_synthetic_if_missing:
         target = candidates[0]
-        from querulus.synthetic_dataset import write_synthetic_final_dataset
 
         resolved = write_synthetic_final_dataset(target, n_rows=synthetic_n_rows)
         print(f"[dataset] синтетика сгенерирована: {resolved}")
@@ -463,7 +471,6 @@ def load_df_final(
     print("=" * 72)
     return pdf, source
 
-
 def save_df_final(
     df: pd.DataFrame,
     *,
@@ -481,9 +488,6 @@ def save_df_final(
     """Всегда пишет локальный parquet; Hive — best-effort с партициями."""
     if df is None or len(df) == 0:
         raise ValueError("Пустой DataFrame — нечего сохранять")
-
-    from querulus.dataset.dtypes import cast_object_columns
-    from querulus.features.inflation import ensure_legacy_real_column_aliases
 
     parts = dataset_partition_values(
         model_version=model_version,

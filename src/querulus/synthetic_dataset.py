@@ -8,6 +8,9 @@ import numpy as np
 import pandas as pd
 
 from querulus import PROJECT_ROOT
+from querulus.features.inflation import deflate_to_base_year, real_feature_name
+from querulus.dataset.dtypes import cast_object_columns
+from querulus.features.inflation import ensure_legacy_real_column_aliases
 
 DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "processed" / "df_final_3_synthetic.parquet"
 
@@ -18,7 +21,6 @@ _FORMS = ("ПОТЕРПЕВШИЙ", "ПРЕДСТАВИТЕЛЬ", "ЮРИСТ")
 _METHODS = ("ОЧНО", "ЭЛЕКТРОННО", "ПОЧТА")
 _ZONES = ("ЦЕНТР", "СЕВЕР", "ЮГ", "ВОСТОК")
 _COUNTRIES = ("РОССИЯ", "БЕЛАРУСЬ", "КАЗАХСТАН")
-
 
 def build_synthetic_final_dataset(
     n_rows: int = 400,
@@ -89,8 +91,6 @@ def build_synthetic_final_dataset(
     event_year = pd.to_datetime(loss_dates).year.astype(int)
     loss_dt = pd.Series(pd.to_datetime(loss_dates), name="LOSS_DATE_TIME")
 
-    from querulus.features.inflation import deflate_to_base_year, real_feature_name
-
     with_s = pd.Series(value_before)
     without_s = pd.Series(value_before_without)
     with_real = deflate_to_base_year(with_s, loss_dt)
@@ -156,7 +156,6 @@ def build_synthetic_final_dataset(
         }
     )
 
-
 def write_synthetic_final_dataset(
     path: Path | str | None = None,
     *,
@@ -164,8 +163,6 @@ def write_synthetic_final_dataset(
     seed: int = 42,
 ) -> Path:
     """Записать parquet; каталог создаётся при необходимости."""
-    from querulus.dataset.dtypes import cast_object_columns
-    from querulus.features.inflation import ensure_legacy_real_column_aliases
 
     out = Path(path) if path is not None else DEFAULT_OUTPUT
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -176,7 +173,6 @@ def write_synthetic_final_dataset(
     )
     df.to_parquet(out, index=False)
     return out
-
 
 def main(argv: list[str] | None = None) -> None:
     """CLI: ``python -m querulus.synthetic_dataset`` или ``make synthetic-data``."""
@@ -198,7 +194,6 @@ def main(argv: list[str] | None = None) -> None:
     print(f"shape={df.shape} train={int(train.sum())} test={int((~train).sum())}")
     print(f"TARGET_FREQ mean={df['TARGET_FREQ'].mean():.2f}")
     print(f"sev>0={int((df['TARGET_SEV'] > 0).sum())}")
-
 
 if __name__ == "__main__":
     main()

@@ -16,18 +16,20 @@ from querulus.fin_effect.calculator import (
     apply_model_predictions,
     compute_fin_effect_fact,
     compute_fin_effect_model,
-    economy_from_signed_effects,
     evaluate_threshold,
     payments_fee,
     prepare_analytics_export,
     prepare_effect_frame,
     print_best_threshold_report,
-    recompute_fin_effect_model,
     run_fin_effect_from_training,
     run_fin_effect_pipeline,
     search_best_threshold,
     search_best_threshold_by_f1,
     search_threshold_strategies,
+)
+from querulus.fin_effect.signed_effects import (
+    economy_from_signed_effects,
+    recompute_fin_effect_model,
 )
 from querulus.fin_effect.compare_report import (
     StackCompareReport,

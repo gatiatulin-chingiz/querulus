@@ -10,11 +10,11 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
+from catboost import CatBoostClassifier, CatBoostRegressor, Pool
 
 NOISE_FEATURE_NAME = "FE_NOISE_UNIFORM"
 
 TaskType = Literal["classification", "regression"]
-
 
 @dataclass(frozen=True)
 class NoiseCutResult:
@@ -27,7 +27,6 @@ class NoiseCutResult:
     noise_was_last: bool
     importances: pd.DataFrame
 
-
 def _cat_names(
     features: list[str],
     mvp_types: dict[str, tuple[str, ...]] | None,
@@ -36,7 +35,6 @@ def _cat_names(
         return []
     cats = set(mvp_types.get("CATEGORIAL", ())) | set(mvp_types.get("BINARY", ()))
     return [name for name in features if name in cats]
-
 
 def filter_features_by_noise(
     df: pd.DataFrame,
@@ -54,7 +52,6 @@ def filter_features_by_noise(
     noise_column: str = NOISE_FEATURE_NAME,
 ) -> NoiseCutResult:
     """Оставить фичи строго важнее шума; шум в итог не входит."""
-    from catboost import CatBoostClassifier, CatBoostRegressor, Pool
 
     feature_list = [f for f in features if f in df.columns]
     if not feature_list:

@@ -11,6 +11,8 @@ from typing import Any, Iterable, Literal, Sequence
 
 import numpy as np
 import pandas as pd
+from querulus.dataset.load.io import _read_sql, connect_oisuu
+from querulus.fin_effect.excel_synthetic import build_synthetic_claims_excel
 
 DEFAULT_TOLERANCE = 1.0
 
@@ -163,7 +165,6 @@ _CANDIDATE_KEYWORDS: dict[str, tuple[str, ...]] = {
     "refund": ("формавозмещ", "форма возмещ"),
 }
 
-
 @dataclass(frozen=True)
 class ReconcileSpec:
     """Гипотеза сверки: сумма left_cols ≈ сумма right_cols (допуск в ₽)."""
@@ -172,7 +173,6 @@ class ReconcileSpec:
     left_cols: tuple[str, ...]
     right_cols: tuple[str, ...]
     subset: str | None = None  # None | "I"
-
 
 @dataclass
 class ExploreResult:
@@ -185,7 +185,6 @@ class ExploreResult:
     candidates: dict[str, list[str]] = field(default_factory=dict)
     report: str = ""
 
-
 def load_excel(
     path: str | Path,
     *,
@@ -196,7 +195,6 @@ def load_excel(
     if not path.exists():
         raise FileNotFoundError(f"Excel не найден: {path}")
     return pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
-
 
 def load_vitrina_mssql(
     connection: Any | None = None,
@@ -209,7 +207,6 @@ def load_vitrina_mssql(
     По умолчанию: ``[OISUU_report].[dbo].[ВитринаСутяжность]``.
     Креды — ``OISUU_DB_*`` из ``.env`` / ``env_template`` (как у dataset).
     """
-    from querulus.dataset.load.io import _read_sql, connect_oisuu
 
     own_conn = connection is None
     conn = connection if connection is not None else connect_oisuu()
@@ -219,7 +216,6 @@ def load_vitrina_mssql(
     finally:
         if own_conn and conn is not None:
             conn.close()
-
 
 def enrich_incident_path_flags(df: pd.DataFrame) -> pd.DataFrame:
     """Агрегировать ФУ/суд на весь инцидент и проставить на каждую строку.
@@ -253,7 +249,6 @@ def enrich_incident_path_flags(df: pd.DataFrame) -> pd.DataFrame:
 
     return out
 
-
 def load_monitoring_frame(
     *,
     source: str = "mssql",
@@ -275,7 +270,6 @@ def load_monitoring_frame(
             raise ValueError("для source='excel' нужен excel_path")
         df = load_excel(excel_path)
     elif src == "synthetic":
-        from querulus.fin_effect.excel_monitoring import build_synthetic_claims_excel
 
         df = build_synthetic_claims_excel()
     else:
@@ -284,7 +278,6 @@ def load_monitoring_frame(
     if enrich_incident:
         df = enrich_incident_path_flags(df)
     return df
-
 
 def reconcile_cost_candidates_on_i(
     df: pd.DataFrame,
@@ -377,7 +370,6 @@ def reconcile_cost_candidates_on_i(
     table["suggestion_note"] = note
     return table
 
-
 def resolve_column(
     df: pd.DataFrame,
     key_or_name: str,
@@ -401,7 +393,6 @@ def resolve_column(
             return hit
     return None
 
-
 def resolve_columns(
     df: pd.DataFrame,
     keys: Iterable[str],
@@ -416,7 +407,6 @@ def resolve_columns(
             found.append(col)
     return found
 
-
 def _to_numeric(series: pd.Series) -> pd.Series:
     if pd.api.types.is_numeric_dtype(series):
         return pd.to_numeric(series, errors="coerce")
@@ -428,13 +418,11 @@ def _to_numeric(series: pd.Series) -> pd.Series:
     )
     return pd.to_numeric(cleaned, errors="coerce")
 
-
 def _is_id_like(name: str, nunique: int, nrows: int) -> bool:
     low = name.lower().replace(" ", "")
     if any(h in low for h in _ID_HINTS) and nunique > max(50, int(0.5 * nrows)):
         return True
     return False
-
 
 def profile_columns(
     df: pd.DataFrame,
@@ -486,7 +474,6 @@ def profile_columns(
         rows.append(row)
     return pd.DataFrame(rows)
 
-
 def excluded_filial_mask(df: pd.DataFrame) -> pd.Series:
     """True на Архангельский / Марийский (и алиасы по EXCLUDED_FILIAL_NEEDLES)."""
     filial_col = resolve_column(df, "filial")
@@ -497,7 +484,6 @@ def excluded_filial_mask(df: pd.DataFrame) -> pd.Series:
     for needle in EXCLUDED_FILIAL_NEEDLES:
         excluded = excluded | text.str.contains(needle, na=False)
     return excluded
-
 
 def normalize_filial_scope(filial_scope: str) -> Literal["pilot", "am", "all"]:
     """Нормализовать имя контура филиалов.
@@ -515,7 +501,6 @@ def normalize_filial_scope(filial_scope: str) -> Literal["pilot", "am", "all"]:
         f"Unknown filial_scope={filial_scope!r}; ожидается pilot|am|all "
         f"(алиас main=pilot)"
     )
-
 
 def analytics_base_mask(
     df: pd.DataFrame,
@@ -563,7 +548,6 @@ def analytics_base_mask(
 
     return mask
 
-
 def resolve_model_payout_loss_column(df: pd.DataFrame) -> str | None:
     """Колонка убытковой «Выплата по модели» (не инцидентная)."""
     col = resolve_column(df, "model_payout_loss")
@@ -571,7 +555,6 @@ def resolve_model_payout_loss_column(df: pd.DataFrame) -> str | None:
         return col
     # fallback: если в кадре только инцидентный алиас
     return resolve_column(df, "model_payout")
-
 
 def intervention_mask(
     df: pd.DataFrame,
@@ -592,7 +575,6 @@ def intervention_mask(
         & _to_numeric(df[result_col]).fillna(-999).eq(1)
         & _to_numeric(df[pay_col]).fillna(0).eq(1)
     )
-
 
 def default_reconcile_specs(df: pd.DataFrame) -> list[ReconcileSpec]:
     """Гипотезы сверки со скринов; отсутствуют колонки — спека пропускается."""
@@ -681,13 +663,11 @@ def default_reconcile_specs(df: pd.DataFrame) -> list[ReconcileSpec]:
         )
     return specs
 
-
 def _sum_cols(df: pd.DataFrame, cols: Sequence[str]) -> pd.Series:
     total = pd.Series(0.0, index=df.index, dtype=float)
     for col in cols:
         total = total + _to_numeric(df[col]).fillna(0.0)
     return total
-
 
 def reconcile_amounts(
     df: pd.DataFrame,
@@ -747,7 +727,6 @@ def reconcile_amounts(
         )
     return pd.DataFrame(rows)
 
-
 def _crosstab_counts(df: pd.DataFrame, cols: Sequence[str]) -> pd.DataFrame:
     present = [c for c in cols if c in df.columns]
     if len(present) < 2:
@@ -758,7 +737,6 @@ def _crosstab_counts(df: pd.DataFrame, cols: Sequence[str]) -> pd.DataFrame:
     ct = work.groupby(list(present), dropna=False).size().reset_index(name="n")
     ct["pct"] = (ct["n"] / len(df) * 100.0).round(2) if len(df) else 0.0
     return ct.sort_values("n", ascending=False).reset_index(drop=True)
-
 
 def flag_crosstabs(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Кросстабы флагов модели / соглашения / выплаты и форм возмещения."""
@@ -790,7 +768,6 @@ def flag_crosstabs(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         )
     return out
 
-
 def suggest_candidates(df: pd.DataFrame) -> dict[str, list[str]]:
     """Эвристики: колонки-кандидаты на paid / флаги / форму возмещения."""
     result: dict[str, list[str]] = {k: [] for k in _CANDIDATE_KEYWORDS}
@@ -817,7 +794,6 @@ def suggest_candidates(df: pd.DataFrame) -> dict[str, list[str]]:
                     result[bucket].append(str(col))
     return result
 
-
 def _df_to_md(df: pd.DataFrame, max_rows: int = 40) -> str:
     if df is None or df.empty:
         return "_пусто_"
@@ -826,7 +802,6 @@ def _df_to_md(df: pd.DataFrame, max_rows: int = 40) -> str:
         return view.to_markdown(index=False)
     except Exception:
         return view.to_string(index=False)
-
 
 def format_explore_report(
     df: pd.DataFrame,
@@ -884,7 +859,6 @@ def format_explore_report(
     )
     return "\n".join(lines)
 
-
 def run_explore(
     df: pd.DataFrame,
     *,
@@ -910,7 +884,6 @@ def run_explore(
         candidates=candidates,
         report=report,
     )
-
 
 def save_explore_report(report: str, path: str | Path) -> Path:
     """Сохранить отчёт локально (только на контуре)."""

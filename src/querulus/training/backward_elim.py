@@ -13,9 +13,9 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, mean_absolute_error
+from catboost import CatBoostClassifier, CatBoostRegressor, Pool
 
 TaskType = Literal["classification", "regression"]
-
 
 @dataclass(frozen=True)
 class BackwardElimStep:
@@ -25,7 +25,6 @@ class BackwardElimStep:
     metric: float
     features: tuple[str, ...]
     dropped_feature: str | None
-
 
 @dataclass(frozen=True)
 class BackwardElimResult:
@@ -37,7 +36,6 @@ class BackwardElimResult:
     ordered_features: tuple[str, ...]
     history: tuple[BackwardElimStep, ...]
 
-
 def _cat_names(
     features: list[str],
     mvp_types: dict[str, tuple[str, ...]] | None,
@@ -46,7 +44,6 @@ def _cat_names(
         return []
     cats = set(mvp_types.get("CATEGORIAL", ())) | set(mvp_types.get("BINARY", ()))
     return [name for name in features if name in cats]
-
 
 def _prepare_xy(
     df: pd.DataFrame,
@@ -71,7 +68,6 @@ def _prepare_xy(
         raise ValueError("Пустой train/eval для backward elimination")
     return x_train, y_train, x_eval, y_eval
 
-
 def _order_by_importance(
     x_train: pd.DataFrame,
     y_train: pd.Series,
@@ -86,7 +82,6 @@ def _order_by_importance(
     early_stopping_rounds: int,
 ) -> list[str]:
     """Порядок: важнее → раньше; с конца будем отрезать слабые."""
-    from catboost import CatBoostClassifier, CatBoostRegressor, Pool
 
     for col in cat_features:
         x_train[col] = x_train[col].astype(str)
@@ -121,7 +116,6 @@ def _order_by_importance(
     )
     return ranked["feature"].tolist()
 
-
 def _eval_subset(
     x_train: pd.DataFrame,
     y_train: pd.Series,
@@ -136,7 +130,6 @@ def _eval_subset(
     early_stopping_rounds: int,
 ) -> float:
     """Метрика подмножества на Val: PR-AUC или MAE."""
-    from catboost import CatBoostClassifier, CatBoostRegressor, Pool
 
     cats = _cat_names(features, mvp_types)
     xt = x_train[features].copy()
@@ -172,7 +165,6 @@ def _eval_subset(
     model.fit(train_pool, eval_set=eval_pool, plot=False)
     pred = np.asarray(model.predict(eval_pool), dtype=float)
     return float(mean_absolute_error(y_eval, pred))
-
 
 def backward_eliminate_by_metric(
     df: pd.DataFrame,

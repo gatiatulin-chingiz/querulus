@@ -13,11 +13,17 @@ from querulus.features.config import FeatureConfig, load_feature_config
 from querulus.features.derived import add_derived_features
 from querulus.features.data_quality import apply_dataset_data_quality
 from querulus.features.integer_casts import cast_integer_like_columns
+from querulus.features.incident_pretensions import add_incident_pretension_features
+from querulus.features.load.person import load_pretensions_base
+from querulus.features.person.pipeline import run_person_features
+from querulus.features.inflation import (
+                MONETARY_COLUMNS_FOR_REAL,
+                add_real_monetary_columns,
+            )
 
 logger = logging.getLogger("querulus.features")
 
 _INCIDENT_COLUMN = "INCIDENT_NUMBER"
-
 
 def _filter_pretensions_for_incidents(df: pd.DataFrame, pret: pd.DataFrame) -> pd.DataFrame:
     """Оставить претензии только по инцидентам из обучающей выборки."""
@@ -40,7 +46,6 @@ def _filter_pretensions_for_incidents(df: pd.DataFrame, pret: pd.DataFrame) -> p
         len(inc_set),
     )
     return filtered
-
 
 def run_features(
     df: pd.DataFrame,
@@ -72,9 +77,6 @@ def run_features(
         df = add_derived_features(df, feature_config)
         gc.collect()
 
-        from querulus.features.incident_pretensions import add_incident_pretension_features
-        from querulus.features.load.person import load_pretensions_base
-
         pret_base = load_pretensions_base(
             paths, conn, use_sql=use_sql, save_checkpoint=save_checkpoint
         )
@@ -89,7 +91,6 @@ def run_features(
         gc.collect()
 
         if include_person_features:
-            from querulus.features.person.pipeline import run_person_features
 
             logger.info(
                 "Person FE включены — пик ОЗУ высокий; "
@@ -107,10 +108,6 @@ def run_features(
             pret_base = None
             gc.collect()
             # Person money-FE появляются только здесь → REAL после сборки.
-            from querulus.features.inflation import (
-                MONETARY_COLUMNS_FOR_REAL,
-                add_real_monetary_columns,
-            )
 
             person_money = tuple(
                 c for c in MONETARY_COLUMNS_FOR_REAL if c.startswith("FE_PERSON_")

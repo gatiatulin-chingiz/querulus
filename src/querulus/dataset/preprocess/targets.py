@@ -13,20 +13,23 @@ from querulus.dataset.preprocess.filters import (
     ensure_victim_object_type_column,
     select_primary_loss_per_incident,
 )
+from querulus.dataset.preprocess.claim_instance import (
+    CLAIM_PERIOD_COL,
+    _RECOVERY_SIGNAL_COLS,
+    _VOID_DECISION,
+    is_void_claim_instance,
+)
+from querulus.dataset.preprocess.maturity import (
+    MATURITY_REPORT_NAME,
+    apply_target_maturity,
+    try_load_pretensions,
+    with_maturity_enabled,
+)
 
 logger = logging.getLogger("querulus.dataset")
 
 TARGET_FREQ_CLAIMS_GROUP = ("LOSS_NUMBER", "INCOMING_CLAIM_NUMBER")
 _FU_CLAIM_ORIGIN = "Обращение к ФУ"
-CLAIM_PERIOD_COL = "CLAIMEDVALUEPERIOD"
-_VOID_DECISION = "не принято"
-# Сигналы взыскания для отсева «пустой» / отменённой инстанции (Null во всех).
-_RECOVERY_SIGNAL_COLS = (
-    "RECOVEREDVALUEWITHSD",
-    "RECOVEREDMAINDEBT",
-    "RECOVEREDWEAROUT",
-    "RECOVEREDLOSSCOMMODYVALUE",
-)
 _SURCHARGE_INCIDENT_COL = "SurchargeValue_cumsum_by_incident_all"
 _UTS_SURCHARGE_INCIDENT_COL = "UTSSurchargeValue_cumsum_by_incident_all"
 _TARGET_SEV_CLAIM_AMOUNT_COLS = (
@@ -51,7 +54,6 @@ TARGET_SEV_CLAIMS_COMPONENT_COLS = tuple(
 TARGET_SEV_COMPONENT_COLS = TARGET_SEV_CLAIMS_COMPONENT_COLS + _TARGET_FREQ_PRET_COMPONENT_COLS
 TARGET_3_SEV_COMPONENT_COLS = _TARGET_3_SEV_SEVERITY_COLS
 
-
 def _is_fu_instance(inst: pd.Series, claim_origin: pd.Series | None) -> pd.Series:
     """ФУ: InstByOisuu=6 или InstByOisuu=1 при ClaimOrigin='Обращение к ФУ'."""
     inst_num = pd.to_numeric(inst, errors="coerce")
@@ -61,23 +63,6 @@ def _is_fu_instance(inst: pd.Series, claim_origin: pd.Series | None) -> pd.Serie
         is_fu = is_fu | ((inst_num == 1) & origin.eq(_FU_CLAIM_ORIGIN))
     return is_fu.fillna(False)
 
-
-def is_void_claim_instance(df: pd.DataFrame) -> pd.Series:
-    """Инстанция без принятого взыскания: Decision='Не принято' или все суммы Null.
-
-    Не опирается на номер инстанции — только Decision и наличие сумм.
-    """
-    void = pd.Series(False, index=df.index)
-    if "DECISION" in df.columns:
-        decision = df["DECISION"].fillna("").astype(str).str.strip().str.casefold()
-        void = void | decision.eq(_VOID_DECISION)
-    signal_cols = [col for col in _RECOVERY_SIGNAL_COLS if col in df.columns]
-    if signal_cols:
-        amounts = df[signal_cols].apply(lambda s: pd.to_numeric(s, errors="coerce"))
-        void = void | amounts.isna().all(axis=1)
-    return void
-
-
 def _optional_claim_meta_cols(claims: pd.DataFrame) -> list[str]:
     """Опциональные колонки для выбора инстанции (origin, decision, сигналы сумм)."""
     cols: list[str] = []
@@ -85,7 +70,6 @@ def _optional_claim_meta_cols(claims: pd.DataFrame) -> list[str]:
         if col in claims.columns and col not in cols:
             cols.append(col)
     return cols
-
 
 def pick_last_claim_instances(claims: pd.DataFrame) -> pd.DataFrame:
     """Последняя принятая инстанция каждого иска на убытке.
@@ -124,7 +108,6 @@ def pick_last_claim_instances(claims: pd.DataFrame) -> pd.DataFrame:
     )
 
     return pd.concat([from_court, from_fu], ignore_index=True)
-
 
 def _sum_last_claim_instances_by_incident(
     claims: pd.DataFrame,
@@ -169,7 +152,6 @@ def _sum_last_claim_instances_by_incident(
     )
     return per_loss.groupby("INCIDENT_NUMBER", as_index=False)[output_col].sum()
 
-
 def _sum_last_claim_components_by_incident(
     claims: pd.DataFrame,
     amount_cols: tuple[str, ...],
@@ -208,7 +190,6 @@ def _sum_last_claim_components_by_incident(
         .rename(columns=dict(zip(amount_cols, output_cols, strict=True)))
     )
     return per_loss.groupby("INCIDENT_NUMBER", as_index=False)[output_cols].sum()
-
 
 def _build_target_freq_by_incident(
     claims: pd.DataFrame,
@@ -249,7 +230,6 @@ def _build_target_freq_by_incident(
     out["TARGET_FREQ"] = (out["TARGET_FREQ_AMOUNT"] > 0).astype(int)
     return out
 
-
 def _build_target_sev_claims_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
     """Сумма взысканий (ОД + износ + УТС) по последней принятой инстанции каждого иска."""
     out = _sum_last_claim_components_by_incident(
@@ -260,7 +240,6 @@ def _build_target_sev_claims_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
     out["TARGET_SEV_CLAIMS_AMOUNT"] = out[list(TARGET_SEV_CLAIMS_COMPONENT_COLS)].sum(axis=1)
     return out
 
-
 def _last_nonzero_target_3_sev(row: pd.Series) -> float:
     """Последнее ненулевое среди RECOVEREDMAINDEBT/WEAROUT/LOSSCOMMODYVALUE_{1..5} (Litigant)."""
     for col in reversed(_TARGET_3_SEV_SEVERITY_COLS):
@@ -268,7 +247,6 @@ def _last_nonzero_target_3_sev(row: pd.Series) -> float:
         if pd.notna(val) and val != 0:
             return float(val)
     return np.nan
-
 
 def _build_target_3_sev_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
     """TARGET_3_SEV: pivot по принятым инстанциям + последний ненулевой RECOVERED* (без претензий)."""
@@ -318,7 +296,6 @@ def _build_target_3_sev_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
     incident_pivot["TARGET_3_SEV"] = incident_pivot.apply(_last_nonzero_target_3_sev, axis=1)
     return incident_pivot
 
-
 def ensure_claims_targets(df: pd.DataFrame) -> pd.DataFrame:
     """Добавить TARGET_FREQ_CLAIMS / TARGET_SEV_CLAIMS, если есть только *_AMOUNT."""
     out = df
@@ -334,7 +311,6 @@ def ensure_claims_targets(df: pd.DataFrame) -> pd.DataFrame:
             out["TARGET_SEV_CLAIMS_AMOUNT"], errors="coerce"
         ).fillna(0)
     return out
-
 
 def build_targets(
     paths: DataPaths,
@@ -491,14 +467,6 @@ def build_targets(
             df[col] = df[col].fillna(0)
 
     df = ensure_victim_object_type_column(df)
-
-    # Lazy import: maturity → targets (CLAIM_PERIOD_COL / is_void_claim_instance).
-    from querulus.dataset.preprocess.maturity import (
-        MATURITY_REPORT_NAME,
-        apply_target_maturity,
-        try_load_pretensions,
-        with_maturity_enabled,
-    )
 
     report_path = paths.processed_dir / MATURITY_REPORT_NAME if save_checkpoint else None
     pretensions = try_load_pretensions(paths)

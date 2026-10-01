@@ -38,6 +38,23 @@ from querulus.training.config import TrainingConfig
 from querulus.training.feature_selection_io import load_feature_selection_latest
 from querulus.training.mvp_types import DEFAULT_MVP_INPUT_TYPES
 from querulus.training.splits import default_inner_periods_from_train, split_by_date_periods
+from outboxml.data_subsets import ModelDataSubset
+from outboxml.core import utils as outboxml_utils
+from outboxml.core.enums import FeatureEngineering
+from outboxml.core.pydantic_models import ModelConfig
+from outboxml.core import data_prepare as outboxml_data_prepare
+from querulus.features.inflation import ensure_legacy_real_column_aliases
+from outboxml.core.prepared_datasets import PrepareDataset
+from outboxml.core.pydantic_models import AllModelsConfig
+from querulus.naming import MODEL_VERSION
+from querulus.features.data_quality import clip_bounds_for_outboxml
+from querulus.naming import (
+        MODEL_CF_NAME,
+        MODEL_NAME,
+        MODEL_RG_NAME,
+        configs_dir_for_version,
+    )
+from querulus.naming import MODEL_CF_NAME, MODEL_RG_NAME, configs_dir_for_version
 
 DEFAULT_ARTIFACTS_DIR = PROJECT_ROOT / "data" / "processed" / "train_loop_new"
 DEFAULT_CONFIGS_DIR = PROJECT_ROOT / "configs"
@@ -95,7 +112,6 @@ _replace_default_patched = False
 
 logger = logging.getLogger("querulus.training.outboxml_configs")
 
-
 def _patch_model_data_subset_load_subset() -> None:
     """Согласовать индексы X/y в OutBoxML при ``data_filter_condition`` (RG parity).
 
@@ -106,7 +122,6 @@ def _patch_model_data_subset_load_subset() -> None:
     global _load_subset_patched
     if _load_subset_patched:
         return
-    from outboxml.data_subsets import ModelDataSubset
 
     _orig = ModelDataSubset.load_subset
 
@@ -126,7 +141,6 @@ def _patch_model_data_subset_load_subset() -> None:
     ModelDataSubset.load_subset = _load_subset_aligned  # type: ignore[method-assign]
     _load_subset_patched = True
 
-
 def _patch_update_model_config_replace_keep_default() -> None:
     """OutBoxML: ``default`` (часто ``ПРОЧИЕ=0``) может не быть в train.
 
@@ -137,11 +151,6 @@ def _patch_update_model_config_replace_keep_default() -> None:
     global _replace_default_patched
     if _replace_default_patched:
         return
-    import logging
-
-    from outboxml.core import utils as outboxml_utils
-    from outboxml.core.enums import FeatureEngineering
-    from outboxml.core.pydantic_models import ModelConfig
 
     logger = logging.getLogger("querulus.training.outboxml_patch")
 
@@ -175,7 +184,6 @@ def _patch_update_model_config_replace_keep_default() -> None:
     )
     # prepare_dataset импортирует имя напрямую — патчим и там.
     try:
-        from outboxml.core import data_prepare as outboxml_data_prepare
 
         outboxml_data_prepare.update_model_config_replace = (  # type: ignore[attr-defined]
             _update_model_config_replace_keep_default
@@ -184,19 +192,15 @@ def _patch_update_model_config_replace_keep_default() -> None:
         pass
     _replace_default_patched = True
 
-
 def ensure_outboxml_runtime_patches() -> None:
     """Все runtime-патчи OutBoxML, нужные Querulus (без правок библиотеки)."""
     _patch_model_data_subset_load_subset()
     _patch_update_model_config_replace_keep_default()
 
-
 def ensure_legacy_inflation_column(df: pd.DataFrame) -> pd.DataFrame:
     """Алиас ``*_REAL_2020`` ← текущий базис. Предпочтительно через ``save_df_final``."""
-    from querulus.features.inflation import ensure_legacy_real_column_aliases
 
     return ensure_legacy_real_column_aliases(df)
-
 
 def prepare_datasets_from_config(
     config_path: str | Path,
@@ -205,8 +209,6 @@ def prepare_datasets_from_config(
 ) -> dict[str, Any]:
     """PrepareDataset'ы OutBoxML; runtime-патчи Querulus до prepare."""
     ensure_outboxml_runtime_patches()
-    from outboxml.core.prepared_datasets import PrepareDataset
-    from outboxml.core.pydantic_models import AllModelsConfig
 
     raw = json.loads(Path(config_path).read_text(encoding="utf-8"))
     all_cfg = AllModelsConfig.model_validate(raw)
@@ -221,13 +223,10 @@ def prepare_datasets_from_config(
         for model in all_cfg.models_configs
     }
 
-
 def default_model_version(**_kwargs: Any) -> str:
     """SemVer модели (``2.0.0``). См. ``querulus.naming``."""
-    from querulus.naming import MODEL_VERSION
 
     return MODEL_VERSION
-
 
 def _jsonable(value: Any) -> int | float | str | bool | None:
     if value is None:
@@ -246,7 +245,6 @@ def _jsonable(value: Any) -> int | float | str | bool | None:
     if isinstance(value, str):
         return value
     return None
-
 
 def catboost_params_from_hpo(
     hpo: dict[str, Any] | None,
@@ -285,7 +283,6 @@ def catboost_params_from_hpo(
         merged[key] = converted
     return merged
 
-
 def _level_key(value: Any) -> str | None:
     """Ключ уровня для ``replace`` (outboxml делает ``.upper()`` на строках).
 
@@ -312,7 +309,6 @@ def _level_key(value: Any) -> str | None:
         return None
     return text.upper()
 
-
 def _categorical_level_stats(series: pd.Series) -> tuple[dict[str, int], int, int, float]:
     """``(частоты по уровням, n_total, n_nan, nan_share)`` на fit-срезе."""
     keyed = series.astype("object").map(_level_key)
@@ -324,11 +320,9 @@ def _categorical_level_stats(series: pd.Series) -> tuple[dict[str, int], int, in
     nan_share = (n_nan / n_total) if n_total else 0.0
     return freq, n_total, n_nan, nan_share
 
-
 def _ordered_levels(freq: dict[str, int]) -> list[str]:
     """Уровни по убыванию частоты; тай-брейк — по имени (детерминизм конфига)."""
     return sorted(freq, key=lambda key: (-freq[key], key))
-
 
 def _categorical_feature_spec(
     series: pd.Series,
@@ -442,12 +436,10 @@ def _categorical_feature_spec(
         )
     return spec
 
-
 def _finite_values(series: pd.Series) -> np.ndarray:
     """Конечные числовые значения серии (без NaN/inf)."""
     values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
     return values[np.isfinite(values)]
-
 
 def _clip_for_feature(
     series: pd.Series,
@@ -507,7 +499,6 @@ def _clip_for_feature(
         logger.info("%s || clip [%s, %s] (%s)", name, low, high, source)
     return {"min_value": low, "max_value": high}
 
-
 def _latest_year_default(series: pd.Series) -> int:
     """Последний (больший) год fit-среза, не выше ``MAX_YEAR_FEATURE_VALUE``.
 
@@ -522,7 +513,6 @@ def _latest_year_default(series: pd.Series) -> int:
         return int(MAX_YEAR_FEATURE_VALUE)
     latest = int(math.floor(float(finite.max())))
     return int(min(max(latest, 0), MAX_YEAR_FEATURE_VALUE))
-
 
 def _numeric_feature_spec(
     series: pd.Series,
@@ -551,7 +541,6 @@ def _numeric_feature_spec(
         }
     return spec
 
-
 def _is_categorical(
     name: str,
     *,
@@ -576,7 +565,6 @@ def _is_categorical(
     if str(name).upper() in KNOWN_CATEGORICAL:
         return 0 < nunique <= KNOWN_CATEGORICAL_MAX_NUNIQUE
     return False
-
 
 def build_features_block(
     df: pd.DataFrame,
@@ -617,13 +605,11 @@ def build_features_block(
             )
     return features, cat_features
 
-
 def load_hpo_best_params(path: Path | str | None = None) -> dict[str, Any]:
     hpo_path = Path(path) if path is not None else DEFAULT_HPO_PATH
     if not hpo_path.exists():
         raise FileNotFoundError(f"Нет HPO JSON: {hpo_path}")
     return json.loads(hpo_path.read_text(encoding="utf-8"))
-
 
 def load_selected_task(
     task: str,
@@ -643,7 +629,6 @@ def load_selected_task(
     if not selected:
         raise ValueError(f"Пустой selected_features в {stack}_{task}_latest.json")
     return selected, cats
-
 
 def _data_config(
     *,
@@ -670,7 +655,6 @@ def _data_config(
         "data": {"targetcolumns": [], "targetslices": []},
     }
 
-
 def build_model_entry(
     *,
     model_name: str,
@@ -695,7 +679,6 @@ def build_model_entry(
     if data_filter_condition:
         model["data_filter_condition"] = data_filter_condition
     return model
-
 
 def build_all_models_config(
     *,
@@ -743,7 +726,6 @@ def build_all_models_config(
         ),
         "models_configs": [model],
     }
-
 
 def build_cf_rg_config(
     *,
@@ -801,7 +783,6 @@ def build_cf_rg_config(
         ],
     }
 
-
 def write_json(path: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -809,7 +790,6 @@ def write_json(path: Path, payload: dict[str, Any]) -> Path:
         encoding="utf-8",
     )
     return path
-
 
 def with_periods(
     config: dict[str, Any],
@@ -824,7 +804,6 @@ def with_periods(
     sep["test_period"] = [test_period[0], test_period[1]]
     return clone
 
-
 @dataclass(frozen=True)
 class PeriodWindow:
     role: str
@@ -833,17 +812,14 @@ class PeriodWindow:
     n: int
     n_positive: int
 
-
 def _fmt(ts: pd.Timestamp) -> str:
     return pd.Timestamp(ts).strftime("%Y-%m-%d")
-
 
 def _pos_count(df: pd.DataFrame, index: pd.Index, target: str) -> int:
     if target not in df.columns or index.empty:
         return 0
     y = pd.to_numeric(df.loc[index, target], errors="coerce").fillna(0)
     return int((y.astype(int) == 1).sum())
-
 
 def compute_period_windows(
     df: pd.DataFrame,
@@ -965,7 +941,6 @@ def compute_period_windows(
         "table": pd.DataFrame([w.__dict__ for w in windows]),
     }
 
-
 def write_outboxml_configs(
     df: pd.DataFrame,
     *,
@@ -988,13 +963,6 @@ def write_outboxml_configs(
     ``low_raw``/``high_raw``), для фич без записи в отчёте — квантили ``CLIP_QUANTILES``
     на fit-срезе; см. ``build_features_block`` и ``_clip_for_feature``.
     """
-    from querulus.features.data_quality import clip_bounds_for_outboxml
-    from querulus.naming import (
-        MODEL_CF_NAME,
-        MODEL_NAME,
-        MODEL_RG_NAME,
-        configs_dir_for_version,
-    )
 
     version = version or default_model_version()
     artifacts_dir = Path(artifacts_dir) if artifacts_dir else DEFAULT_ARTIFACTS_DIR
@@ -1088,12 +1056,10 @@ def write_outboxml_configs(
         "configs_dir": str(configs_dir),
     }
 
-
 _OUTBOXML_CONFIG_FILES: tuple[str, ...] = (
     "config_parity.json",
     "config_prod.json",
 )
-
 
 def load_outboxml_configs(
     df: pd.DataFrame,
@@ -1108,7 +1074,6 @@ def load_outboxml_configs(
 
     Окна сплитов пересчитываются из ``df`` (индексы нужны для fin-effect).
     """
-    from querulus.naming import MODEL_CF_NAME, MODEL_RG_NAME, configs_dir_for_version
 
     version = version or default_model_version()
     configs_dir = (
@@ -1143,14 +1108,12 @@ def load_outboxml_configs(
         "configs_dir": str(configs_dir),
     }
 
-
 def unwrap_estimator(model: Any) -> Any:
     """CatBoost из wrapper GLMCatboostCombineModel / CatboostModel."""
     inner = getattr(model, "model", None)
     if inner is not None and hasattr(inner, "predict"):
         return inner
     return model
-
 
 def ensure_predictable_model(model: Any) -> Any:
     """Если DSM оставил CatboostModel без .predict — добрать возврат fit()."""

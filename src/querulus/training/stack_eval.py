@@ -17,6 +17,18 @@ from sklearn.metrics import (
 
 from querulus.fin_effect.calculator import add_premiums_column
 from querulus.fin_effect.resolve import resolve_fin_effect_config
+from querulus.fin_effect.signed_effects import compute_fin_effect_model_coverage
+from querulus.fin_effect.threshold_policy import (
+    resolve_or_pick_val_threshold,
+    val_index_from_training,
+)
+from querulus.training.calibration import apply_severity_calibrator
+from querulus.training.catboost_runtime import (
+    make_pool,
+    require_catboost,
+    stringify_categorical_columns,
+)
+from querulus.training.collect_metrics import classification_gini
 from querulus.training.config import TrainingConfig
 from querulus.training.pipeline import TrainingArtifacts, frequency_predict_proba, train_models
 from querulus.training.severity_training import severity_predict
@@ -29,7 +41,6 @@ _STACKS = (
     ("new", "TARGET_FREQ"),
 )
 
-
 @dataclass(frozen=True)
 class StackEvalReport:
     """Сверка меток, freq/sev-метрики, покрытие (новая классификация) и доля планки."""
@@ -41,7 +52,6 @@ class StackEvalReport:
     pred_freq_disagree: pd.DataFrame
     coverage_share: pd.DataFrame
 
-
 def _predict_features(
     training: TrainingArtifacts,
     df: pd.DataFrame,
@@ -50,7 +60,6 @@ def _predict_features(
     """Строки признаков как при обучении (feature_frame / stringify cat)."""
     if training.feature_frame is not None:
         return training.feature_frame.loc[index]
-    from querulus.training.pipeline import stringify_categorical_columns
 
     cats = list(
         dict.fromkeys(
@@ -61,7 +70,6 @@ def _predict_features(
         )
     )
     return stringify_categorical_columns(df.loc[index], cats)
-
 
 def _holdout_index(
     legacy: TrainingArtifacts,
@@ -74,7 +82,6 @@ def _holdout_index(
         new.frequency_split.x_test.index
     )
 
-
 def _classification_threshold(
     training: TrainingArtifacts,
     *,
@@ -82,7 +89,6 @@ def _classification_threshold(
     val_index: pd.Index | None = None,
     frequency_target: str | None = None,
 ) -> float:
-    from querulus.fin_effect.threshold_policy import resolve_or_pick_val_threshold
 
     return resolve_or_pick_val_threshold(
         df,
@@ -90,7 +96,6 @@ def _classification_threshold(
         val_index=val_index,
         frequency_target_column=frequency_target,
     )
-
 
 def stack_predictions(
     training: TrainingArtifacts,
@@ -122,19 +127,15 @@ def stack_predictions(
     )
     sev_calibrator = getattr(training, "severity_calibrator", None)
     if sev_calibrator is not None:
-        from querulus.training.calibration import apply_severity_calibrator
 
         sev_raw = apply_severity_calibrator(sev_calibrator, sev_raw)
     pred_sev = pd.Series(np.asarray(sev_raw, dtype=float), index=index, dtype=float)
     return proba, pred_freq, pred_sev
 
-
 def _gini(y_true: np.ndarray, proba: np.ndarray) -> float:
     """Gini frequency: Lorenz по proba (``collect_metrics.classification_gini``)."""
-    from querulus.training.collect_metrics import classification_gini
 
     return classification_gini(y_true, proba)
-
 
 def _freq_metrics_row(
     stack: str,
@@ -174,7 +175,6 @@ def _freq_metrics_row(
         "threshold": threshold,
     }
 
-
 def _sev_metrics_row(
     stack: str,
     y_true: pd.Series,
@@ -206,7 +206,6 @@ def _sev_metrics_row(
         "shift": float(np.nansum(yp) / fact_sum) if fact_sum > 0 else float("nan"),
     }
 
-
 def _coverage_table(
     stack: str,
     y_true: pd.Series,
@@ -217,7 +216,6 @@ def _coverage_table(
     premiums: pd.Series,
 ) -> pd.DataFrame:
     """Агрегат n и ₽ по новой формуле (расход отрицательный)."""
-    from querulus.fin_effect.calculator import compute_fin_effect_model_coverage
 
     fact = y_true.to_numpy(dtype=int)
     pred = pred_freq.to_numpy(dtype=int)
@@ -261,7 +259,6 @@ def _coverage_table(
         }
     )
     return pd.DataFrame(rows)
-
 
 def _coverage_share_table(
     pred_sev_by_stack: dict[str, pd.Series],
@@ -312,7 +309,6 @@ def _coverage_share_table(
         )
     return pd.DataFrame(rows)
 
-
 def _pred_freq_disagree_table(
     pred_legacy: pd.Series,
     pred_new: pd.Series,
@@ -354,7 +350,6 @@ def _pred_freq_disagree_table(
         ]
     )
 
-
 def _premiums_on_index(df: pd.DataFrame, index: pd.Index) -> pd.Series:
     """Взносы ФУ на holdout (колонка Взносы или расчёт payments_fee)."""
     cfg = resolve_fin_effect_config(df, frequency_target="TARGET_FREQ", severity_target="TARGET_SEV")
@@ -363,7 +358,6 @@ def _premiums_on_index(df: pd.DataFrame, index: pd.Index) -> pd.Series:
     work = df.loc[index]
     return add_premiums_column(work, cfg)
 
-
 def _catboost_params_from_model(model: object) -> dict[str, object]:
     """Гиперпараметры обученной CatBoost-модели для повторного fit."""
     raw = dict(model.get_params())  # type: ignore[attr-defined]
@@ -371,7 +365,6 @@ def _catboost_params_from_model(model: object) -> dict[str, object]:
     raw["allow_writing_files"] = False
     raw["verbose"] = False
     return {key: value for key, value in raw.items() if value is not None}
-
 
 def _retrain_freq_on_target(
     df: pd.DataFrame,
@@ -386,7 +379,6 @@ def _retrain_freq_on_target(
     Окно обучения — ``frequency_split.x_train`` той же модели (без подглядывания в eval,
     если eval пересекается с train — строки eval из train исключаются из fit).
     """
-    from querulus.training.pipeline import make_pool, require_catboost
 
     if training.frequency_split is None:
         raise ValueError("Для retrain нужен frequency_split у legacy")
@@ -435,7 +427,6 @@ def _retrain_freq_on_target(
     thr = float(threshold)
     pred = (proba >= thr).astype(int)
     return proba, pred
-
 
 def score_stack_on_index(
     df: pd.DataFrame,
@@ -487,7 +478,6 @@ def score_stack_on_index(
     )
     return freq_row, coverage
 
-
 def train_legacy_matching_new(
     df: pd.DataFrame,
     config: TrainingConfig,
@@ -506,7 +496,6 @@ def train_legacy_matching_new(
         severity_select_features=False,
     )
     return train_models(df, cfg)
-
 
 def evaluate_legacy_vs_new(
     df: pd.DataFrame,
@@ -540,8 +529,6 @@ def evaluate_legacy_vs_new(
         pairs=[("TARGET_2", "TARGET_FREQ")],
         quiet=True,
     ).report
-
-    from querulus.fin_effect.threshold_policy import val_index_from_training
 
     val_index = val_index_from_training(new)
 

@@ -7,13 +7,13 @@ import numpy as np
 import pandas as pd
 
 from querulus.training.config import TrainingConfig
+from querulus.training.catboost_runtime import require_catboost
 
 if TYPE_CHECKING:
     from querulus.training.pipeline import TrainingArtifacts
 
 SeverityTargetTransform = Literal["raw", "log1p"]
 SeveritySampleWeight = Literal["none", "sqrt", "linear"]
-
 
 def severity_train_target(
     y: np.ndarray | pd.Series,
@@ -24,7 +24,6 @@ def severity_train_target(
     if transform == "log1p":
         return np.log1p(np.clip(arr, a_min=0.0, a_max=None))
     return arr
-
 
 def severity_sample_weights(
     y: np.ndarray | pd.Series,
@@ -43,7 +42,6 @@ def severity_sample_weights(
     weights = np.where(weights > 0, weights, 1.0)
     return weights
 
-
 def severity_predict(
     model: object,
     features: pd.DataFrame,
@@ -54,7 +52,6 @@ def severity_predict(
     """Предсказание severity с учётом log1p-таргета."""
     cat_features = [column for column in cat_features if column in features.columns]
     if cat_features:
-        from catboost import Pool
 
         pool = Pool(features, cat_features=cat_features)
         raw = np.asarray(model.predict(pool), dtype=float)
@@ -63,7 +60,6 @@ def severity_predict(
     if transform == "log1p":
         return np.clip(np.expm1(raw), a_min=0.0, a_max=None)
     return raw
-
 
 def fit_severity_model(
     training: TrainingArtifacts,
@@ -75,7 +71,6 @@ def fit_severity_model(
     eval_index: pd.Index | None = None,
 ) -> object:
     """Обучить severity только на target > 0 (опционально подмножество индексов)."""
-    from querulus.training.pipeline import require_catboost
 
     if training.severity_split is None:
         raise ValueError("severity_split отсутствует в TrainingArtifacts")

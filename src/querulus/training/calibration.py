@@ -6,10 +6,11 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.isotonic import IsotonicRegression
 
 BinStrategy = Literal["equal_mass", "equal_width"]
 SeverityCalMethod = Literal["isotonic", "affine", "scale"]
-
 
 @dataclass
 class SeverityCalibrator:
@@ -50,7 +51,6 @@ class SeverityCalibrator:
         """То же, что ``predict``, с сохранением index."""
         return pd.Series(self.predict(y_pred), index=y_pred.index, dtype=float)
 
-
 def severity_mean_bias(
     y_true: pd.Series | np.ndarray,
     y_pred: pd.Series | np.ndarray,
@@ -64,7 +64,6 @@ def severity_mean_bias(
     if not np.any(mask):
         return float("nan")
     return float(np.mean(p[mask] - y[mask]))
-
 
 def fit_severity_calibrator(
     y_true: pd.Series | np.ndarray,
@@ -96,7 +95,6 @@ def fit_severity_calibrator(
     iso = None
     intercept, coef, scale = 0.0, 1.0, 1.0
     if method == "isotonic":
-        from sklearn.isotonic import IsotonicRegression
 
         iso = IsotonicRegression(y_min=0.0, out_of_bounds="clip")
         iso.fit(p_fit, y_fit)
@@ -127,7 +125,6 @@ def fit_severity_calibrator(
         _scale=scale,
     )
 
-
 def apply_severity_calibrator(
     calibrator: SeverityCalibrator | None,
     y_pred: pd.Series | np.ndarray,
@@ -138,16 +135,6 @@ def apply_severity_calibrator(
     if isinstance(y_pred, pd.Series):
         return calibrator.predict_series(y_pred)
     return calibrator.predict(y_pred)
-
-
-@dataclass(frozen=True)
-class CalibratorAbResult:
-    """A/B raw vs cal: таблица + финэффект на каждой шкале proba."""
-
-    table: pd.DataFrame
-    fe_raw: Any
-    fe_cal: Any
-
 
 def expected_calibration_error(
     y_true: pd.Series | np.ndarray,
@@ -176,7 +163,6 @@ def expected_calibration_error(
         raise ValueError(f"Неизвестная strategy={strategy!r}")
     return _ece_from_edges(y, p, edges)
 
-
 def _equal_mass_edges(p: np.ndarray, n_bins: int) -> np.ndarray:
     """Границы бинов по квантилям p; дубликаты схлопываются."""
     quantiles = np.linspace(0.0, 1.0, n_bins + 1)
@@ -187,7 +173,6 @@ def _equal_mass_edges(p: np.ndarray, n_bins: int) -> np.ndarray:
     edges[0] = min(float(edges[0]), float(p.min()))
     edges[-1] = max(float(edges[-1]), float(p.max()))
     return edges.astype(float)
-
 
 def _ece_from_edges(y: np.ndarray, p: np.ndarray, edges: np.ndarray) -> float:
     ece = 0.0
@@ -206,7 +191,6 @@ def _ece_from_edges(y: np.ndarray, p: np.ndarray, edges: np.ndarray) -> float:
         conf = float(p[in_bin].mean())
         ece += weight * abs(freq - conf)
     return float(ece)
-
 
 def balance_binary_cal_frame(
     x_cal: pd.DataFrame,
@@ -233,7 +217,6 @@ def balance_binary_cal_frame(
     keep = pd.Series(keep).sample(frac=1.0, random_state=random_state).to_numpy()
     return x_cal.loc[keep].copy(), y_cal.loc[keep].copy()
 
-
 def fit_probability_calibrator(
     model: object,
     x_cal: pd.DataFrame,
@@ -248,7 +231,6 @@ def fit_probability_calibrator(
     ``balance=True``: учим на downsampled majority (честнее при дисбалансе
     для P(y=1)); оценку ECE делайте на полном Cal.
     """
-    from sklearn.calibration import CalibratedClassifierCV
 
     x_fit, y_fit = x_cal, y_cal
     if balance:
@@ -258,106 +240,3 @@ def fit_probability_calibrator(
     calibrator = CalibratedClassifierCV(model, method=method, cv="prefit")
     calibrator.fit(x_fit, y_fit.astype(int))
     return calibrator
-
-
-def compare_calibrator_ab(
-    df: pd.DataFrame,
-    effect_index: pd.Index,
-    proba_raw: pd.Series | np.ndarray,
-    proba_cal: pd.Series | np.ndarray,
-    severity_pred: pd.Series | np.ndarray,
-    y_true_freq: pd.Series | np.ndarray,
-    *,
-    config: Any | None = None,
-    val_threshold: float | None = None,
-    title: str | None = None,
-    print_summary: bool = True,
-) -> CalibratorAbResult:
-    """Сравнить raw vs cal: ECE + порог + финэффект на той же шкале proba.
-
-    Порог — один с Val (``val_threshold`` или подбор на ``effect_index`` по raw proba).
-    """
-    from querulus.fin_effect.calculator import run_fin_effect_pipeline
-    from querulus.fin_effect.config import FinEffectConfig
-
-    cfg = config or FinEffectConfig()
-    aligned = df.loc[effect_index]
-    index = aligned.index
-
-    def _as_series(values: pd.Series | np.ndarray) -> pd.Series:
-        if isinstance(values, pd.Series):
-            return values.reindex(index)
-        return pd.Series(np.asarray(values, dtype=float), index=index)
-
-    proba_raw_s = _as_series(proba_raw)
-    proba_cal_s = _as_series(proba_cal)
-    sev_s = _as_series(severity_pred)
-    if isinstance(y_true_freq, pd.Series):
-        y_s = y_true_freq.reindex(index)
-    else:
-        y_s = pd.Series(np.asarray(y_true_freq), index=index)
-
-    fe_raw = run_fin_effect_pipeline(
-        aligned,
-        proba_raw_s,
-        sev_s,
-        y_s,
-        threshold=None,
-        config=cfg,
-    )
-    if val_threshold is None:
-        val_threshold = float(fe_raw.best_threshold)
-    thr = float(val_threshold)
-    fe_raw = run_fin_effect_pipeline(
-        aligned,
-        proba_raw_s,
-        sev_s,
-        y_s,
-        threshold=thr,
-        config=cfg,
-    )
-    fe_cal = run_fin_effect_pipeline(
-        aligned,
-        proba_cal_s,
-        sev_s,
-        y_s,
-        threshold=thr,
-        config=cfg,
-    )
-
-    rows: list[dict[str, float | str]] = []
-    for name, proba, fe in (
-        ("raw", proba_raw_s, fe_raw),
-        ("cal", proba_cal_s, fe_cal),
-    ):
-        pred = (proba.to_numpy(dtype=float) >= thr).astype(int)
-        rows.append(
-            {
-                "branch": name,
-                "ece": expected_calibration_error(y_s, proba, strategy="equal_mass"),
-                "best_threshold": thr,
-                "net_effect": float(fe.net_effect),
-                "model_effect": float(fe.model_effect_total),
-                "fact_effect": float(fe.fact_effect_total),
-                "pred_rate": float(pred.mean()) if len(pred) else float("nan"),
-                "n": float(len(index)),
-            }
-        )
-    table = pd.DataFrame(rows).set_index("branch")
-
-    if print_summary:
-        label = title or "calibrator A/B"
-        print(f"\n=== {label} ===")
-        print(
-            table.to_string(
-                float_format=lambda x: f"{x:,.2f}" if abs(x) < 1e6 else f"{x:,.0f}"
-            )
-        )
-        delta_net = float(fe_cal.net_effect) - float(fe_raw.net_effect)
-        delta_ece = float(table.loc["cal", "ece"]) - float(table.loc["raw", "ece"])
-        print(
-            f"Δ net_effect (cal−raw)={delta_net:,.0f} ₽; "
-            f"Δ ECE (cal−raw)={delta_ece:+.2f}"
-        )
-
-    return CalibratorAbResult(table=table, fe_raw=fe_raw, fe_cal=fe_cal)

@@ -13,13 +13,13 @@ from querulus.dataset.steps.targets import (
     TARGET_FREQ_CLAIMS_GROUP,
     pick_last_claim_instances,
 )
+from querulus.training.stack_eval import stack_predictions
 
 _T0_COL = "PAYMENT_ORDER_DATE_TIME"
 _PSR_COL = "TARGET_FREQ_AMOUNT"
 _COURT_DATE_COL = "COURTWORKOVERDATE"
 
 DEFAULT_RATES: tuple[float, ...] = (0.08, 0.12, 0.16)
-
 
 @dataclass(frozen=True)
 class NpvReport:
@@ -28,7 +28,6 @@ class NpvReport:
     date_coverage: pd.DataFrame
     rate_table: pd.DataFrame
     detail: pd.DataFrame
-
 
 def _load_claims(project_root: Path) -> pd.DataFrame:
     """Загрузить target_3_claims.parquet и нормализовать колонки."""
@@ -44,7 +43,6 @@ def _load_claims(project_root: Path) -> pd.DataFrame:
     df.columns = df.columns.str.upper()
     df = df.rename(columns=RENAME_DICT)
     return df
-
 
 def _court_end_date_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
     """Max CourtWorkOverDate последней принятой инстанции по инциденту."""
@@ -77,7 +75,6 @@ def _court_end_date_by_incident(claims: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"_court_date": "t_end"})
     )
     return agg
-
 
 def _compute_npv_detail(
     holdout: pd.DataFrame,
@@ -115,7 +112,6 @@ def _compute_npv_detail(
 
     return work
 
-
 def _date_coverage_table(detail: pd.DataFrame) -> pd.DataFrame:
     """Статистика покрытия дат t_end."""
     has_date = detail["t_end"].notna()
@@ -128,7 +124,6 @@ def _date_coverage_table(detail: pd.DataFrame) -> pd.DataFrame:
         {"показатель": "p90 лага (дни)", "значение": float(dt.quantile(0.9)) if len(dt) else None},
     ]
     return pd.DataFrame(rows)
-
 
 def _rate_summary_table(detail: pd.DataFrame, rates: tuple[float, ...]) -> pd.DataFrame:
     """Агрегат по ставкам: сколько дел окупилось, суммарный профит."""
@@ -151,7 +146,6 @@ def _rate_summary_table(detail: pd.DataFrame, rates: tuple[float, ...]) -> pd.Da
         })
     return pd.DataFrame(rows)
 
-
 def run_npv_analysis(
     df: pd.DataFrame,
     training,
@@ -170,7 +164,6 @@ def run_npv_analysis(
     project_root : корень проекта querulus (для target_3_claims.parquet)
     rates : годовые доходности для сценариев
     """
-    from querulus.training.stack_eval import stack_predictions
 
     claims = _load_claims(project_root)
     t_end_map = _court_end_date_by_incident(claims)

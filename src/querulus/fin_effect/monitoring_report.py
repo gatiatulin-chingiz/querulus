@@ -1,6 +1,8 @@
 """Три HTML по финансовому эффекту: план, расчёт, заключение."""
 from __future__ import annotations
 
+import base64
+import io
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -8,6 +10,15 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+except ImportError:  # pragma: no cover
+    matplotlib = None  # type: ignore[assignment]
+    plt = None  # type: ignore[assignment]
 
 from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_money
 
@@ -220,14 +231,6 @@ def _fmt_number(value: Any) -> str:
 
 
 def _fig_to_img(fig: Any, *, alt: str, caption: str = "") -> str:
-    import base64
-    import io
-
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
     buffer = io.BytesIO()
     fig.savefig(buffer, format="png", dpi=120, bbox_inches="tight", facecolor="white")
     plt.close(fig)
@@ -253,10 +256,6 @@ def _chart_bootstrap_hist(
     *,
     title: str,
 ) -> str:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
     if samples is None or samples.empty:
         return ""
@@ -307,10 +306,6 @@ def _chart_bootstrap_hist(
 
 
 def _chart_filial_effects(filial_effects: pd.DataFrame) -> str:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
     if filial_effects is None or filial_effects.empty:
         return ""
@@ -343,10 +338,6 @@ def _chart_filial_effects(filial_effects: pd.DataFrame) -> str:
 
 
 def _chart_path_shares(path_shares: pd.DataFrame) -> str:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
     if path_shares is None or path_shares.empty:
         return ""
@@ -403,10 +394,6 @@ def _chart_path_shares(path_shares: pd.DataFrame) -> str:
 
 
 def _chart_group_means(group_summary: pd.DataFrame) -> str:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
     if group_summary is None or group_summary.empty:
         return ""
@@ -449,10 +436,6 @@ def _chart_group_means(group_summary: pd.DataFrame) -> str:
 
 
 def _chart_annual_ci(annual_summary: pd.DataFrame) -> str:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
     if annual_summary is None or annual_summary.empty:
         return ""
@@ -497,10 +480,6 @@ def _chart_annual_ci(annual_summary: pd.DataFrame) -> str:
 
 def _chart_feature_distributions(frame: pd.DataFrame) -> str:
     """Гистограммы control vs model по ключевым полям финэффекта."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
     if frame is None or frame.empty or "_group" not in frame.columns:
         return ""
@@ -600,9 +579,7 @@ def _chart_feature_distributions(frame: pd.DataFrame) -> str:
 
 
 def _charts_section(result: MonitoringEffectResult) -> str:
-    try:
-        import matplotlib  # noqa: F401
-    except ImportError:
+    if matplotlib is None or plt is None:
         return (
             "<p class='muted'>Графики пропущены: пакет <code>matplotlib</code> "
             "не установлен в окружении.</p>"
@@ -636,9 +613,7 @@ def _charts_section(result: MonitoringEffectResult) -> str:
 
 
 def _safe_feature_distributions(frame: pd.DataFrame) -> str:
-    try:
-        import matplotlib  # noqa: F401
-    except ImportError:
+    if matplotlib is None or plt is None:
         return (
             "<p class='muted'>Распределения пропущены: нет <code>matplotlib</code>.</p>"
         )

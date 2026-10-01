@@ -9,6 +9,7 @@ import logging
 import math
 import os
 import ssl
+import tempfile
 import threading
 import time
 import urllib.error
@@ -16,19 +17,72 @@ import urllib.parse
 import urllib.request
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import (
+    average_precision_score,
+    f1_score,
+    matthews_corrcoef,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
+from sklearn.model_selection import TimeSeriesSplit
 
-TaskType = Literal["classification", "regression"]
-OptimizeDirection = Literal["maximize", "minimize"]
+try:
+    import optuna
+except ImportError:  # pragma: no cover
+    optuna = None
+
+try:
+    from catboost import CatBoostClassifier, CatBoostRegressor, Pool
+except ImportError:  # pragma: no cover
+    CatBoostClassifier = None  # type: ignore[assignment, misc]
+    CatBoostRegressor = None  # type: ignore[assignment, misc]
+    Pool = None  # type: ignore[assignment, misc]
+
+try:
+    import mlflow as _mlflow_module
+except ImportError:  # pragma: no cover
+    _mlflow_module = None
+
+try:
+    from mlflow.entities import RunStatus
+    from mlflow.tracking import MlflowClient
+except ImportError:  # pragma: no cover
+    RunStatus = None  # type: ignore[assignment]
+    MlflowClient = None  # type: ignore[assignment]
+
+try:
+    from mlflow.utils.mlflow_tags import MLFLOW_PARENT_RUN_ID, MLFLOW_RUN_NAME
+except ImportError:  # pragma: no cover
+    MLFLOW_PARENT_RUN_ID = "mlflow.parentRunId"
+    MLFLOW_RUN_NAME = "mlflow.runName"
+
+try:
+    import urllib3
+except ImportError:  # pragma: no cover
+    urllib3 = None
+
+try:
+    from joblib import parallel_backend
+except ImportError:  # pragma: no cover
+    parallel_backend = None
 
 from querulus.training.catboost_fit import (
     apply_gap_penalty,
     catboost_fit_stats,
     train_val_gap,
 )
+from querulus.training.catboost_runtime import require_model_diagnostics
+from querulus.training.collect_metrics import classification_gini, metrics_bundle
+from querulus.training.config import TrainingConfig
+
+TaskType = Literal["classification", "regression"]
+OptimizeDirection = Literal["maximize", "minimize"]
 
 logger = logging.getLogger("querulus.training.hpo")
 # Параллельные trial-логи через MlflowClient (без fluent active run).
@@ -458,9 +512,6 @@ def _load_model_diagnostics_class() -> Any:
     """ModelDiagnostics из внешнего modeldiagnostics (как в pipeline)."""
     global _MD_CLS
     if _MD_CLS is None:
-        from querulus.training.config import TrainingConfig
-        from querulus.training.pipeline import require_model_diagnostics
-
         _MD_CLS = require_model_diagnostics(TrainingConfig())
     return _MD_CLS
 
@@ -514,15 +565,6 @@ def _classification_metrics_at_threshold(
     Совместимо со старым MD без аргумента ``thresholds`` (там иначе шёл
     полный перебор 0..1).
     """
-    from sklearn.metrics import (
-        average_precision_score,
-        f1_score,
-        matthews_corrcoef,
-        precision_score,
-        recall_score,
-        roc_auc_score,
-    )
-
     y_true = np.asarray(y_true)
     proba = np.asarray(proba, dtype=float)
     pred_labels = (proba >= threshold).astype(int)
@@ -536,7 +578,6 @@ def _classification_metrics_at_threshold(
         metrics["ece"] = float(diagnostics._calculate_ece(y_true, proba))
     except Exception:  # noqa: BLE001
         metrics["ece"] = float("nan")
-    from querulus.training.collect_metrics import classification_gini
 
     metrics["gini"] = classification_gini(y_true, proba)
 
@@ -579,8 +620,6 @@ def fold_metrics_bundle(
     threshold: float | None = None,
 ) -> dict[str, float]:
     """Collect-style метрики; для classification нужен ``threshold`` (с Val)."""
-    from querulus.training.collect_metrics import metrics_bundle
-
     return metrics_bundle(y_true, y_pred, task_type=task_type, threshold=threshold)
 
 
@@ -710,15 +749,6 @@ def _client_log_trial_run(
     ``status``: FINISHED | FAILED | KILLED (pruned).
     При auth/HTML SSO — один retry с ``force_refresh``.
     """
-    from mlflow.entities import RunStatus
-    from mlflow.tracking import MlflowClient
-
-    try:
-        from mlflow.utils.mlflow_tags import MLFLOW_PARENT_RUN_ID, MLFLOW_RUN_NAME
-    except ImportError:  # pragma: no cover
-        MLFLOW_PARENT_RUN_ID = "mlflow.parentRunId"
-        MLFLOW_RUN_NAME = "mlflow.runName"
-
     safe_params = _mlflow_safe_params(params)
     clean_metrics = {
         str(key): float(value)
@@ -817,10 +847,12 @@ def _client_log_trial_run(
 
 def _suppress_insecure_request_warning() -> None:
     """Не засорять ноутбук urllib3 InsecureRequestWarning при insecure MLflow TLS."""
+    if urllib3 is None:
+        return
     try:
-        import urllib3
-
-        warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
+        warnings.filterwarnings(
+            "ignore", category=urllib3.exceptions.InsecureRequestWarning
+        )
     except Exception:  # noqa: BLE001
         pass
 
@@ -841,9 +873,6 @@ def _log_study_artifacts(
     ``/mlflow`` у клиента → PermissionError. Тогда только warning: params/metrics
     уже записаны, HPO не валим.
     """
-    import tempfile
-    from pathlib import Path
-
     try:
         with tempfile.TemporaryDirectory(prefix="querulus_hpo_") as tmp:
             root = Path(tmp)
@@ -926,9 +955,12 @@ def run_hpo(
     Child trial-runs всегда через ``MlflowClient`` (parent + children в UI),
     в т.ч. при ``n_jobs>1`` / freq∥sev parallel.
     """
-    import optuna
-    from catboost import CatBoostClassifier, CatBoostRegressor, Pool
-    from sklearn.model_selection import TimeSeriesSplit
+    if optuna is None:
+        raise ImportError("Для HPO нужен optuna. Установите зависимости окружения.")
+    if CatBoostClassifier is None or CatBoostRegressor is None or Pool is None:
+        raise ImportError("Для HPO нужен catboost. Установите зависимости окружения.")
+    if parallel_backend is None:
+        raise ImportError("Для HPO нужен joblib. Установите зависимости окружения.")
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     logging.getLogger("optuna").setLevel(logging.WARNING)
@@ -959,21 +991,23 @@ def run_hpo(
     mlflow = None
     resolved_experiment_id: str | None = None
     if use_mlflow:
-        import mlflow as _mlflow
-
-        _configure_mlflow(_mlflow)
+        if _mlflow_module is None:
+            raise ImportError("Для MLflow tracking нужен пакет mlflow.")
+        _configure_mlflow(_mlflow_module)
         _suppress_insecure_request_warning()
         # Autolog (если кто-то включил в ноутбуке) плодит sibling-runs на каждый fit.
         try:
-            _mlflow.autolog(disable=True)
+            _mlflow_module.autolog(disable=True)
         except Exception:  # noqa: BLE001
             pass
         try:
-            resolved_experiment_id = _connect_mlflow_experiment(_mlflow, experiment_name)
-            mlflow = _mlflow
+            resolved_experiment_id = _connect_mlflow_experiment(
+                _mlflow_module, experiment_name
+            )
+            mlflow = _mlflow_module
             logger.info(
                 "MLflow tracking URI=%s experiment=%s id=%s (child trials via MlflowClient)",
-                _mlflow.get_tracking_uri(),
+                _mlflow_module.get_tracking_uri(),
                 experiment_name,
                 resolved_experiment_id,
             )
@@ -1277,8 +1311,6 @@ def run_hpo(
 
     def _optimize_study() -> None:
         """Optuna trials в threads: CatBoost отпускает GIL; без loky/pickle на Windows."""
-        from joblib import parallel_backend
-
         with parallel_backend("threading", n_jobs=n_jobs):
             study.optimize(
                 objective,

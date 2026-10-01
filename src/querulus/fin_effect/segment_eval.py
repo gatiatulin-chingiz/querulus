@@ -9,10 +9,13 @@ import pandas as pd
 from querulus.fin_effect.calculator import (
     FinEffectResult,
     apply_model_predictions,
+    feature_rows_for_predict,
+    frequency_proba_from_training,
     prepare_effect_frame,
 )
 from querulus.fin_effect.compare_report import plain_floats
 from querulus.fin_effect.config import FinEffectConfig
+from querulus.fin_effect.threshold_policy import resolve_val_threshold
 from querulus.training.config import TrainingConfig
 from querulus.training.pipeline import TrainingArtifacts
 from querulus.training.severity_training import (
@@ -21,7 +24,6 @@ from querulus.training.severity_training import (
     fit_severity_model,
     severity_predict,
 )
-
 
 def fin_effect_penalty_table(
     result: FinEffectResult,
@@ -83,7 +85,6 @@ def fin_effect_penalty_table(
         )
     return plain_floats(pd.DataFrame(rows))
 
-
 def _effect_index_and_freq(
     training: TrainingArtifacts,
     split: str,
@@ -99,7 +100,6 @@ def _effect_index_and_freq(
     y = pd.concat([frequency_split.y_train, frequency_split.y_test])
     return idx, y
 
-
 def _fin_on_index(
     df: pd.DataFrame,
     training: TrainingArtifacts,
@@ -110,10 +110,6 @@ def _fin_on_index(
     threshold: float | None,
 ) -> FinEffectResult:
     """Фин. эффект на произвольном индексе строк (один порог)."""
-    from querulus.fin_effect.calculator import (
-        feature_rows_for_predict,
-        frequency_proba_from_training,
-    )
 
     frame = df.loc[idx]
     predict_frame = feature_rows_for_predict(training, idx, frame)
@@ -131,7 +127,6 @@ def _fin_on_index(
         config=fin_config,
     )
 
-
 def run_fin_effect_with_severity_predictions(
     df: pd.DataFrame,
     training: TrainingArtifacts,
@@ -143,8 +138,6 @@ def run_fin_effect_with_severity_predictions(
     frequency_target_column: str | None = None,
 ) -> FinEffectResult:
     """Фин. эффект с подменой severity-предикта (freq — из ``training``)."""
-    from querulus.fin_effect.calculator import frequency_proba_from_training
-    from querulus.fin_effect.calculator import feature_rows_for_predict
 
     config = config or FinEffectConfig()
     effect_index, y_true_freq = _effect_index_and_freq(training, split)
@@ -167,7 +160,6 @@ def run_fin_effect_with_severity_predictions(
         config=config,
     )
 
-
 def _value_mask(
     df: pd.DataFrame,
     index: pd.Index,
@@ -176,7 +168,6 @@ def _value_mask(
 ) -> pd.Series:
     values = pd.to_numeric(df.loc[index, value_column], errors="coerce")
     return values <= value_threshold
-
 
 @dataclass(frozen=True)
 class SeverityVariantResult:
@@ -192,14 +183,12 @@ class SeverityVariantResult:
     pred_sum: float
     true_sum: float
 
-
 @dataclass(frozen=True)
 class SeverityVariantsCompare:
     """Сравнительная таблица обученных severity-вариантов."""
 
     summary: pd.DataFrame
     variants: dict[str, SeverityVariantResult]
-
 
 def compare_severity_fin_effect_variants(
     df: pd.DataFrame,
@@ -213,10 +202,8 @@ def compare_severity_fin_effect_variants(
     """Обучить raw / log1p / weighted severity и сравнить fin-effect + MAE."""
     training_config = training_config or TrainingConfig()
     effect_index, _ = _effect_index_and_freq(training, split)
-    from querulus.fin_effect.threshold_policy import resolve_val_threshold
 
     use_threshold = resolve_val_threshold(training, explicit=threshold)
-    from querulus.fin_effect.calculator import feature_rows_for_predict
 
     predict_frame = feature_rows_for_predict(training, effect_index, df.loc[effect_index])
     features = predict_frame[training.severity_features]
@@ -286,7 +273,6 @@ def compare_severity_fin_effect_variants(
         variants=variants,
     )
 
-
 @dataclass(frozen=True)
 class SegmentFinEffectCompare:
     """1:1 на сегменте ≤ threshold: общая severity vs severity, обученная на сегменте."""
@@ -297,7 +283,6 @@ class SegmentFinEffectCompare:
     full_on_segment: FinEffectResult
     segment_model_on_segment: FinEffectResult
     summary: pd.DataFrame
-
 
 def compare_value_before_segment_strategies(
     df: pd.DataFrame,
@@ -323,7 +308,6 @@ def compare_value_before_segment_strategies(
         raise ValueError("severity_split отсутствует")
 
     effect_index, _ = _effect_index_and_freq(training, split)
-    from querulus.fin_effect.calculator import feature_rows_for_predict
 
     train_sev_idx = training.severity_split.x_train.index
     test_sev_idx = training.severity_split.x_test.index
@@ -356,8 +340,6 @@ def compare_value_before_segment_strategies(
     segment_sev = severity_predict(
         segment_model, feats, cat, transform=segment_transform
     )
-
-    from querulus.fin_effect.threshold_policy import resolve_val_threshold
 
     use_threshold = resolve_val_threshold(training, explicit=threshold)
 

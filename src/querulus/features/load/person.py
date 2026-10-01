@@ -12,6 +12,7 @@ from querulus.dataset.load.pretensions import fetch_pretensions_base, fetch_pret
 from querulus.dataset.load.sql import render_claims_predicate
 from querulus.dataset.paths import DataPaths
 from querulus.dataset.preprocess.pretension import dedupe_pretension_rows
+import pyarrow.parquet as pq
 
 TARGET_CLAIMS_ARTIFACT = "target_3_claims.parquet"
 
@@ -42,7 +43,6 @@ _PRETENSION_HISTORY_COLUMNS = (
     "SURCHARGE_VALUE_PENALTY",
 )
 
-
 def _subset_columns(df: pd.DataFrame, preferred: Iterable[str]) -> pd.DataFrame:
     keep = [col for col in preferred if col in df.columns]
     if not keep:
@@ -60,19 +60,16 @@ def _subset_columns(df: pd.DataFrame, preferred: Iterable[str]) -> pd.DataFrame:
             keep.append(col)
     return df[keep]
 
-
 def _require_conn(conn: LazyOisuuConnection | None, use_sql: bool) -> LazyOisuuConnection:
     if use_sql and conn is None:
         raise ValueError("conn обязателен при use_sql=True")
     return conn or LazyOisuuConnection()
-
 
 def _pretensions_parquet_columns(paths: DataPaths) -> list[str] | None:
     path = paths.resolve_artifact(paths.raw_dir, "df_pretensions.parquet")
     if path is None or not path.exists():
         return None
     try:
-        import pyarrow.parquet as pq
 
         names = {str(n) for n in pq.read_schema(path).names}
         upper_map = {n.upper(): n for n in names}
@@ -86,7 +83,6 @@ def _pretensions_parquet_columns(paths: DataPaths) -> list[str] | None:
         return list(dict.fromkeys(wanted)) or None
     except Exception:
         return None
-
 
 def load_pretensions_base(
     paths: DataPaths,
@@ -109,7 +105,6 @@ def load_pretensions_base(
     df = _subset_columns(df, _PRETENSION_HISTORY_COLUMNS)
     return dedupe_pretension_rows(df)
 
-
 def load_target_claims_for_features(
     paths: DataPaths,
     conn: LazyOisuuConnection | None,
@@ -131,7 +126,6 @@ def load_target_claims_for_features(
         )
     return _subset_columns(df, ())
 
-
 def load_pretensions_penalty_surcharge(
     paths: DataPaths,
     conn: LazyOisuuConnection | None,
@@ -147,7 +141,6 @@ def load_pretensions_penalty_surcharge(
     df.columns = df.columns.str.upper()
     return df
 
-
 def load_claims_persons(
     paths: DataPaths,
     conn: LazyOisuuConnection | None,
@@ -160,7 +153,6 @@ def load_claims_persons(
     return fetch_claims_persons(
         paths, _conn, use_sql=use_sql, save_checkpoint=save_checkpoint
     )
-
 
 def load_claims_incoming(
     paths: DataPaths,
@@ -182,7 +174,6 @@ def load_claims_incoming(
     df.columns = df.columns.str.upper()
     return df
 
-
 def normalize_hex_person_id(value: Any) -> str | None:
     """Привести person_id из SQL к строке hex upper."""
     if value is None or (isinstance(value, float) and pd.isna(value)):
@@ -191,7 +182,6 @@ def normalize_hex_person_id(value: Any) -> str | None:
         return bytes(value).hex().upper()
     raw = str(value).strip()
     return raw.upper() if raw else None
-
 
 def normalize_person_id_series(series: pd.Series | None) -> pd.Series:
     """Нормализовать person_id."""

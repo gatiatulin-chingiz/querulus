@@ -8,6 +8,19 @@ import pandas as pd
 from querulus.fin_effect.excel_monitoring import MonitoringEffectResult
 from querulus.fin_effect.monitoring_report import FORMULA_VERSION
 
+try:
+    from openpyxl import Workbook
+    from openpyxl.comments import Comment
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+except ImportError:  # pragma: no cover
+    Workbook = None  # type: ignore[assignment, misc]
+    Comment = None  # type: ignore[assignment, misc]
+    Alignment = None  # type: ignore[assignment, misc]
+    Font = None  # type: ignore[assignment, misc]
+    PatternFill = None  # type: ignore[assignment, misc]
+    get_column_letter = None  # type: ignore[assignment]
+
 # sheet → [(column, description, formula_or_source), ...]
 _SHEET_COLUMN_DOCS: dict[str, list[tuple[str, str, str]]] = {
     "inputs": [
@@ -168,15 +181,10 @@ _SHEET_COLUMN_DOCS: dict[str, list[tuple[str, str, str]]] = {
 
 
 def _require_openpyxl():
-    try:
-        from openpyxl import Workbook
-        from openpyxl.comments import Comment
-        from openpyxl.styles import Alignment, Font, PatternFill
-        from openpyxl.utils import get_column_letter
-    except ImportError as exc:  # pragma: no cover
+    if Workbook is None or get_column_letter is None:
         raise ImportError(
             "Для Excel-аудита нужен openpyxl. Установите: pip install openpyxl"
-        ) from exc
+        )
     return Workbook, Alignment, Font, PatternFill, get_column_letter, Comment
 
 
@@ -656,10 +664,10 @@ def export_monitoring_audit_xlsx(
 
     for ws in (ws_readme, ws_columns, ws_inputs, ws_filial, ws_effect, ws_boot):
         _autosize(ws)
-    from openpyxl.utils import get_column_letter
 
+    letter = _require_openpyxl()[4]
     for idx in range(1, 22):
-        ws_rows.column_dimensions[get_column_letter(idx)].width = 14
+        ws_rows.column_dimensions[letter(idx)].width = 14
     ws_columns.column_dimensions["C"].width = 56
     ws_columns.column_dimensions["D"].width = 48
 
