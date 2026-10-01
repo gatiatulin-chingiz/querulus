@@ -91,7 +91,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "SeverityCalibrator": (".calibration", "SeverityCalibrator"),
     "compare_calibrator_ab": (".calibrator_ab", "compare_calibrator_ab"),
     "expected_calibration_error": (".calibration", "expected_calibration_error"),
-    "ClassificationCalibration": (".calibration_compare", "ClassificationCalibration"),
+    "ClassificationCalibration": (
+        ".classification_calibration",
+        "ClassificationCalibration",
+    ),
     "compare_cf_calibrations": (".calibration_compare", "compare_cf_calibrations"),
     "CalibrationCompareResult": (".calibration_compare", "CalibrationCompareResult"),
     "feature_drift_report": (".drift", "feature_drift_report"),

@@ -1,6 +1,6 @@
-"""Сравнение двух калибровок CF: ClassificationCalibration-стиль (train) vs Querulus (cal).
+"""Сравнение двух калибровок CF: ClassificationCalibration (train) vs Querulus (cal).
 
-1) ``ClassificationCalibration`` / эквивалент: isotonic ``cv='prefit'`` на **DSM train**.
+1) ``ClassificationCalibration``: isotonic ``cv='prefit'`` на **DSM train**.
 2) Querulus ``fit_probability_calibrator``: isotonic на **отдельном cal-индексе**.
 
 Reliability / Brier / ECE — на train и test DSM (оценка; учить калибратор на train
@@ -8,12 +8,12 @@ Reliability / Brier / ECE — на train и test DSM (оценка; учить �
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
-from sklearn.calibration import CalibratedClassifierCV, calibration_curve
+from sklearn.calibration import calibration_curve
 from sklearn.metrics import brier_score_loss
 
 from querulus.training.build_outboxml_configs import (
@@ -24,70 +24,17 @@ from querulus.training.calibration import (
     expected_calibration_error,
     fit_probability_calibrator,
 )
+from querulus.training.classification_calibration import ClassificationCalibration
 from querulus.training.outboxml_metrics import prepare_dsm_features
 
 SplitName = Literal["train", "test"]
 
-
-@dataclass
-class ClassificationCalibration:
-    """Эквивалент ``calibration/mldw_pipelines.ClassificationCalibration`` для OutBoxML DSM.
-
-    Учит isotonic на **train** DSM (``cv='prefit'``). Не тащит mldataworker.
-    """
-
-    manager: Any
-    model_name: str
-    method: str = "isotonic"
-    _calibrated_model: Any = None
-    _feature_columns: list[str] = field(default_factory=list)
-
-    def fit_transform(self) -> Any:
-        result = self.manager.get_result()[self.model_name]
-        subset = result.data_subset
-        num = list(subset.features_numerical or [])
-        cat = list(subset.features_categorical or [])
-        cols = [*num, *cat]
-        self._feature_columns = cols
-        x_train = subset.X_train.loc[:, cols]
-        y_train = subset.y_train
-        estimator = unwrap_estimator(ensure_predictable_model(result.model))
-        calibrator = CalibratedClassifierCV(
-            estimator, method=self.method, cv="prefit"
-        )
-        sample_weight = None
-        if getattr(subset, "exposure_train", None) is not None:
-            sample_weight = subset.exposure_train
-        try:
-            calibrator.fit(x_train, y_train.astype(int), sample_weight=sample_weight)
-        except TypeError:
-            calibrator.fit(x_train, y_train.astype(int))
-        self._calibrated_model = calibrator
-
-        x_test = subset.X_test.loc[:, cols]
-        pred_train = pd.Series(
-            calibrator.predict_proba(x_train)[:, 1], index=x_train.index, dtype=float
-        )
-        pred_test = pd.Series(
-            calibrator.predict_proba(x_test)[:, 1], index=x_test.index, dtype=float
-        )
-        # Как в mldw: подменяем predictions в result (если API есть).
-        load = getattr(result, "load_predictions", None)
-        if callable(load):
-            load(pred_train, "train")
-            load(pred_test, "test")
-        return calibrator
-
-    def predict_proba_positive(self, x: pd.DataFrame) -> pd.Series:
-        if self._calibrated_model is None:
-            raise RuntimeError("Сначала вызовите fit_transform()")
-        cols = self._feature_columns or list(x.columns)
-        matrix = x.loc[:, cols]
-        return pd.Series(
-            self._calibrated_model.predict_proba(matrix)[:, 1],
-            index=matrix.index,
-            dtype=float,
-        )
+__all__ = [
+    "ClassificationCalibration",
+    "CalibrationSliceScores",
+    "CalibrationCompareResult",
+    "compare_cf_calibrations",
+]
 
 
 @dataclass
