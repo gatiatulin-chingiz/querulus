@@ -68,6 +68,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "fit_prod_models": (".example_pipeline", "fit_prod_models"),
     "load_example_dataset": (".example_pipeline", "load_example_dataset"),
     "load_example_thresholds": (".example_pipeline", "load_example_thresholds"),
+    "pick_prod_threshold_on_dsm": (".example_pipeline", "pick_prod_threshold_on_dsm"),
     "patch_dsm_models": (".example_pipeline", "patch_dsm_models"),
     "predict_cf": (".example_pipeline", "predict_cf"),
     "predict_rg": (".example_pipeline", "predict_rg"),

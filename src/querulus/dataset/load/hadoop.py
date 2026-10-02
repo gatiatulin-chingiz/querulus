@@ -406,20 +406,35 @@ def load_df_final(
                 app_name=app_name,
                 partition_filters=parts,
             )
-            source = (
-                f"hive:{hive_table}"
-                f"|model_version={parts['model_version']}"
-                f"|data_date={parts['data_date']}"
-                f"|dataset_version={parts['dataset_version']}"
-            )
-            logger.info("dataset source=%s shape=%s", source, pdf.shape)
-            print("=" * 72)
-            print("ИСТОЧНИК ДАТАСЕТА: Hive (Hadoop)")
-            print(f"  таблица: {hive_table}")
-            print(f"  партиции: {parts}")
-            print(f"  shape:   {pdf.shape}")
-            print("=" * 72)
-            return pdf, source
+            if pdf is None or len(pdf) == 0:
+                hive_error = (
+                    "EmptyDataFrame: Hive вернул 0 строк для "
+                    f"filters={parts}"
+                )
+                logger.warning(
+                    "%s — fallback на parquet: %s (кэш не перезаписываем)",
+                    hive_error,
+                    path,
+                )
+                print(
+                    f"[dataset] Hive пуст ({parts}) → локальный parquet, "
+                    "кэш не затираем"
+                )
+            else:
+                source = (
+                    f"hive:{hive_table}"
+                    f"|model_version={parts['model_version']}"
+                    f"|data_date={parts['data_date']}"
+                    f"|dataset_version={parts['dataset_version']}"
+                )
+                logger.info("dataset source=%s shape=%s", source, pdf.shape)
+                print("=" * 72)
+                print("ИСТОЧНИК ДАТАСЕТА: Hive (Hadoop)")
+                print(f"  таблица: {hive_table}")
+                print(f"  партиции: {parts}")
+                print(f"  shape:   {pdf.shape}")
+                print("=" * 72)
+                return pdf, source
         except Exception as exc:  # noqa: BLE001
             hive_error = f"{type(exc).__name__}: {exc}"
             logger.warning(
@@ -448,7 +463,17 @@ def load_df_final(
         raise FileNotFoundError(
             f"Нет Hive и нет локального parquet (пробовали: {tried})."
         )
-    if resolved != path:
+    if resolved == LEGACY_PARQUET_PATH and resolved != path:
+        logger.warning(
+            "⚠️ LEGACY parquet: %s (другой датасет/таргеты). "
+            "Проверьте, что это осознанный fallback.",
+            resolved,
+        )
+        print(
+            f"[dataset] WARNING: используется LEGACY parquet {resolved} "
+            "(не основной querulus_train_dataset)"
+        )
+    elif resolved != path:
         logger.warning("parquet fallback: %s → %s", path, resolved)
         print(f"[dataset] parquet fallback: {resolved}")
 
@@ -460,7 +485,7 @@ def load_df_final(
     logger.info("dataset source=%s shape=%s", source, pdf.shape)
     print("=" * 72)
     if hive_error is not None:
-        print("ИСТОЧНИК ДАТАСЕТА: локальный parquet (Hive недоступен)")
+        print("ИСТОЧНИК ДАТАСЕТА: локальный parquet (Hive недоступен/пуст)")
         print(f"  причина: {hive_error.splitlines()[0][:240]}")
     elif prefer_hive:
         print("ИСТОЧНИК ДАТАСЕТА: локальный parquet")

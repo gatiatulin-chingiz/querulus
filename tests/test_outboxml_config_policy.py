@@ -162,7 +162,10 @@ class NumericSpecTests(unittest.TestCase):
         age = pd.Series(np.linspace(18, 80, 200), name="APPLICANT_AGE")
         spec = _numeric_feature_spec(age, "APPLICANT_AGE")
         self.assertEqual(spec["encoding"], "to_int")
-        self.assertEqual(spec["default"], "_MEDIAN_")
+        # Числовая медиана fit-среза (не "_MEDIAN_" — баг OutBoxML if val_fill: при 0).
+        self.assertIsInstance(spec["default"], (int, float))
+        self.assertNotEqual(spec["default"], "_MEDIAN_")
+        self.assertEqual(spec["default"], int(round(float(np.median(age)))))
 
     def test_year_feature_default_is_max_and_clip_2026(self):
         year = pd.Series([2022] * 100 + [2023] * 60 + [2024] * 40, name="EVENT_YEAR")

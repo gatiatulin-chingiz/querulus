@@ -6,7 +6,7 @@
 (каждая — ``n`` строк **с возвращением** из Test_prod), затем берём медиану
 метрик; разброс по фолдам (min/max/std) отдаём для отчёта.
 
-τ по умолчанию фиксирован (из collect): фолды отличаются только составом
+τ по умолчанию фиксирован: фолды отличаются только составом
 выборки, а не порогом. При ``threshold=None`` порог ищется внутри каждого фолда.
 """
 from __future__ import annotations
@@ -24,7 +24,7 @@ from querulus.fin_effect.calculator import (
 )
 from querulus.fin_effect.config import FinEffectConfig
 
-DEFAULT_BOOTSTRAP_FOLDS = 5
+DEFAULT_BOOTSTRAP_FOLDS = 200
 DEFAULT_BOOTSTRAP_SEED = 42
 MEDIAN_ROW_LABEL = "median"
 

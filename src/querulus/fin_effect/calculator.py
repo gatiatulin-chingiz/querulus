@@ -173,9 +173,29 @@ def payments_fee(row: pd.Series, config: FinEffectConfig) -> float:
     return payments
 
 def add_premiums_column(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.Series:
-    """Рассчитать колонку Взносы."""
+    """Рассчитать колонку Взносы (векторно, та же логика что ``payments_fee``)."""
     config = config or FinEffectConfig()
-    return df.apply(lambda row: payments_fee(row, config), axis=1)
+    fu_trigger = _numeric_series(df, config.fu_fee_trigger_column) > 0
+    if config.uses_legacy_psr_fact:
+        fee_base = (
+            _numeric_series(df, config.pretension_payments_column)
+            + _numeric_series(df, config.fu_recovery_column)
+            + _numeric_series(df, config.court_recovery_column)
+        )
+    else:
+        fee_base = _numeric_series(df, config.fact_amount_column)
+    payments = np.where(
+        fu_trigger.to_numpy() & (fee_base.to_numpy() > 0),
+        float(config.fu_fee_amount),
+        0.0,
+    )
+    claims_amount = _numeric_series(df, config.freq_claims_amount_column).to_numpy()
+    court = np.where(
+        bool(config.apply_court_fee) & (claims_amount > 0),
+        float(config.court_fee_amount),
+        0.0,
+    )
+    return pd.Series(payments + court, index=df.index, dtype=float)
 
 def compute_fin_effect_fact(df: pd.DataFrame, config: FinEffectConfig | None = None) -> pd.Series:
     """Фактический фин. эффект: icnl (TARGET_FREQ_AMOUNT) или legacy ПСР."""
@@ -424,19 +444,19 @@ def apply_model_predictions(
     formula = _formula_from_config(config)
     psr = _numeric_series(frame, config.fact_amount_column).to_numpy()
     premiums = _numeric_series(frame, config.premiums_column).to_numpy()
-    threshold_strategies = search_threshold_strategies(
-        y_proba_arr,
-        y_true_freq_arr,
-        y_pred_sev_arr,
-        y_true_sev,
-        base_sum,
-        config,
-        formula=formula,
-        psr=psr,
-        premiums=premiums,
-    )
-
+    threshold_strategies: dict[str, ThresholdStrategyResult]
     if threshold is None:
+        threshold_strategies = search_threshold_strategies(
+            y_proba_arr,
+            y_true_freq_arr,
+            y_pred_sev_arr,
+            y_true_sev,
+            base_sum,
+            config,
+            formula=formula,
+            psr=psr,
+            premiums=premiums,
+        )
         best_threshold, threshold_metrics = search_best_threshold(
             y_proba_arr,
             y_true_freq_arr,
@@ -450,17 +470,26 @@ def apply_model_predictions(
         )
     else:
         best_threshold = float(threshold)
-        threshold_metrics = {
-            round(best_threshold, 2): evaluate_threshold(
-                best_threshold,
-                y_proba_arr,
-                y_true_freq_arr,
-                y_pred_sev_arr,
-                y_true_sev,
-                base_sum,
-                formula=formula,
-                psr=psr,
-                premiums=premiums,
+        metrics_fixed = evaluate_threshold(
+            best_threshold,
+            y_proba_arr,
+            y_true_freq_arr,
+            y_pred_sev_arr,
+            y_true_sev,
+            base_sum,
+            formula=formula,
+            psr=psr,
+            premiums=premiums,
+        )
+        threshold_metrics = {round(best_threshold, 2): metrics_fixed}
+        # При фиксированном τ полный grid не гоняем — одна «стратегия» для отчёта.
+        threshold_strategies = {
+            "fixed_threshold": ThresholdStrategyResult(
+                strategy="fixed_threshold",
+                threshold=best_threshold,
+                net_effect=float(metrics_fixed.net_effect),
+                average_precision=float("nan"),
+                f1=_f1_score(metrics_fixed.precision, metrics_fixed.recall),
             )
         }
 

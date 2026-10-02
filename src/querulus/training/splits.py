@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from querulus.features.date_periods import mask_date_period
+
 
 @dataclass(frozen=True)
 class DateSplitParts:
@@ -18,9 +20,8 @@ class DateSplitParts:
 
 
 def _mask_period(dates: pd.Series, start: str, end: str) -> pd.Series:
-    start_ts = pd.Timestamp(start)
-    end_ts = pd.Timestamp(end)
-    return (dates >= start_ts) & (dates <= end_ts)
+    """Алиас ``mask_date_period`` (date-only end включает весь день)."""
+    return mask_date_period(dates, start, end)
 
 
 def split_by_date_periods(
@@ -32,7 +33,7 @@ def split_by_date_periods(
     cal_period: tuple[str, str],
     test_period: tuple[str, str],
 ) -> DateSplitParts:
-    """Разбить df по календарным периодам (границы включительно)."""
+    """Разбить df по календарным периодам (границы включительно, с временем)."""
     if date_column not in df.columns:
         raise ValueError(f"Нет колонки даты: {date_column}")
     dates = pd.to_datetime(df[date_column], errors="coerce")
@@ -42,6 +43,33 @@ def split_by_date_periods(
     test = df.index[_mask_period(dates, *test_period).fillna(False)]
     fit = train.union(val)
     return DateSplitParts(train=train, val=val, cal=cal, test=test, fit=fit)
+
+
+def default_inner_periods_from_train(
+    train_period: tuple[str, str],
+    *,
+    val_days: int = 90,
+    cal_days: int = 60,
+) -> tuple[tuple[str, str], tuple[str, str], tuple[str, str]]:
+    """Из одного train-окна вырезать хвост: … | train_core | val | cal.
+
+    Возвращает (train_core, val_period, cal_period).
+    """
+    start = pd.Timestamp(train_period[0])
+    end = pd.Timestamp(train_period[1])
+    cal_start = end - pd.Timedelta(days=cal_days - 1)
+    val_end = cal_start - pd.Timedelta(days=1)
+    val_start = val_end - pd.Timedelta(days=val_days - 1)
+    train_end = val_start - pd.Timedelta(days=1)
+    if train_end <= start:
+        raise ValueError(
+            "train_period слишком короткий для val/cal; задайте периоды явно в TrainingConfig"
+        )
+    return (
+        (start.strftime("%Y-%m-%d"), train_end.strftime("%Y-%m-%d")),
+        (val_start.strftime("%Y-%m-%d"), val_end.strftime("%Y-%m-%d")),
+        (cal_start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")),
+    )
 
 
 def default_inner_periods_from_train(

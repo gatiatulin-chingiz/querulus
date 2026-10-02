@@ -8,9 +8,10 @@
   Если NaN-доля ≥ ``CAT_NAN_SHARE_MIN`` — ``NaN`` отдельная категория ``"NAN"``
   (``fillna`` = её код, ``default`` = код моды). Если уровней ≤
   ``CAT_SMALL_CARD_MAX`` — ``NaN`` уходит в моду (``default`` = код моды).
-* **numerical** — ``default: "_MEDIAN_"`` (кроме фич-годов: последний/больший год
-  fit-среза, ≤ ``MAX_YEAR_FEATURE_VALUE`` — плейсхолдер ``"_MAX_"`` ломает целые
-  колонки, см. ``_latest_year_default``), ``clip`` пишем **всем** int/float фичам,
+* **numerical** — ``default``: числовая медиана fit-среза (не ``"_MEDIAN_"`` —
+  плейсхолдер в OutBoxML не пишется обратно при медиане 0 и ломает predict на
+  срезе без train), для фич-годов — последний/больший год fit-среза
+  ≤ ``MAX_YEAR_FEATURE_VALUE``; ``clip`` пишем **всем** int/float фичам,
   кроме бинарных: границы из DQ-отчёта сборки датасета, иначе квантили
   ``CLIP_QUANTILES`` на fit-срезе.
 * **int-подобные** (``AGE``/``YEAR``/``MONTH``/``COUNT``/…, см.
@@ -31,12 +32,14 @@ import numpy as np
 import pandas as pd
 
 from querulus import PROJECT_ROOT
+from querulus.dataset.schema import DEFAULT_DATASET_SCHEMA
 from querulus.features.data_quality import MAX_YEAR_FEATURE_VALUE
 from querulus.features.integer_casts import is_integer_like_feature, is_year_feature
 from querulus.training.catboost_fit import strip_hpo_meta
 from querulus.training.config import TrainingConfig
 from querulus.training.feature_selection_io import load_feature_selection_latest
 from querulus.training.mvp_types import DEFAULT_MVP_INPUT_TYPES
+from querulus.features.date_periods import mask_date_period
 from querulus.training.splits import default_inner_periods_from_train, split_by_date_periods
 from outboxml.data_subsets import ModelDataSubset
 from outboxml.core import utils as outboxml_utils
@@ -82,30 +85,9 @@ CLIP_QUANTILES: tuple[float, float] = (0.001, 0.999)
 CLIP_MIN_FINITE: int = 20
 
 # Имена, которые обязаны быть категориальными даже если пришли числовым кодом.
-KNOWN_CATEGORICAL: frozenset[str] = frozenset(
-    {
-        "FILIAL",
-        "REGION",
-        "REGION_EVENT",
-        "VICTIM_TS_REGION",
-        "GUILTY_TS_REGION",
-        "VIC_TS_COUNTRY",
-        "GUIL_TS_COUNTRY",
-        "VICTIM_VEHICLE_COUNTRY",
-        "GUILTY_VEHICLE_COUNTRY",
-        "PAYMENT_RECIPIENT_TYPE",
-        "RECIEVE_METHOD",
-        "APPLICANT_FORM",
-        "VICTIM_VEHICLE_CATEGORY",
-        "GUILTY_VEHICLE_CATEGORY",
-        "LOSS_UNIT_TYPE",
-        "LOSS_UNIT_ZONE",
-        "LOSS_UNIT",
-        "ACCEPTED_UNIT",
-    }
-)
+KNOWN_CATEGORICAL: frozenset[str] = DEFAULT_DATASET_SCHEMA.known_categorical
 # Числовой код с большим числом значений — скорее ID, чем категория.
-KNOWN_CATEGORICAL_MAX_NUNIQUE: int = 200
+KNOWN_CATEGORICAL_MAX_NUNIQUE: int = DEFAULT_DATASET_SCHEMA.known_categorical_max_nunique
 
 _load_subset_patched = False
 _replace_default_patched = False
@@ -514,6 +496,18 @@ def _latest_year_default(series: pd.Series) -> int:
     latest = int(math.floor(float(finite.max())))
     return int(min(max(latest, 0), MAX_YEAR_FEATURE_VALUE))
 
+def _median_default(series: pd.Series, *, integer_like: bool = False) -> float | int:
+    """Медиана fit-среза как число (не ``"_MEDIAN_"``)."""
+    finite = _finite_values(series)
+    if finite.size == 0:
+        return 0 if integer_like else 0.0
+    med = float(np.median(finite))
+    if not np.isfinite(med):
+        return 0 if integer_like else 0.0
+    if integer_like:
+        return int(round(med))
+    return med
+
 def _numeric_feature_spec(
     series: pd.Series,
     name: str,
@@ -522,17 +516,21 @@ def _numeric_feature_spec(
 ) -> dict[str, Any]:
     """Числовая фича.
 
-    ``default``: ``_MEDIAN_`` (медиана на fit DSM → у prod-refit своя), для фич-годов —
-    последний (больший) год fit-среза (``_latest_year_default``, п.11).
+    ``default``: медиана fit-среза числом (для годов — ``_latest_year_default``).
     ``clip`` — см. ``_clip_for_feature``.
     ``encoding``: ``to_int`` для целочисленных по смыслу, иначе ``to_float``.
     """
     year = is_year_feature(name)
+    integer_like = is_integer_like_feature(name)
     spec: dict[str, Any] = {
         "name": name,
-        "default": _latest_year_default(series) if year else "_MEDIAN_",
+        "default": (
+            _latest_year_default(series)
+            if year
+            else _median_default(series, integer_like=integer_like)
+        ),
         "replace": {"_TYPE_": "_NUM_"},
-        "encoding": "to_int" if is_integer_like_feature(name) else "to_float",
+        "encoding": "to_int" if integer_like else "to_float",
     }
     if clip is not None:
         spec["clip"] = {
@@ -824,10 +822,10 @@ def _pos_count(df: pd.DataFrame, index: pd.Index, target: str) -> int:
 def compute_period_windows(
     df: pd.DataFrame,
     *,
-    date_column: str = "PAYMENT_ORDER_DATE_TIME",
+    date_column: str = DEFAULT_DATASET_SCHEMA.date_column,
     train_period: tuple[str, str] | None = None,
     test_period: tuple[str, str] | None = None,
-    freq_target: str = "TARGET_FREQ",
+    freq_target: str = DEFAULT_DATASET_SCHEMA.frequency_target,
     prod_fit_test_fraction: float = PROD_FIT_TEST_FRACTION,
     prod_tau_cal_fraction: float = PROD_TAU_CAL_FRACTION,
     prod_holdout_fraction: float = PROD_HOLDOUT_FRACTION,
@@ -874,8 +872,7 @@ def compute_period_windows(
     prod_tau_cal_period = (_fmt(tau_start_ts), _fmt(tau_end_ts))
     prod_test_period = (_fmt(holdout_start_ts), test_period[1])
     prod_fit_idx = df.index[
-        (dates >= pd.Timestamp(prod_train_period[0]))
-        & (dates <= pd.Timestamp(prod_train_period[1]))
+        mask_date_period(dates, prod_train_period[0], prod_train_period[1]).fillna(False)
     ]
     prod_tau_cal_idx = tau_cal_test_idx
     prod_holdout_idx = holdout_test_idx
@@ -941,6 +938,179 @@ def compute_period_windows(
         "table": pd.DataFrame([w.__dict__ for w in windows]),
     }
 
+PERIOD_WINDOWS_JSON = "period_windows.json"
+
+_PERIOD_MANIFEST_TUPLE_KEYS: tuple[str, ...] = (
+    "base_train_period",
+    "base_test_period",
+    "train_core",
+    "val_period",
+    "cal_period",
+    "parity_train_period",
+    "parity_test_period",
+    "prod_train_period",
+    "prod_tau_cal_period",
+    "prod_test_period",
+)
+
+_PERIOD_MANIFEST_SCALAR_KEYS: tuple[str, ...] = (
+    "date_column",
+    "freq_target",
+    "prod_cutoff",
+    "prod_tau_cal_cutoff",
+    "prod_fit_test_fraction",
+    "prod_tau_cal_fraction",
+    "prod_holdout_fraction",
+    "prod_cal_fraction",
+)
+
+
+def periods_to_manifest(periods: dict[str, Any]) -> dict[str, Any]:
+    """Сериализация окон периодов (без Index / DataFrame) для collect → example."""
+    payload: dict[str, Any] = {}
+    for key in _PERIOD_MANIFEST_TUPLE_KEYS:
+        value = periods[key]
+        payload[key] = list(value) if isinstance(value, tuple) else value
+    for key in _PERIOD_MANIFEST_SCALAR_KEYS:
+        if key in periods:
+            payload[key] = periods[key]
+    return payload
+
+
+def write_period_windows_manifest(
+    periods: dict[str, Any],
+    path: Path | str,
+) -> Path:
+    """Записать ``period_windows.json`` рядом с OutBoxML-конфигами."""
+    out = Path(path)
+    return write_json(out, periods_to_manifest(periods))
+
+
+def rebuild_periods_from_manifest(
+    df: pd.DataFrame,
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    """Индексы периодов из сохранённых date-окон (без пересчёта 70/15/15)."""
+    date_column = str(manifest.get("date_column") or DEFAULT_DATASET_SCHEMA.date_column)
+    freq_target = str(manifest.get("freq_target") or DEFAULT_DATASET_SCHEMA.frequency_target)
+    if date_column not in df.columns:
+        raise ValueError(f"Нет колонки даты: {date_column}")
+
+    def _pair(key: str) -> tuple[str, str]:
+        raw = manifest[key]
+        return (str(raw[0]), str(raw[1]))
+
+    train_core = _pair("train_core")
+    val_period = _pair("val_period")
+    cal_period = _pair("cal_period")
+    test_period = _pair("parity_test_period")
+    parity_train = _pair("parity_train_period")
+    prod_train_period = _pair("prod_train_period")
+    prod_tau_cal_period = _pair("prod_tau_cal_period")
+    prod_test_period = _pair("prod_test_period")
+    base_train = _pair("base_train_period")
+    base_test = _pair("base_test_period")
+
+    splits = split_by_date_periods(
+        df,
+        date_column=date_column,
+        train_period=train_core,
+        val_period=val_period,
+        cal_period=cal_period,
+        test_period=test_period,
+    )
+    dates = pd.to_datetime(df[date_column], errors="coerce")
+    prod_fit_idx = df.index[
+        mask_date_period(dates, *prod_train_period).fillna(False)
+    ]
+    prod_tau_cal_idx = df.index[
+        mask_date_period(dates, *prod_tau_cal_period).fillna(False)
+    ]
+    prod_holdout_idx = df.index[
+        mask_date_period(dates, *prod_test_period).fillna(False)
+    ]
+    parity_fit_idx = splits.train.union(splits.val)
+    prod_fit_frac = float(manifest.get("prod_fit_test_fraction", PROD_FIT_TEST_FRACTION))
+    prod_tau_frac = float(manifest.get("prod_tau_cal_fraction", PROD_TAU_CAL_FRACTION))
+    prod_hold_frac = float(manifest.get("prod_holdout_fraction", PROD_HOLDOUT_FRACTION))
+
+    def row(role: str, start: str, end: str, index: pd.Index) -> PeriodWindow:
+        return PeriodWindow(
+            role=role,
+            start=start,
+            end=end,
+            n=int(len(index)),
+            n_positive=_pos_count(df, index, freq_target),
+        )
+
+    windows = [
+        row("parity_train (core∪val)", parity_train[0], parity_train[1], parity_fit_idx),
+        row("train_tail (хвост train; в collect — Cal)", cal_period[0], cal_period[1], splits.cal),
+        row("holdout Test", test_period[0], test_period[1], splits.test),
+        row(
+            f"prod_fit (train + {prod_fit_frac:.0%} test)",
+            prod_train_period[0],
+            prod_train_period[1],
+            prod_fit_idx,
+        ),
+        row(
+            f"prod_tau_cal ({prod_tau_frac:.0%} test; τ в example_final)",
+            prod_tau_cal_period[0],
+            prod_tau_cal_period[1],
+            prod_tau_cal_idx,
+        ),
+        row(
+            f"Test_prod ({prod_hold_frac:.0%} freshest test)",
+            prod_test_period[0],
+            prod_test_period[1],
+            prod_holdout_idx,
+        ),
+    ]
+    if len(prod_tau_cal_idx) == 0 or len(prod_holdout_idx) == 0:
+        logger.warning(
+            "Манифест периодов: пустые индексы τ-cal=%s Test_prod=%s — "
+            "df не совпадает с collect (проверьте data_date / parquet).",
+            len(prod_tau_cal_idx),
+            len(prod_holdout_idx),
+        )
+    return {
+        "date_column": date_column,
+        "freq_target": freq_target,
+        "base_train_period": base_train,
+        "base_test_period": base_test,
+        "train_core": train_core,
+        "val_period": val_period,
+        "cal_period": cal_period,
+        "parity_train_period": parity_train,
+        "parity_test_period": test_period,
+        "prod_train_period": prod_train_period,
+        "prod_tau_cal_period": prod_tau_cal_period,
+        "prod_test_period": prod_test_period,
+        "prod_cutoff": str(manifest.get("prod_cutoff") or prod_test_period[0]),
+        "prod_tau_cal_cutoff": str(
+            manifest.get("prod_tau_cal_cutoff") or prod_test_period[0]
+        ),
+        "prod_fit_test_fraction": prod_fit_frac,
+        "prod_tau_cal_fraction": prod_tau_frac,
+        "prod_holdout_fraction": prod_hold_frac,
+        "prod_cal_fraction": float(manifest.get("prod_cal_fraction", prod_hold_frac)),
+        "prod_fit_idx": prod_fit_idx,
+        "prod_tau_cal_idx": prod_tau_cal_idx,
+        "prod_holdout_idx": prod_holdout_idx,
+        "splits": splits,
+        "windows": windows,
+        "table": pd.DataFrame([w.__dict__ for w in windows]),
+        "from_manifest": True,
+    }
+
+
+def load_period_windows_manifest(path: Path | str) -> dict[str, Any] | None:
+    """Прочитать ``period_windows.json`` или ``None``, если файла нет."""
+    manifest_path = Path(path)
+    if not manifest_path.is_file():
+        return None
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
+
 def write_outboxml_configs(
     df: pd.DataFrame,
     *,
@@ -950,7 +1120,7 @@ def write_outboxml_configs(
     configs_dir: Path | str | None = None,
     hpo_path: Path | str | None = None,
     dq_report_path: Path | str | None = None,
-    date_column: str = "PAYMENT_ORDER_DATE_TIME",
+    date_column: str = DEFAULT_DATASET_SCHEMA.date_column,
     train_period: tuple[str, str] | None = None,
     test_period: tuple[str, str] | None = None,
     group_name: str = "UU",
@@ -1037,6 +1207,9 @@ def write_outboxml_configs(
     )
     parity_path = write_json(configs_dir / "config_parity.json", parity_cfg)
     prod_path = write_json(configs_dir / "config_prod.json", prod_cfg)
+    manifest_path = write_period_windows_manifest(
+        periods, configs_dir / PERIOD_WINDOWS_JSON
+    )
     return {
         "version": version,
         "parity_path": parity_path,
@@ -1049,6 +1222,7 @@ def write_outboxml_configs(
         "cf_name": cf_name,
         "rg_name": rg_name,
         "periods": periods,
+        "period_windows_path": manifest_path,
         "n_frequency_features": len(freq_feats),
         "n_severity_features": len(sev_feats),
         "n_clip_bounds": len(clip_bounds),
@@ -1066,13 +1240,16 @@ def load_outboxml_configs(
     *,
     version: str | None = None,
     configs_dir: Path | str | None = None,
-    date_column: str = "PAYMENT_ORDER_DATE_TIME",
+    date_column: str = DEFAULT_DATASET_SCHEMA.date_column,
     train_period: tuple[str, str] | None = None,
     test_period: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """Загрузить ``config_parity.json`` / ``config_prod.json`` из collect.
 
-    Окна сплитов пересчитываются из ``df`` (индексы нужны для fin-effect).
+    Окна периодов берутся из ``period_windows.json`` (манифест collect), чтобы
+    example / example_final совпадали с collect. Индексы пересобираются по датам
+    на текущем ``df``. Если манифеста нет — fallback на ``compute_period_windows``
+    с warning (старые прогоны).
     """
 
     version = version or default_model_version()
@@ -1086,12 +1263,34 @@ def load_outboxml_configs(
             f"Нет OutBoxML-конфигов в {configs_dir}: {', '.join(missing)}. "
             "Сначала запустите collect (ячейка export → write_outboxml_configs)."
         )
-    periods = compute_period_windows(
-        df,
-        date_column=date_column,
-        train_period=train_period,
-        test_period=test_period,
-    )
+    manifest = load_period_windows_manifest(configs_dir / PERIOD_WINDOWS_JSON)
+    if manifest is not None:
+        if train_period is not None or test_period is not None:
+            logger.warning(
+                "load_outboxml_configs: train_period/test_period аргументы "
+                "игнорируются — периоды из %s",
+                PERIOD_WINDOWS_JSON,
+            )
+        periods = rebuild_periods_from_manifest(df, manifest)
+        logger.info(
+            "Периоды из манифеста collect (%s): prod_cutoff=%s",
+            configs_dir / PERIOD_WINDOWS_JSON,
+            periods.get("prod_cutoff"),
+        )
+    else:
+        logger.warning(
+            "Нет %s в %s — пересчёт окон из df (периоды могут "
+            "разъехаться с collect). Перезапустите write_outboxml_configs.",
+            PERIOD_WINDOWS_JSON,
+            configs_dir,
+        )
+        periods = compute_period_windows(
+            df,
+            date_column=date_column,
+            train_period=train_period,
+            test_period=test_period,
+        )
+        periods["from_manifest"] = False
     parity_path = paths["config_parity.json"]
     prod_path = paths["config_prod.json"]
     return {
@@ -1105,6 +1304,7 @@ def load_outboxml_configs(
         "cf_name": MODEL_CF_NAME,
         "rg_name": MODEL_RG_NAME,
         "periods": periods,
+        "period_windows_path": str(configs_dir / PERIOD_WINDOWS_JSON),
         "configs_dir": str(configs_dir),
     }
 
@@ -1116,12 +1316,19 @@ def unwrap_estimator(model: Any) -> Any:
     return model
 
 def ensure_predictable_model(model: Any) -> Any:
-    """Если DSM оставил CatboostModel без .predict — добрать возврат fit()."""
+    """Вернуть объект с ``predict``; без скрытого ``fit()``.
+
+    Если DSM оставил сырой ``CatboostModel`` без ``.predict``, это ошибка
+    пайплайна (нужен результат ``fit()`` → ``GLMCatboostCombineModel``), а не
+    повод переобучать модель в метриках/экспорте.
+    """
     if hasattr(model, "predict"):
         return model
-    fit = getattr(model, "fit", None)
-    if callable(fit):
-        fitted = fit()
-        if fitted is not None:
-            return fitted
-    return model
+    inner = getattr(model, "model", None)
+    if inner is not None and hasattr(inner, "predict"):
+        return inner
+    raise TypeError(
+        f"Модель {type(model).__name__} без predict; нужен результат fit() "
+        "(GLMCatboostCombineModel / обёртка с .predict), а не сырой pre-fit wrapper. "
+        "Скрытый model.fit() отключён (риск переобучения при экспорте/метриках)."
+    )

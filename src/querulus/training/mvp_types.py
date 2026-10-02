@@ -1,6 +1,8 @@
 """MVP feature types from model_learn.py."""
 from __future__ import annotations
 
+from querulus.dataset.schema import DEFAULT_DATASET_SCHEMA
+
 # Исторические pivot-колонки RECOVERED*_{1..5} (если попадут в датасет — утечка).
 _TARGET_SEV_RECOVERED_COLS: tuple[str, ...] = tuple(
     f"{prefix}_{instance}"
@@ -128,20 +130,7 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': [],
              'FE_MINIMIZATION_GAP'],
  'BINARY': ['VICTIM_VEHICLE_IS_JAPAN']}
 
-DEFAULT_OTHER_COLS: tuple[str, ...] = (
-    'INCIDENT_NUMBER',
-    'LOSS_NUMBER',
-    'TARGET_2',
-    'TARGET_FREQ',
-    'TARGET_FREQ_CLAIMS',
-    'TARGET_SEV',
-    'TARGET_SEV_CLAIMS',
-    'TARGET_3_SEV',
-    'TARGET_FREQ_AMOUNT',
-    'TARGET_FREQ_CLAIMS_AMOUNT',
-    'TARGET_FREQ_PRET_AMOUNT',
-    'TARGET_SEV_CLAIMS_AMOUNT',
-)
+DEFAULT_OTHER_COLS: tuple[str, ...] = DEFAULT_DATASET_SCHEMA.other_cols
 
 
 def slice_mvp_types(

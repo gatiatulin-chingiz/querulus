@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from querulus.dataset.schema import DEFAULT_DATASET_SCHEMA
+
 FactMode = Literal["icnl", "legacy_psr"]
 
 
@@ -12,14 +14,14 @@ class FinEffectConfig:
     """Имена колонок и параметры расчёта."""
 
     fact_mode: FactMode = "icnl"
-    incident_column: str = "INCIDENT_NUMBER"
+    incident_column: str = DEFAULT_DATASET_SCHEMA.incident_column
     filial_column: str = "FILIAL"
-    date_column: str = "PAYMENT_ORDER_DATE_TIME"
-    frequency_target_column: str = "TARGET_FREQ"
-    severity_target_column: str = "TARGET_SEV"
-    fact_amount_column: str = "TARGET_FREQ_AMOUNT"
-    freq_claims_amount_column: str = "TARGET_FREQ_CLAIMS_AMOUNT"
-    freq_pret_amount_column: str = "TARGET_FREQ_PRET_AMOUNT"
+    date_column: str = DEFAULT_DATASET_SCHEMA.date_column
+    frequency_target_column: str = DEFAULT_DATASET_SCHEMA.frequency_target
+    severity_target_column: str = DEFAULT_DATASET_SCHEMA.severity_target
+    fact_amount_column: str = DEFAULT_DATASET_SCHEMA.frequency_amount
+    freq_claims_amount_column: str = DEFAULT_DATASET_SCHEMA.frequency_claims_amount
+    freq_pret_amount_column: str = DEFAULT_DATASET_SCHEMA.frequency_pret_amount
     base_payment_column: str = "Выплата_по_основному_убытку"
     # Boolean-триггер взноса ФУ (сумма в icnl-fact не входит).
     # Сам взнос начисляется только при ненулевой базе факта (см. payments_fee).
@@ -38,8 +40,8 @@ class FinEffectConfig:
     threshold_start: float = 0.0
     threshold_stop: float = 1.1
     threshold_step: float = 0.01
-    train_period: tuple[str, str] = ("2022-01-01", "2024-05-31")
-    test_period: tuple[str, str] = ("2024-06-01", "2025-06-01")
+    train_period: tuple[str, str] = DEFAULT_DATASET_SCHEMA.train_period
+    test_period: tuple[str, str] = DEFAULT_DATASET_SCHEMA.test_period
     export_columns: tuple[str, ...] = field(
         default_factory=lambda: (
             "INCIDENT_NUMBER",

@@ -1,0 +1,18 @@
+{
+  "source": "Rosstat ipc_mes_06-2026.xlsx sheet 01 (https://rosstat.gov.ru/storage/mediabank/ipc_mes_06-2026.xlsx)",
+  "normalized_to": "2020-12",
+  "note_2026": "Jan–Jun 2026 cumulative CPI vs Dec 2025 (footnote in source file)",
+  "base_year_for_model": 2022,
+  "levels": {
+    "2017": 0.887278,
+    "2018": 0.925076,
+    "2019": 0.953198,
+    "2020": 1.0,
+    "2021": 1.0839,
+    "2022": 1.213318,
+    "2023": 1.303346,
+    "2024": 1.427424,
+    "2025": 1.507217,
+    "2026": 1.5704
+  }
+}

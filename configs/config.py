@@ -20,7 +20,12 @@ email_port = f"{os.getenv('EMAIL_PORT')}"
 email_sender = f"{os.getenv('EMAIL_SENDER')}"
 email_login = f"{os.getenv('EMAIL_LOGIN')}"
 email_pass = f"{os.getenv('EMAIL_PASSWORD')}"
-email_receivers = ['gatyatulin@vsk.ru']
+_email_receivers_raw = os.getenv("EMAIL_RECEIVERS", "gatyatulin@vsk.ru")
+email_receivers = [
+    addr.strip()
+    for addr in _email_receivers_raw.replace(";", ",").split(",")
+    if addr.strip()
+]
 
-mlflow_tracking_uri = "https://mlflow.vsk.ru/"
+mlflow_tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "https://mlflow.vsk.ru/")
 mlflow_experiment = os.getenv("MLFLOW_EXPERIMENT", "Querulus")

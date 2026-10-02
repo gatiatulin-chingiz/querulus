@@ -1,10 +1,14 @@
 """CPI / дефляция для shadow-модели 2.0.0 (без импорта querulus.src).
 
-Снимок таблицы из обучения. Год инцидента без коэффициента в таблице →
-последний доступный по дате (max year); для лет раньше таблицы — min year.
+Таблица — ``configs/cpi_levels.json`` (тот же файл, что у обучения).
+Год инцидента вне таблицы → LOCF с warning «обновите JSON».
 """
 from __future__ import annotations
 
+import json
+import warnings
+from functools import lru_cache
+from pathlib import Path
 from typing import Mapping
 
 import numpy as np
@@ -13,25 +17,35 @@ from loguru import logger
 
 INFLATION_BASE_YEAR: int = 2022
 
-# Источник: Росстат ipc_mes (как в обучении Querulus). Норма к дек.2020=1.0;
-# при дефляции дополнительно нормируется к INFLATION_BASE_YEAR.
-RU_CPI_LEVEL_VS_BASE: dict[int, float] = {
-    2017: 0.887278,
-    2018: 0.925076,
-    2019: 0.953198,
-    2020: 1.0,
-    2021: 1.0839,
-    2022: 1.213318,
-    2023: 1.303346,
-    2024: 1.427424,
-    2025: 1.507217,
-    2026: 1.5704,
-}
+_INTEGRATION_ROOT = Path(__file__).resolve().parent
+DEFAULT_CPI_JSON_PATH: Path = _INTEGRATION_ROOT.parent / "configs" / "cpi_levels.json"
 
 MONETARY_COLUMNS_FOR_REAL: tuple[str, ...] = (
     "VALUE_BEFORE_WITH",
     "VALUE_BEFORE_WITHOUT",
 )
+
+_last_cpi_year_usage: dict[int, int] = {}
+
+
+@lru_cache(maxsize=4)
+def load_cpi_levels(path: str | None = None) -> dict[int, float]:
+    json_path = Path(path) if path is not None else DEFAULT_CPI_JSON_PATH
+    if not json_path.is_file():
+        raise FileNotFoundError(f"Нет CPI-таблицы: {json_path}")
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    raw = payload.get("levels", payload)
+    return {int(k): float(v) for k, v in raw.items()}
+
+
+try:
+    RU_CPI_LEVEL_VS_BASE: dict[int, float] = load_cpi_levels()
+except FileNotFoundError:  # pragma: no cover
+    RU_CPI_LEVEL_VS_BASE = {}
+
+
+def cpi_year_usage() -> dict[int, int]:
+    return dict(_last_cpi_year_usage)
 
 
 def real_feature_name(column: str, base_year: int = INFLATION_BASE_YEAR) -> str:
@@ -47,7 +61,7 @@ def _normalized_table(
     *,
     base_year: int = INFLATION_BASE_YEAR,
 ) -> dict[int, float]:
-    table = dict(levels or RU_CPI_LEVEL_VS_BASE)
+    table = dict(levels) if levels is not None else load_cpi_levels()
     if base_year not in table:
         raise ValueError(f"Нет CPI для base_year={base_year}")
     base = float(table[base_year])
@@ -59,38 +73,39 @@ def resolve_cpi_year(
     *,
     levels: Mapping[int, float] | None = None,
 ) -> int | None:
-    """Год для lookup: exact → иначе clamp к [min, max] таблицы (новые убытки → max)."""
-    table = dict(levels or RU_CPI_LEVEL_VS_BASE)
+    """Год для lookup: exact → иначе LOCF/clamp к [min, max] таблицы."""
+    table = dict(levels) if levels is not None else load_cpi_levels()
     if not table:
         return None
     known = sorted(table)
     min_y, max_y = known[0], known[-1]
     if year is None or (isinstance(year, float) and year != year):
+        _last_cpi_year_usage[-1] = max_y
         return max_y
     y = int(year)
     if y in table:
+        _last_cpi_year_usage[y] = y
         return y
     if y > max_y:
-        logger.warning(
-            "CPI: год инцидента {} позже таблицы (max={}); берём последний коэффициент",
-            y,
-            max_y,
+        msg = (
+            f"CPI-таблица устарела: год инцидента {y} > max={max_y}. "
+            f"LOCF year={max_y}. Обновите configs/cpi_levels.json."
         )
+        logger.warning(msg)
+        warnings.warn(msg, UserWarning, stacklevel=2)
+        _last_cpi_year_usage[y] = max_y
         return max_y
     if y < min_y:
         logger.warning(
-            "CPI: год инцидента {} раньше таблицы (min={}); берём самый ранний коэффициент",
+            "CPI: год инцидента {} раньше таблицы (min={}); берём earliest",
             y,
             min_y,
         )
+        _last_cpi_year_usage[y] = min_y
         return min_y
-    # дыра внутри диапазона — ближайший известный
     nearest = min(known, key=lambda k: abs(k - y))
-    logger.warning(
-        "CPI: год {} отсутствует в таблице; ближайший {}",
-        y,
-        nearest,
-    )
+    logger.warning("CPI: год {} отсутствует в таблице; ближайший {}", y, nearest)
+    _last_cpi_year_usage[y] = nearest
     return nearest
 
 
@@ -100,12 +115,13 @@ def cpi_level_for_years(
     base_year: int = INFLATION_BASE_YEAR,
     levels: Mapping[int, float] | None = None,
 ) -> pd.Series:
-    """Уровень цен относительно base_year (1.0 = базис); fallback max/min year."""
-    normalized = _normalized_table(levels, base_year=base_year)
+    """Уровень цен относительно base_year (1.0 = базис); fallback LOCF."""
+    table = dict(levels) if levels is not None else load_cpi_levels()
+    normalized = _normalized_table(table, base_year=base_year)
     year = pd.to_numeric(pd.Series(years), errors="coerce")
     resolved: list[float] = []
     for y in year.tolist():
-        key = resolve_cpi_year(y, levels=levels or RU_CPI_LEVEL_VS_BASE)
+        key = resolve_cpi_year(y, levels=table)
         if key is None:
             resolved.append(float("nan"))
         else:

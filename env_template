@@ -34,6 +34,8 @@ EMAIL_SERVER=
 EMAIL_PORT=
 EMAIL_SENDER=
 EMAIL_PASSWORD=
+# Список через запятую (или ;)
+EMAIL_RECEIVERS=gatyatulin@vsk.ru
 
 # --- MLflow (HPO в train_loop / run_hpo) — запись обязательна ---
 MLFLOW_TRACKING_URI=https://mlflow.vsk.ru/

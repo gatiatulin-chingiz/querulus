@@ -12,6 +12,7 @@ from typing import Any
 import pandas as pd
 
 from querulus.dataset.hadoop import load_df_final
+from querulus.dataset.schema import DEFAULT_DATASET_SCHEMA
 from querulus.fin_effect import (
     DEFAULT_BOOTSTRAP_FOLDS,
     DEFAULT_BOOTSTRAP_SEED,
@@ -209,6 +210,11 @@ def load_example_dataset(
         fallback_parquet_path=paths.project_root / "data" / "processed" / "df_final_3.parquet",
     )
     if dataset_source.startswith("hive:"):
+        if len(df_raw) == 0:
+            raise ValueError(
+                "Hive вернул пустой DataFrame после load_df_final — "
+                "кэш parquet не перезаписываем (внутренняя ошибка fallback)."
+            )
         paths.local_parquet_path.parent.mkdir(parents=True, exist_ok=True)
         df_raw.to_parquet(paths.local_parquet_path, index=False)
         logger.info("кэш после Hive записан в parquet: %s", paths.local_parquet_path)
@@ -220,6 +226,20 @@ def load_example_dataset(
         df_raw.to_parquet(paths.local_parquet_path, index=False)
 
     df = df_raw
+    schema_issues = DEFAULT_DATASET_SCHEMA.validate(df, raise_on_error=False)
+    critical = [
+        p
+        for p in schema_issues
+        if p.startswith("нет обязательных") or p.startswith("len(df)") or "NaT" in p
+    ]
+    if critical:
+        from querulus.dataset.schema import DatasetSchemaError
+
+        raise DatasetSchemaError(critical)
+    for warning in schema_issues:
+        if warning not in critical:
+            logger.warning("DatasetSchema: %s", warning)
+
     built = load_outboxml_configs(df, version=version)
     cf_name = built.get("cf_name") or MODEL_CF_NAME
     rg_name = built.get("rg_name") or MODEL_RG_NAME
@@ -275,10 +295,62 @@ def load_example_thresholds(
     *,
     collect_training: object | None = None,
 ) -> ExampleThresholds:
+    """τ из collect (parity Val / research prod). Для сервиса — см. ``pick_prod_threshold_on_dsm``."""
     parity = load_collect_val_threshold(project_root, training=collect_training)
     prod = load_collect_prod_threshold(project_root)
-    logger.info("τ parity (Val) = %.2f; τ prod (τ-cal) = %.2f", parity, prod)
+    logger.info("τ collect parity (Val) = %.2f; τ collect prod (τ-cal) = %.2f", parity, prod)
     return ExampleThresholds(parity=parity, prod=prod)
+
+
+def pick_prod_threshold_on_dsm(
+    models: ExampleDsmBundle,
+    bundle: ExampleDatasetBundle,
+) -> float:
+    """Вариант B: подобрать τ на τ-cal по **raw** proba prod DSM.
+
+    Калибратор в сервис не едет — порог только на сырой шкале модели, которая
+    уходит в прод (example_final), а не collect CatBoost.
+    """
+    if models.dsm_cf_prod is None or models.dsm_rg_prod is None:
+        raise ValueError("Нужны обученные dsm_cf_prod / dsm_rg_prod")
+    tau_idx = bundle.periods["prod_tau_cal_idx"]
+    if len(tau_idx) == 0:
+        raise ValueError(
+            "prod_tau_cal_idx пуст — нельзя подобрать τ; проверьте period_windows.json / df"
+        )
+    df = bundle.df
+    proba = predict_cf(models.dsm_cf_prod, bundle.cf_name, df.loc[tau_idx])
+    sev = predict_rg(models.dsm_rg_prod, bundle.rg_name, df.loc[tau_idx])
+    cfg = resolve_fin_effect_config(
+        df,
+        frequency_target="TARGET_FREQ",
+        severity_target="TARGET_SEV",
+    )
+    y_true = df.loc[tau_idx, "TARGET_FREQ"]
+    fe = run_fin_effect_pipeline(
+        df.loc[tau_idx],
+        proba,
+        sev,
+        y_true,
+        threshold=None,
+        config=cfg,
+    )
+    thr = float(fe.best_threshold)
+    logger.info(
+        "τ prod (DSM raw, τ-cal n=%s, period %s…%s) = %.2f; net_effect=%.0f",
+        len(tau_idx),
+        bundle.periods["prod_tau_cal_period"][0],
+        bundle.periods["prod_tau_cal_period"][1],
+        thr,
+        fe.net_effect,
+    )
+    print(
+        f"τ prod подобран на DSM (raw) на τ-cal "
+        f"({bundle.periods['prod_tau_cal_period'][0]} … "
+        f"{bundle.periods['prod_tau_cal_period'][1]}, n={len(tau_idx)}): "
+        f"{thr:.2f}"
+    )
+    return thr
 
 
 def _create_dsm(
@@ -522,7 +594,8 @@ def bootstrap_fin_effect_table(
     """Bootstrap-финэффект на index: ``n_folds`` выборок с возвращением → медиана.
 
     В отличие от ``fin_effect_table`` считает эффект не на всей выборке, а на
-    ``n_folds`` bootstrap-фолдах; итог — медиана метрик. τ фиксирован из collect.
+    ``n_folds`` bootstrap-фолдах; итог — медиана метрик. τ обычно фиксирован
+    (prod DSM / parity).
     """
     cfg = resolve_fin_effect_config(
         df,
@@ -649,7 +722,8 @@ def run_test_prod_fin_effect(
 
     Считаем не один эффект на всей выборке, а ``n_folds`` bootstrap-фолдов
     (выборки того же размера **с возвращением**); в результатах — **медиана**
-    по фолдам и её разброс (min/max/std). τ фиксирован (collect).
+    по фолдам и её разброс (min/max/std). τ фиксирован (prod DSM после подбора
+    в example_final / parity из collect).
 
     Если есть parity DSM — сравнивает parity vs prod; иначе только prod
     (для ``example_final``).
@@ -907,6 +981,8 @@ def export_prod_service_artifacts(
         "rg_name": bundle.rg_name,
         "best_threshold": float(thresholds.prod),
         "val_threshold": float(thresholds.parity),
+        "threshold_scale": "raw",
+        "threshold_source": "example_final_dsm_tau_cal",
         "calibration": None,
         "artifacts": {
             "cf": str(cf_pkl),
@@ -942,7 +1018,8 @@ def export_prod_service_artifacts(
     print()
     print("  метаданные — периоды, пути артефактов, τ frequency:")
     print(f"    JSON      : {meta_path}")
-    print(f"    τ (collect, frequency best_threshold): {meta['best_threshold']:.2f}")
+    print(f"    τ (DSM raw, example_final best_threshold): {meta['best_threshold']:.2f}")
+    print(f"    threshold_source: {meta['threshold_source']}; scale: {meta['threshold_scale']}")
     print("=== Готово ===")
 
     return ProdExportResult(

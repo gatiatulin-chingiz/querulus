@@ -5,6 +5,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
+from querulus.dataset.schema import DEFAULT_DATASET_SCHEMA
 from querulus.training.mvp_types import DEFAULT_MVP_INPUT_TYPES, DEFAULT_OTHER_COLS
 from querulus.training.selected_features import (
     DEFAULT_FREQUENCY_FEATURES,
@@ -44,14 +45,14 @@ class TrainingConfig:
     """
 
     # Сплит train/val/cal/test — по дате поручения на выплату (не LOSS_DATE_TIME).
-    date_column: str = "PAYMENT_ORDER_DATE_TIME"
-    train_period: tuple[str, str] = ("2022-01-01", "2024-05-31")
-    test_period: tuple[str, str] = ("2024-06-01", "2025-06-01")
+    date_column: str = DEFAULT_DATASET_SCHEMA.date_column
+    train_period: tuple[str, str] = DEFAULT_DATASET_SCHEMA.train_period
+    test_period: tuple[str, str] = DEFAULT_DATASET_SCHEMA.test_period
     # Внутренние периоды (если None — режутся из train_period хвостом val/cal).
     val_period: tuple[str, str] | None = None
     cal_period: tuple[str, str] | None = None
-    frequency_target: str = "TARGET_FREQ"
-    severity_target: str = "TARGET_SEV"
+    frequency_target: str = DEFAULT_DATASET_SCHEMA.frequency_target
+    severity_target: str = DEFAULT_DATASET_SCHEMA.severity_target
     features_source: FeaturesSource = "selected"
     severity_range: tuple[float, float] | None = None
     frequency_iterations: int = 375

@@ -23,6 +23,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from querulus.dataset.schema import DEFAULT_DATASET_SCHEMA
 from querulus.features.inflation import (
     INFLATION_BASE_YEAR,
     LEGACY_INFLATION_ALIAS_YEAR,
@@ -33,11 +34,11 @@ from querulus.features.integer_casts import is_integer_like_feature, is_year_fea
 from querulus.training.mvp_types import DEFAULT_OTHER_COLS
 
 IQR_K: float = 1.5
-# Верхняя граница фич-годов: «сейчас» (модель 2.0.0). Год выше — мусор/опечатка.
-MAX_YEAR_FEATURE_VALUE: int = 2026
+# Верхняя граница фич-годов: контракт модели (DatasetSchema / 2.0.0).
+MAX_YEAR_FEATURE_VALUE: int = DEFAULT_DATASET_SCHEMA.max_year_feature_value
 # Совпадает с TrainingConfig.train_period / date_column (без импорта training).
-DEFAULT_DQ_DATE_COLUMN: str = "PAYMENT_ORDER_DATE_TIME"
-DEFAULT_DQ_TRAIN_PERIOD: tuple[str, str] = ("2022-01-01", "2024-05-31")
+DEFAULT_DQ_DATE_COLUMN: str = DEFAULT_DATASET_SCHEMA.date_column
+DEFAULT_DQ_TRAIN_PERIOD: tuple[str, str] = DEFAULT_DATASET_SCHEMA.train_period
 _MIN_TRAIN_FINITE: int = 20
 
 def _default_monetary_columns(base_year: int = INFLATION_BASE_YEAR) -> tuple[str, ...]:
@@ -381,13 +382,13 @@ def train_index_by_period(
     date_column: str = DEFAULT_DQ_DATE_COLUMN,
     train_period: tuple[str, str] = DEFAULT_DQ_TRAIN_PERIOD,
 ) -> pd.Index:
-    """Индекс строк с датой в ``train_period`` (включительно)."""
+    """Индекс строк с датой в ``train_period`` (включительно, с учётом времени)."""
+    from querulus.features.date_periods import mask_date_period
+
     if date_column not in df.columns:
         raise ValueError(f"Нет колонки даты для DQ: {date_column}")
     dates = pd.to_datetime(df[date_column], errors="coerce")
-    start = pd.Timestamp(train_period[0])
-    end = pd.Timestamp(train_period[1])
-    mask = (dates >= start) & (dates <= end)
+    mask = mask_date_period(dates, train_period[0], train_period[1]).fillna(False)
     return df.index[mask]
 
 def infer_numeric_feature_columns(
@@ -430,8 +431,7 @@ def apply_dataset_data_quality(
     ``exclude_columns`` по умолчанию — ``DEFAULT_OTHER_COLS`` + дата.
     """
     if exclude_columns is None:
-
-        exclude = list(DEFAULT_OTHER_COLS)
+        exclude = list(DEFAULT_DATASET_SCHEMA.winsorize_exclude_columns())
     else:
         exclude = list(exclude_columns)
     exclude = list(dict.fromkeys([*exclude, date_column]))
