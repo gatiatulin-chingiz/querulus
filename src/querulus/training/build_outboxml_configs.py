@@ -40,10 +40,7 @@ from querulus.training.config import TrainingConfig
 from querulus.training.feature_selection_io import load_feature_selection_latest
 from querulus.training.mvp_types import DEFAULT_MVP_INPUT_TYPES
 from querulus.features.date_periods import mask_date_period
-from querulus.features.derived import (
-    ensure_victim_object_age_months,
-    remap_feature_names,
-)
+from querulus.features.derived import remap_feature_names
 from querulus.features.inflation import ensure_legacy_real_column_aliases
 from querulus.training.splits import default_inner_periods_from_train, split_by_date_periods
 from outboxml.data_subsets import ModelDataSubset

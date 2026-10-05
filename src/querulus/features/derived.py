@@ -339,8 +339,8 @@ def vehicle_age_months_from_year(
 def ensure_victim_object_age_months(df: pd.DataFrame) -> pd.DataFrame:
     """Добавить ``VICTIM_OBJECT_AGE_MONTHS`` из года выпуска и даты ДТП.
 
-    База: ``EVENT_DATE``, иначе ``PAYMENT_ORDER_DATE_TIME``. Идемпотентно
-    пересчитывает колонку, если есть год выпуска.
+    База: ``EVENT_DATE``, иначе ``PAYMENT_ORDER_DATE_TIME``. Вызывать только
+    в collect (``run_features`` / derived); example загружает уже готовый df.
     """
     if VICTIM_OBJECT_YEAR_COL not in df.columns:
         return df

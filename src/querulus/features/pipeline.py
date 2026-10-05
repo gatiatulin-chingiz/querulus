@@ -70,7 +70,7 @@ def run_features(
     df = cleanup_merge_columns(df, feature_config)
     # Возраст/год и 0/1-флаги часто float из SQL — приводим к Int64 (in-place)
     df = cast_integer_like_columns(df)
-    # Год выпуска → age months (нужен и без полного derived FE_*)
+    # Год выпуска → age months (collect only; example читает готовый parquet)
     df = ensure_victim_object_age_months(df)
     gc.collect()
 
