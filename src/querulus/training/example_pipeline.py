@@ -844,10 +844,21 @@ def run_test_prod_fin_effect(
     )
 
 
-def _plot_features(dsm: Any, model_name: str, *, n_num: int = 6, n_cat: int = 6) -> list[str]:
+def _plot_features(
+    dsm: Any,
+    model_name: str,
+    *,
+    max_numerical: int | None = None,
+    max_categorical: int | None = None,
+) -> list[str]:
+    """Признаки для FactorsPlot: все num+cat из DSM, опционально с cap."""
     subset = dsm.get_result()[model_name].data_subset
-    nums = list(subset.features_numerical or [])[:n_num]
-    cats = list(subset.features_categorical or [])[:n_cat]
+    nums = list(subset.features_numerical or [])
+    cats = list(subset.features_categorical or [])
+    if max_numerical is not None:
+        nums = nums[:max_numerical]
+    if max_categorical is not None:
+        cats = cats[:max_categorical]
     return nums + cats
 
 
@@ -863,14 +874,22 @@ def _show_figure(fig: Any, title: str) -> None:
     print(title, type(fig))
 
 
-def _figure_to_html_bytes(fig: Any) -> bytes | None:
-    """Plotly → HTML bytes; None если не figure."""
+def _figure_to_html_bytes(
+    fig: Any,
+    *,
+    plotly_js: str | bool = "plotly.min.js",
+) -> bytes | None:
+    """Plotly → HTML bytes; None если не figure.
+
+    ``plotly_js='plotly.min.js'`` — script src рядом с html (для zip/offline).
+    CDN при открытии file:// из архива даёт пустые графики.
+    """
     if fig is None:
         return None
     to_html = getattr(fig, "to_html", None)
     if not callable(to_html):
         return None
-    return to_html(include_plotlyjs="cdn", full_html=True).encode("utf-8")
+    return to_html(include_plotlyjs=plotly_js, full_html=True).encode("utf-8")
 
 
 def _save_figures_zip(
@@ -880,20 +899,33 @@ def _save_figures_zip(
     """Упаковать Plotly-фигуры (FactorsPlot / cohort) в zip HTML."""
     import zipfile
 
+    from plotly.offline import get_plotlyjs
+
     zip_path = Path(zip_path)
     zip_path.parent.mkdir(parents=True, exist_ok=True)
+    plotly_js_name = "plotly.min.js"
+    plotly_js_bytes = get_plotlyjs().encode("utf-8")
     written = 0
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(plotly_js_name, plotly_js_bytes)
         for name, fig in figures.items():
-            payload = _figure_to_html_bytes(fig)
+            payload = _figure_to_html_bytes(fig, plotly_js=plotly_js_name)
             if payload is None:
                 logger.warning("zip plots: skip %s (нет to_html)", name)
                 continue
             safe = str(name).replace("/", "_").replace("\\", "_")
             zf.writestr(f"{safe}.html", payload)
             written += 1
-    logger.info("FactorsPlot zip: %s files → %s", written, zip_path)
-    print(f"FactorsPlot / cohort сохранены в zip: {zip_path} ({written} html)")
+    logger.info(
+        "FactorsPlot zip: %s html + %s → %s",
+        written,
+        plotly_js_name,
+        zip_path,
+    )
+    print(
+        f"FactorsPlot / cohort сохранены в zip: {zip_path} "
+        f"({written} html + {plotly_js_name}; распакуйте архив целиком)"
+    )
     return zip_path
 
 
