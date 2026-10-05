@@ -48,6 +48,7 @@
 | Фича | Описание | Как собирается |
 |------|----------|----------------|
 | `FE_VICTIM_AGE_BIN` | Возраст ТС | 0-3 / 3-7 / 7-15 / 15+ из `VICTIM_VEHICLE_AGE` |
+| `VICTIM_OBJECT_AGE_MONTHS` | Возраст ТС (месяцы на ДТП) | из `VICTIM_OBJECT_YEAR` + `EVENT_DATE`; год → TO_DROP |
 | `FE_VICTIM_POWER_PER_TON` | Мощность на тонну | `(VICTIM_CAPACITY_ENGINE / VICTIM_MAX_WEIGHT) * 1e6` |
 | `FE_VICTIM_HEAVY` | Тяжёлое ТС | `VICTIM_MAX_WEIGHT > 3500` |
 | `FE_VICTIM_DOORS_BIN` | Число дверей | 2/3/4/5+ из `VICTIM_NUM_DOORS` |

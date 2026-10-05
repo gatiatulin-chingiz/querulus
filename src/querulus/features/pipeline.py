@@ -10,7 +10,7 @@ from querulus.dataset.io import checkpoint
 from querulus.dataset.paths import DataPaths
 from querulus.features.cleanup import cleanup_merge_columns
 from querulus.features.config import FeatureConfig, load_feature_config
-from querulus.features.derived import add_derived_features
+from querulus.features.derived import add_derived_features, ensure_victim_object_age_months
 from querulus.features.data_quality import apply_dataset_data_quality
 from querulus.features.integer_casts import cast_integer_like_columns
 from querulus.features.incident_pretensions import add_incident_pretension_features
@@ -70,6 +70,8 @@ def run_features(
     df = cleanup_merge_columns(df, feature_config)
     # Возраст/год и 0/1-флаги часто float из SQL — приводим к Int64 (in-place)
     df = cast_integer_like_columns(df)
+    # Год выпуска → age months (нужен и без полного derived FE_*)
+    df = ensure_victim_object_age_months(df)
     gc.collect()
 
     pret_base = None

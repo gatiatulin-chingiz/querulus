@@ -22,6 +22,7 @@ _INT_EXACT = {
     "PARTICIPANTS_COUNT",
     "GUILTY_OBJECT_YEAR",
     "VICTIM_OBJECT_YEAR",
+    "VICTIM_OBJECT_AGE_MONTHS",
     "POLICYHOLDER_OBJECT_YEAR",
 }
 
@@ -48,8 +49,13 @@ def is_integer_like_feature(name: str) -> bool:
 
 
 def is_year_feature(name: str) -> bool:
-    """Фича-год: верхняя граница — не «текущий год» (см. ``MAX_YEAR_FEATURE_VALUE``)."""
+    """Фича-год: верхняя граница — не «текущий год» (см. ``MAX_YEAR_FEATURE_VALUE``).
+
+    ``*_AGE_MONTHS`` / имена с ``AGE_MONTH`` — не годы (возраст в месяцах).
+    """
     upper = str(name).upper()
+    if "AGE_MONTH" in upper:
+        return False
     return upper == "EVENT_YEAR" or upper.endswith("_YEAR") or "_YEAR_" in upper
 
 

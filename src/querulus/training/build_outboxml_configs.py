@@ -40,25 +40,27 @@ from querulus.training.config import TrainingConfig
 from querulus.training.feature_selection_io import load_feature_selection_latest
 from querulus.training.mvp_types import DEFAULT_MVP_INPUT_TYPES
 from querulus.features.date_periods import mask_date_period
+from querulus.features.derived import (
+    ensure_victim_object_age_months,
+    remap_feature_names,
+)
+from querulus.features.inflation import ensure_legacy_real_column_aliases
 from querulus.training.splits import default_inner_periods_from_train, split_by_date_periods
 from outboxml.data_subsets import ModelDataSubset
 from outboxml.core import utils as outboxml_utils
 from outboxml.core.enums import FeatureEngineering
 from outboxml.core.pydantic_models import ModelConfig
 from outboxml.core import data_prepare as outboxml_data_prepare
-from querulus.features.inflation import ensure_legacy_real_column_aliases
 from outboxml.core.prepared_datasets import PrepareDataset
 from outboxml.core.pydantic_models import AllModelsConfig
 from querulus.naming import MODEL_VERSION
 from querulus.features.data_quality import clip_bounds_for_outboxml
 from querulus.naming import (
-        MODEL_CF_NAME,
-        MODEL_NAME,
-        MODEL_RG_NAME,
-        configs_dir_for_version,
-    )
-from querulus.naming import MODEL_CF_NAME, MODEL_RG_NAME, configs_dir_for_version
-
+    MODEL_CF_NAME,
+    MODEL_NAME,
+    MODEL_RG_NAME,
+    configs_dir_for_version,
+)
 DEFAULT_ARTIFACTS_DIR = PROJECT_ROOT / "data" / "processed" / "train_loop_new"
 DEFAULT_CONFIGS_DIR = PROJECT_ROOT / "configs"
 DEFAULT_HPO_PATH = DEFAULT_ARTIFACTS_DIR / "hpo_best_params_new.json"
@@ -184,6 +186,22 @@ def ensure_legacy_inflation_column(df: pd.DataFrame) -> pd.DataFrame:
 
     return ensure_legacy_real_column_aliases(df)
 
+def _remap_features_in_config_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    """VICTIM_OBJECT_YEAR → VICTIM_OBJECT_AGE_MONTHS в features / cat_features."""
+    models = raw.get("models_configs") or []
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        if "features" in model and isinstance(model["features"], list):
+            for feat in model["features"]:
+                if isinstance(feat, dict) and "name" in feat:
+                    feat["name"] = remap_feature_names([feat["name"]])[0]
+        for key in ("cat_features_catboost", "cat_features"):
+            if key in model and isinstance(model[key], list):
+                model[key] = remap_feature_names(model[key])
+    return raw
+
+
 def prepare_datasets_from_config(
     config_path: str | Path,
     *,
@@ -193,6 +211,7 @@ def prepare_datasets_from_config(
     ensure_outboxml_runtime_patches()
 
     raw = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    raw = _remap_features_in_config_raw(raw)
     all_cfg = AllModelsConfig.model_validate(raw)
     group_name = f"{all_cfg.project}_{all_cfg.version}"
 
@@ -622,8 +641,8 @@ def load_selected_task(
         raise FileNotFoundError(
             f"Нет {stack}_{task}_latest.json в {artifacts_dir or DEFAULT_ARTIFACTS_DIR}"
         )
-    selected = [str(name) for name in payload.get("selected_features") or []]
-    cats = [str(name) for name in payload.get("categorical_features") or []]
+    selected = remap_feature_names(payload.get("selected_features") or [])
+    cats = remap_feature_names(payload.get("categorical_features") or [])
     if not selected:
         raise ValueError(f"Пустой selected_features в {stack}_{task}_latest.json")
     return selected, cats

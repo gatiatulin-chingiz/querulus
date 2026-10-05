@@ -302,6 +302,59 @@ def _add_victim_guilty_diff_features(df: pd.DataFrame) -> pd.DataFrame:
     )
     return df
 
+# Год выпуска → возраст в месяцах (вместо сырого VICTIM_OBJECT_YEAR в модели).
+VICTIM_OBJECT_YEAR_COL = "VICTIM_OBJECT_YEAR"
+VICTIM_OBJECT_AGE_MONTHS_COL = "VICTIM_OBJECT_AGE_MONTHS"
+# База возраста: дата ДТП (causal); fallback — T0 выплаты.
+_AGE_BASE_DATE_PRIMARY = "EVENT_DATE"
+_AGE_BASE_DATE_FALLBACK = "PAYMENT_ORDER_DATE_TIME"
+# Старые артефакты FS / конфиги ещё могут звать год — подменяем на age months.
+FEATURE_NAME_ALIASES: dict[str, str] = {
+    VICTIM_OBJECT_YEAR_COL: VICTIM_OBJECT_AGE_MONTHS_COL,
+}
+
+
+def remap_feature_names(names: list[str] | tuple[str, ...]) -> list[str]:
+    """Подменить устаревшие имена фич (год выпуска → возраст в месяцах)."""
+    return [FEATURE_NAME_ALIASES.get(str(name), str(name)) for name in names]
+
+
+def vehicle_age_months_from_year(
+    object_year: pd.Series,
+    base_date: pd.Series,
+) -> pd.Series:
+    """Полные месяцы возраста ТС на ``base_date``; год выпуска ≈ 1 января.
+
+    ``age = (Y_base - Y_object) * 12 + (M_base - 1)``, затем ``clip(lower=0)``.
+    Месяц выпуска в данных нет — берём январь (консервативно: авто старше).
+    """
+    base = _to_datetime(base_date)
+    year = pd.to_numeric(object_year, errors="coerce")
+    age = (base.dt.year - year) * 12 + (base.dt.month - 1)
+    age = pd.to_numeric(age, errors="coerce")
+    age = age.where(age.isna(), age.clip(lower=0))
+    return age.round().astype("Int64")
+
+
+def ensure_victim_object_age_months(df: pd.DataFrame) -> pd.DataFrame:
+    """Добавить ``VICTIM_OBJECT_AGE_MONTHS`` из года выпуска и даты ДТП.
+
+    База: ``EVENT_DATE``, иначе ``PAYMENT_ORDER_DATE_TIME``. Идемпотентно
+    пересчитывает колонку, если есть год выпуска.
+    """
+    if VICTIM_OBJECT_YEAR_COL not in df.columns:
+        return df
+    if _AGE_BASE_DATE_PRIMARY in df.columns:
+        base = column_series(df, _AGE_BASE_DATE_PRIMARY)
+    else:
+        base = column_series(df, _AGE_BASE_DATE_FALLBACK)
+    df[VICTIM_OBJECT_AGE_MONTHS_COL] = vehicle_age_months_from_year(
+        column_series(df, VICTIM_OBJECT_YEAR_COL),
+        base,
+    )
+    return df
+
+
 def _add_geo_features(df: pd.DataFrame) -> pd.DataFrame:
     """Блок F: гео."""
     region = column_series(df, "REGION")
@@ -476,6 +529,7 @@ def _add_loss_history_features(df: pd.DataFrame, config: FeatureConfig) -> pd.Da
 def add_derived_features(df: pd.DataFrame, config: FeatureConfig) -> pd.DataFrame:
     """Добавить все FE_* колонки по каталогу v4 (мутирует df, без полного copy)."""
     out = df
+    out = ensure_victim_object_age_months(out)
     out = _add_timeline_features(out, config)
     out = _add_accident_features(out, config)
     out = _add_victim_vehicle_features(out, config)

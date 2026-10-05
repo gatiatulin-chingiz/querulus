@@ -51,6 +51,7 @@ _DISCRETE_INT_FEATURES = frozenset(
         "EVENT_DAY",
         "GUILTY_OBJECT_YEAR",
         "VICTIM_OBJECT_YEAR",
+        "VICTIM_OBJECT_AGE_MONTHS",
         "POLICYHOLDER_OBJECT_YEAR",
     }
 )

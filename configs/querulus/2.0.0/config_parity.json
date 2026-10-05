@@ -261,15 +261,15 @@
           "encoding": "to_int"
         },
         {
-          "name": "VICTIM_OBJECT_YEAR",
-          "default": 2026,
+          "name": "VICTIM_OBJECT_AGE_MONTHS",
+          "default": 84,
           "replace": {
             "_TYPE_": "_NUM_"
           },
           "encoding": "to_int",
           "clip": {
-            "min_value": 1998,
-            "max_value": 2026
+            "min_value": 0,
+            "max_value": 480
           }
         },
         {

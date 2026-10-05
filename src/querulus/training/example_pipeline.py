@@ -13,6 +13,7 @@ import pandas as pd
 
 from querulus.dataset.hadoop import load_df_final
 from querulus.dataset.schema import DEFAULT_DATASET_SCHEMA
+from querulus.features.derived import ensure_victim_object_age_months
 from querulus.fin_effect import (
     DEFAULT_BOOTSTRAP_FOLDS,
     DEFAULT_BOOTSTRAP_SEED,
@@ -225,7 +226,7 @@ def load_example_dataset(
         paths.local_parquet_path.parent.mkdir(parents=True, exist_ok=True)
         df_raw.to_parquet(paths.local_parquet_path, index=False)
 
-    df = df_raw
+    df = ensure_victim_object_age_months(df_raw)
     schema_issues = DEFAULT_DATASET_SCHEMA.validate(df, raise_on_error=False)
     critical = [
         p
@@ -855,7 +856,49 @@ def _show_figure(fig: Any, title: str) -> None:
     print(title, type(fig))
 
 
-def _show_factors(export: Any, model_name: str, features: list[str], *, bins: int = 5) -> None:
+def _figure_to_html_bytes(fig: Any) -> bytes | None:
+    """Plotly → HTML bytes; None если не figure."""
+    if fig is None:
+        return None
+    to_html = getattr(fig, "to_html", None)
+    if not callable(to_html):
+        return None
+    return to_html(include_plotlyjs="cdn", full_html=True).encode("utf-8")
+
+
+def _save_figures_zip(
+    figures: dict[str, Any],
+    zip_path: Path,
+) -> Path:
+    """Упаковать Plotly-фигуры (FactorsPlot / cohort) в zip HTML."""
+    import zipfile
+
+    zip_path = Path(zip_path)
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, fig in figures.items():
+            payload = _figure_to_html_bytes(fig)
+            if payload is None:
+                logger.warning("zip plots: skip %s (нет to_html)", name)
+                continue
+            safe = str(name).replace("/", "_").replace("\\", "_")
+            zf.writestr(f"{safe}.html", payload)
+            written += 1
+    logger.info("FactorsPlot zip: %s files → %s", written, zip_path)
+    print(f"FactorsPlot / cohort сохранены в zip: {zip_path} ({written} html)")
+    return zip_path
+
+
+def _show_factors(
+    export: Any,
+    model_name: str,
+    features: list[str],
+    *,
+    bins: int = 5,
+    figures_out: dict[str, Any] | None = None,
+) -> None:
+    """FactorsPlot по одной фиче (OutBoxML API отдаёт только last figure)."""
     for feat in features:
         fig = export.plots(
             model_name=model_name,
@@ -865,6 +908,9 @@ def _show_factors(export: Any, model_name: str, features: list[str], *, bins: in
             use_exposure=False,
             only_test=True,
         )
+        key = f"{model_name}__factors__{feat}"
+        if figures_out is not None and fig is not None:
+            figures_out[key] = fig
         _show_figure(fig, f"FactorsPlot {model_name}: {feat}")
 
 
@@ -874,8 +920,15 @@ def run_prod_plots_and_email(
     *,
     external_config: Any,
     send_email: bool = True,
-) -> None:
-    """FactorsPlot, cohort и опционально QuerulusEMailDSResult."""
+    results_dir: Path | str | None = None,
+    save_plots_zip: bool = True,
+) -> Path | None:
+    """FactorsPlot (OutBoxML), cohort; опционально zip HTML + QuerulusEMailDSResult.
+
+    Графики строятся через ``ResultExport.plots`` (plot_type=1 → FactorsPlot /
+    MLPlot.feature_plot). Все фигуры + cohort пишутся в
+    ``{results_dir}/querulus_prod_plots.zip``.
+    """
     export_cf = ResultExport(ds_manager=models.dsm_cf_prod, config=external_config)
     export_rg = ResultExport(ds_manager=models.dsm_rg_prod, config=external_config)
     cf_plot_feats = _plot_features(models.dsm_cf_prod, bundle.cf_name)
@@ -883,8 +936,9 @@ def run_prod_plots_and_email(
     print("FactorsPlot features CF:", cf_plot_feats)
     print("FactorsPlot features RG:", rg_plot_feats)
 
-    _show_factors(export_cf, bundle.cf_name, cf_plot_feats)
-    _show_factors(export_rg, bundle.rg_name, rg_plot_feats)
+    figures: dict[str, Any] = {}
+    _show_factors(export_cf, bundle.cf_name, cf_plot_feats, figures_out=figures)
+    _show_factors(export_rg, bundle.rg_name, rg_plot_feats, figures_out=figures)
 
     fig_cf_cohort = export_cf.plots(
         model_name=bundle.cf_name,
@@ -906,11 +960,23 @@ def run_prod_plots_and_email(
         samples=100,
         cohort_base="model",
     )
+    if fig_cf_cohort is not None:
+        figures[f"{bundle.cf_name}__cohort"] = fig_cf_cohort
+    if fig_rg_cohort is not None:
+        figures[f"{bundle.rg_name}__cohort"] = fig_rg_cohort
     _show_figure(fig_cf_cohort, "Cohort plot_type=2 CF")
     _show_figure(fig_rg_cohort, "Cohort plot_type=2 RG")
 
+    zip_path: Path | None = None
+    if save_plots_zip and figures:
+        out_dir = Path(results_dir) if results_dir is not None else Path("results")
+        zip_path = _save_figures_zip(
+            figures,
+            out_dir / f"querulus_prod_plots_{bundle.model_version}.zip",
+        )
+
     if not send_email:
-        return
+        return zip_path
     prod_results: dict[str, Any] = {}
     prod_results.update(models.dsm_cf_prod.get_result())
     prod_results.update(models.dsm_rg_prod.get_result())
@@ -922,6 +988,7 @@ def run_prod_plots_and_email(
         print("QuerulusEMailDSResult: письмо отправлено")
     except Exception as exc:
         logger.warning("QuerulusEMailDSResult не отправлено: %s: %s", type(exc).__name__, exc)
+    return zip_path
 
 
 def export_prod_service_artifacts(

@@ -78,6 +78,8 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': [],
              'SEASON_WINTER_TEMPERATURE_AVG_MIN_osago',
              'SEASON_WINTER_PRECIPITATION_NORMAL_osago',
              'REGION_CORRECTED',
+             # Год выпуска victim → в модели VICTIM_OBJECT_AGE_MONTHS (на EVENT_DATE).
+             'VICTIM_OBJECT_YEAR',
              'PREMIUM_SUM_OSAGO',
              'LOSS_STATE_BY_IA',
              'REFUND_FORM_DETAILED',

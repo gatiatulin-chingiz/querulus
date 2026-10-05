@@ -18,6 +18,8 @@ RAW_FEATURE_RU: dict[str, str] = {
     "LOSS_UNIT": "Урегулирующее подразделение",
     "VICTIM_VEHICLE_COUNTRY": "Страна ТС потерпевшего",
     "VICTIM_VEHICLE_AGE": "Возраст ТС потерпевшего",
+    "VICTIM_OBJECT_YEAR": "Год выпуска ТС потерпевшего (сырой; в модель не идёт)",
+    "VICTIM_OBJECT_AGE_MONTHS": "Возраст ТС потерпевшего на дату ДТП (месяцы)",
     "VICTIM_VEHICLE_BRAND": "Бренд ТС потерпевшего",
     "VICTIM_VEHICLE_MADE_IN_RF": "ТС потерпевшего произведено в РФ",
     "VICTIM_VEHICLE_IS_JAPAN": "Японское ТС потерпевшего",
