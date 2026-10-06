@@ -46,13 +46,17 @@ from querulus.training.build_outboxml_configs import (
 )
 from querulus.training.dsm_fit import fit_dsm_classification
 from querulus.training.email_report import QuerulusEMailDSResult
+from querulus.training.calibration import SeverityCalibrator
+from querulus.training.factors_export import (
+    build_factors_figures,
+    fit_rg_severity_calibrator_isotonic,
+)
 from querulus.training.outboxml_metrics import (
     display_dsm_collect_metrics,
     display_dsm_collect_metrics_cross_test,
     predict_dsm_series,
 )
 from outboxml.datasets_manager import DataSetsManager
-from outboxml.export_results import ResultExport
 
 try:
     from IPython.display import Markdown, display as ipy_display
@@ -145,6 +149,14 @@ class ProdExportResult:
     meta_path: Path
     dq_bounds_path: Path | None
     meta: dict[str, Any]
+
+
+@dataclass
+class ProdPlotsResult:
+    """Результат ``run_prod_plots_and_email``."""
+
+    zip_path: Path | None
+    rg_calibrator: SeverityCalibrator | None = None
 
 
 def resolve_example_paths(
@@ -844,24 +856,6 @@ def run_test_prod_fin_effect(
     )
 
 
-def _plot_features(
-    dsm: Any,
-    model_name: str,
-    *,
-    max_numerical: int | None = None,
-    max_categorical: int | None = None,
-) -> list[str]:
-    """Признаки для FactorsPlot: все num+cat из DSM, опционально с cap."""
-    subset = dsm.get_result()[model_name].data_subset
-    nums = list(subset.features_numerical or [])
-    cats = list(subset.features_categorical or [])
-    if max_numerical is not None:
-        nums = nums[:max_numerical]
-    if max_categorical is not None:
-        cats = cats[:max_categorical]
-    return nums + cats
-
-
 def _show_figure(fig: Any, title: str) -> None:
     if fig is None:
         logger.warning("%s: figure is None", title)
@@ -877,9 +871,7 @@ def _show_figure(fig: Any, title: str) -> None:
 def _figure_to_html_bytes(fig: Any) -> bytes | None:
     """Plotly → self-contained HTML bytes; None если не figure.
 
-    Inline plotly.js (не CDN / не соседний файл): html открывается из любой
-    папки, Cursor preview и WinRAR. ``default_height=600`` — иначе OutBoxML
-    отдаёт ``height:100%`` при нулевой высоте body → «пустой» график.
+    Inline plotly.js; ``default_height=600`` — иначе height:100% → пустой canvas.
     """
     if fig is None:
         return None
@@ -921,85 +913,115 @@ def _save_figures_zip(
     return zip_path
 
 
-def _show_factors(
-    export: Any,
-    model_name: str,
-    features: list[str],
+DEFAULT_SEGMENT_FIN_COLS: tuple[str, ...] = (
+    "IS_TOTAL",
+    "FL_PHOTO_VIDEO",
+    "NOT_NOTIFICATION",
+    "FILIAL",
+    "FE_SHARE_WORK_TIER",
+)
+
+
+def run_segment_fin_effect(
+    models: ExampleDsmBundle,
+    bundle: ExampleDatasetBundle,
     *,
-    bins: int = 5,
-    figures_out: dict[str, Any] | None = None,
-) -> None:
-    """FactorsPlot по одной фиче (OutBoxML API отдаёт только last figure)."""
-    for feat in features:
-        fig = export.plots(
-            model_name=model_name,
-            features=[feat],
-            plot_type=1,
-            bins_for_numerical_features=bins,
-            use_exposure=False,
-            only_test=True,
-        )
-        key = f"{model_name}__factors__{feat}"
-        if figures_out is not None and fig is not None:
-            figures_out[key] = fig
-        _show_figure(fig, f"FactorsPlot {model_name}: {feat}")
+    threshold: float,
+    segment_cols: tuple[str, ...] | list[str] = DEFAULT_SEGMENT_FIN_COLS,
+    min_n: int = 30,
+    rg_calibrator: SeverityCalibrator | None = None,
+) -> pd.DataFrame:
+    """Точечный финэффект prod на Test_prod по сегментам (фиксированный τ).
 
-
-def _positive_proba_series(estimator: Any, x: pd.DataFrame) -> pd.Series:
-    import numpy as np
-
-    if hasattr(estimator, "predict_proba"):
-        scores = np.asarray(estimator.predict_proba(x)[:, 1], dtype=float)
-    else:
-        scores = np.asarray(estimator.predict(x), dtype=float)
-    return pd.Series(scores, index=x.index, dtype=float)
-
-
-def _snapshot_predictions(result: Any) -> dict[str, Any]:
-    preds = getattr(result, "predictions", None) or {}
-    out: dict[str, Any] = {}
-    for key in ("train", "test"):
-        value = preds.get(key)
-        out[key] = None if value is None else value.copy()
-    return out
-
-
-def _restore_predictions(result: Any, saved: dict[str, Any]) -> None:
-    load = getattr(result, "load_predictions", None)
-    if not callable(load):
-        return
-    for key, value in saved.items():
-        if value is not None:
-            load(value, key)
-
-
-def _apply_cf_calibrator_to_dsm_predictions(
-    dsm: Any,
-    model_name: str,
-    calibrator: Any,
-) -> dict[str, Any]:
-    """Подменить train/test ``predictions`` на proba калибратора; вернуть snapshot для restore.
-
-    FactorsPlot / cohort читают ``result.predictions``; фичи на оси X не меняются
-    (preprocessed ``X_*``). После графиков вызвать ``_restore_predictions``.
+    Severity: raw DSM, либо ``rg_calibrator`` (isotonic), если передан.
+    Мелкие сегменты (n < min_n) помечаются, но остаются в таблице.
     """
-    result = dsm.get_result()[model_name]
-    subset = result.data_subset
-    num = [str(f) for f in (subset.features_numerical or [])]
-    cat = [str(f) for f in (subset.features_categorical or [])]
-    cols = [*num, *cat]
-    saved = _snapshot_predictions(result)
-    for split, x in (("train", subset.X_train), ("test", subset.X_test)):
-        if x is None or len(x) == 0:
+    from querulus.fin_effect.calculator import (
+        apply_model_predictions,
+        prepare_effect_frame,
+    )
+    from querulus.training.calibration import apply_severity_calibrator
+
+    if models.dsm_cf_prod is None or models.dsm_rg_prod is None:
+        raise ValueError("Нужны dsm_cf_prod / dsm_rg_prod")
+    idx = bundle.periods["prod_holdout_idx"]
+    df = bundle.df
+    proba = predict_cf(models.dsm_cf_prod, bundle.cf_name, df.loc[idx])
+    sev = predict_rg(models.dsm_rg_prod, bundle.rg_name, df.loc[idx])
+    if rg_calibrator is not None:
+        sev = apply_severity_calibrator(rg_calibrator, sev)
+    cfg = resolve_fin_effect_config(
+        df,
+        frequency_target="TARGET_FREQ",
+        severity_target="TARGET_SEV",
+    )
+    common = proba.index.intersection(sev.index).intersection(df.index)
+    prepared = prepare_effect_frame(df.loc[common], cfg)
+    proba = proba.reindex(prepared.index)
+    sev_s = (
+        sev.reindex(prepared.index)
+        if isinstance(sev, pd.Series)
+        else pd.Series(sev, index=prepared.index)
+    )
+    rows: list[dict[str, Any]] = []
+    full = apply_model_predictions(
+        prepared,
+        proba,
+        sev_s,
+        prepared["TARGET_FREQ"],
+        threshold=threshold,
+        config=cfg,
+    )
+    rows.append(
+        {
+            "segment_col": "_all",
+            "segment": "ALL",
+            "n": int(len(prepared)),
+            "n_ok": True,
+            "thr": float(threshold),
+            "net_effect": float(full.net_effect),
+            "model_effect": float(full.model_effect_total),
+            "fact_effect": float(full.fact_effect_total),
+        }
+    )
+    for col in segment_cols:
+        if col not in prepared.columns:
+            logger.warning("segment fin: колонки %s нет в df — skip", col)
             continue
-        missing = [c for c in cols if c not in x.columns]
-        if missing:
-            raise ValueError(
-                f"DSM {model_name} {split}: нет колонок для калибратора: {missing[:8]}"
+        for seg_val, part in prepared.groupby(col, dropna=False):
+            part_idx = part.index
+            if len(part_idx) == 0:
+                continue
+            fe = apply_model_predictions(
+                part,
+                proba.loc[part_idx],
+                sev_s.loc[part_idx],
+                part["TARGET_FREQ"],
+                threshold=threshold,
+                config=cfg,
             )
-        proba = _positive_proba_series(calibrator, x.loc[:, cols])
-        result.load_predictions(proba, split)
-    return saved
+            rows.append(
+                {
+                    "segment_col": col,
+                    "segment": str(seg_val),
+                    "n": int(len(part_idx)),
+                    "n_ok": bool(len(part_idx) >= min_n),
+                    "thr": float(threshold),
+                    "net_effect": float(fe.net_effect),
+                    "model_effect": float(fe.model_effect_total),
+                    "fact_effect": float(fe.fact_effect_total),
+                }
+            )
+    table = pd.DataFrame(rows).sort_values(
+        ["segment_col", "n"], ascending=[True, False]
+    )
+    _display(table)
+    print(
+        f"Сегментный fin effect (Test_prod, τ={threshold:.2f}, "
+        f"sev={'isotonic' if rg_calibrator is not None else 'raw'}): "
+        f"{len(table)} строк"
+    )
+    return table
 
 
 def run_prod_plots_and_email(
@@ -1012,110 +1034,81 @@ def run_prod_plots_and_email(
     save_plots_zip: bool = True,
     cf_calibrator: Any | None = None,
     cf_calibration_label: str = "querulus_cal",
-) -> Path | None:
-    """FactorsPlot (OutBoxML), cohort; опционально zip HTML + QuerulusEMailDSResult.
+    fit_rg_isotonic: bool = True,
+    rg_calibrator: SeverityCalibrator | None = None,
+    show_figures: bool = False,
+) -> ProdPlotsResult:
+    """FactorsPlot + cohort (querulus) → zip HTML; опционально email.
 
-    Графики строятся через ``ResultExport.plots`` (plot_type=1 → FactorsPlot /
-    MLPlot.feature_plot). Все фигуры + cohort пишутся в
-    ``{results_dir}/querulus_prod_plots_{version}[_label].zip``.
-
-    Если передан ``cf_calibrator`` (например ``cal_compare.ours_calibrator``),
-    линия model на CF FactorsPlot/cohort — **откалиброванная** proba; после
-    построения predictions DSM восстанавливаются. RG без изменений (raw predict).
+    CF: Fact / raw / ``cf_calibrator`` (querulus_cal); cat-ось — сырые labels из df.
+    RG: Fact / raw / sev_isotonic (учится на τ-cal, если ``fit_rg_isotonic``).
+    Все num+cat из DSM. OutBoxML не меняем.
     """
-    export_cf = ResultExport(ds_manager=models.dsm_cf_prod, config=external_config)
-    export_rg = ResultExport(ds_manager=models.dsm_rg_prod, config=external_config)
-    cf_plot_feats = _plot_features(models.dsm_cf_prod, bundle.cf_name)
-    rg_plot_feats = _plot_features(models.dsm_rg_prod, bundle.rg_name)
-    print("FactorsPlot features CF:", cf_plot_feats)
-    print("FactorsPlot features RG:", rg_plot_feats)
+    if models.dsm_cf_prod is None or models.dsm_rg_prod is None:
+        raise ValueError("Нужны dsm_cf_prod / dsm_rg_prod")
 
-    cf_result = models.dsm_cf_prod.get_result()[bundle.cf_name]
-    saved_cf_preds: dict[str, Any] | None = None
-    if cf_calibrator is not None:
-        saved_cf_preds = _apply_cf_calibrator_to_dsm_predictions(
-            models.dsm_cf_prod, bundle.cf_name, cf_calibrator
+    sev_cal = rg_calibrator
+    if sev_cal is None and fit_rg_isotonic:
+        sev_cal = fit_rg_severity_calibrator_isotonic(
+            models.dsm_rg_prod,
+            bundle.rg_name,
+            bundle.df,
+            bundle.periods,
+            prefer_prod_tau=True,
         )
         print(
-            f"CF FactorsPlot/cohort: y_prediction = {cf_calibration_label} "
-            "(фичи X — preprocessed DSM, без изменения)"
-        )
-    else:
-        print(
-            "CF FactorsPlot/cohort: y_prediction из DSM.predictions "
-            "(raw после fit; после compare_cf_calibrations может быть mldw)"
+            f"RG severity isotonic: n_fit={sev_cal.n_fit}, "
+            f"bias_before={sev_cal.bias_before:,.0f}, "
+            f"bias_after={sev_cal.bias_after:,.0f}"
         )
 
-    figures: dict[str, Any] = {}
+    figures = build_factors_figures(
+        dsm_cf=models.dsm_cf_prod,
+        cf_name=bundle.cf_name,
+        dsm_rg=models.dsm_rg_prod,
+        rg_name=bundle.rg_name,
+        df=bundle.df,
+        cf_calibrator=cf_calibrator,
+        rg_calibrator=sev_cal,
+        cf_cal_label=cf_calibration_label,
+    )
+    print(f"FactorsPlot figures: {len(figures)}")
+    if show_figures:
+        for key, fig in figures.items():
+            _show_figure(fig, key)
+
     zip_path: Path | None = None
-    try:
-        _show_factors(export_cf, bundle.cf_name, cf_plot_feats, figures_out=figures)
-        _show_factors(export_rg, bundle.rg_name, rg_plot_feats, figures_out=figures)
-
-        fig_cf_cohort = export_cf.plots(
-            model_name=bundle.cf_name,
-            plot_type=2,
-            use_exposure=False,
-            only_test=True,
-            cut_min_value=0.1,
-            cut_max_value=0.9,
-            samples=100,
-            cohort_base="model",
+    if save_plots_zip and figures:
+        out_dir = Path(results_dir) if results_dir is not None else Path("results")
+        parts = []
+        if cf_calibrator is not None and cf_calibration_label:
+            parts.append(cf_calibration_label)
+        if sev_cal is not None:
+            parts.append("sev_isotonic")
+        suffix = ("_" + "_".join(parts)) if parts else ""
+        zip_path = _save_figures_zip(
+            figures,
+            out_dir / f"querulus_prod_plots_{bundle.model_version}{suffix}.zip",
         )
-        fig_rg_cohort = export_rg.plots(
-            model_name=bundle.rg_name,
-            plot_type=2,
-            use_exposure=False,
-            only_test=True,
-            cut_min_value=0.1,
-            cut_max_value=0.9,
-            samples=100,
-            cohort_base="model",
-        )
-        if fig_cf_cohort is not None:
-            figures[f"{bundle.cf_name}__cohort"] = fig_cf_cohort
-        if fig_rg_cohort is not None:
-            figures[f"{bundle.rg_name}__cohort"] = fig_rg_cohort
-        _show_figure(fig_cf_cohort, "Cohort plot_type=2 CF")
-        _show_figure(fig_rg_cohort, "Cohort plot_type=2 RG")
 
-        if save_plots_zip and figures:
-            out_dir = Path(results_dir) if results_dir is not None else Path("results")
-            suffix = (
-                f"_{cf_calibration_label}"
-                if cf_calibrator is not None and cf_calibration_label
-                else ""
-            )
-            zip_path = _save_figures_zip(
-                figures,
-                out_dir / f"querulus_prod_plots_{bundle.model_version}{suffix}.zip",
+    if send_email:
+        prod_results: dict[str, Any] = {}
+        prod_results.update(models.dsm_cf_prod.get_result())
+        prod_results.update(models.dsm_rg_prod.get_result())
+        try:
+            QuerulusEMailDSResult(
+                config=external_config,
+                ds_manager_result=prod_results,
+            ).success_mail(group_name=f"querulus_{bundle.model_version}")
+            print("QuerulusEMailDSResult: письмо отправлено")
+        except Exception as exc:
+            logger.warning(
+                "QuerulusEMailDSResult не отправлено: %s: %s",
+                type(exc).__name__,
+                exc,
             )
 
-        if send_email:
-            prod_results: dict[str, Any] = {}
-            prod_results.update(models.dsm_cf_prod.get_result())
-            prod_results.update(models.dsm_rg_prod.get_result())
-            try:
-                QuerulusEMailDSResult(
-                    config=external_config,
-                    ds_manager_result=prod_results,
-                ).success_mail(group_name=f"querulus_{bundle.model_version}")
-                print("QuerulusEMailDSResult: письмо отправлено")
-            except Exception as exc:
-                logger.warning(
-                    "QuerulusEMailDSResult не отправлено: %s: %s",
-                    type(exc).__name__,
-                    exc,
-                )
-    finally:
-        if saved_cf_preds is not None:
-            _restore_predictions(cf_result, saved_cf_preds)
-            logger.info(
-                "CF DSM.predictions восстановлены после plots (%s)",
-                cf_calibration_label,
-            )
-
-    return zip_path
+    return ProdPlotsResult(zip_path=zip_path, rg_calibrator=sev_cal)
 
 
 def export_prod_service_artifacts(
