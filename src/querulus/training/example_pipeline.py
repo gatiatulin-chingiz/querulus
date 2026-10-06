@@ -1035,32 +1035,43 @@ def run_prod_plots_and_email(
     cf_calibrator: Any | None = None,
     cf_calibration_label: str = "querulus_cal",
     fit_rg_isotonic: bool = True,
+    rg_isotonic_min_samples: int = 50,
     rg_calibrator: SeverityCalibrator | None = None,
     show_figures: bool = False,
+    plots_tag: str = "example",
 ) -> ProdPlotsResult:
     """FactorsPlot + cohort (querulus) → zip HTML; опционально email.
 
     CF: Fact / raw / ``cf_calibrator`` (querulus_cal); cat-ось — сырые labels из df.
     RG: Fact / raw / sev_isotonic (учится на τ-cal, если ``fit_rg_isotonic``).
     Все num+cat из DSM. OutBoxML не меняем.
+
+    ``plots_tag`` — суффикс zip (`example` / `example_final`), чтобы ноутбуки
+    не затирали архивы друг друга.
     """
     if models.dsm_cf_prod is None or models.dsm_rg_prod is None:
         raise ValueError("Нужны dsm_cf_prod / dsm_rg_prod")
 
     sev_cal = rg_calibrator
     if sev_cal is None and fit_rg_isotonic:
-        sev_cal = fit_rg_severity_calibrator_isotonic(
-            models.dsm_rg_prod,
-            bundle.rg_name,
-            bundle.df,
-            bundle.periods,
-            prefer_prod_tau=True,
-        )
-        print(
-            f"RG severity isotonic: n_fit={sev_cal.n_fit}, "
-            f"bias_before={sev_cal.bias_before:,.0f}, "
-            f"bias_after={sev_cal.bias_after:,.0f}"
-        )
+        try:
+            sev_cal = fit_rg_severity_calibrator_isotonic(
+                models.dsm_rg_prod,
+                bundle.rg_name,
+                bundle.df,
+                bundle.periods,
+                prefer_prod_tau=True,
+                min_samples=rg_isotonic_min_samples,
+            )
+            print(
+                f"RG severity isotonic: n_fit={sev_cal.n_fit}, "
+                f"bias_before={sev_cal.bias_before:,.0f}, "
+                f"bias_after={sev_cal.bias_after:,.0f}"
+            )
+        except ValueError as exc:
+            logger.warning("RG sev_isotonic не обучен: %s", exc)
+            print(f"RG sev_isotonic skip: {exc}")
+            sev_cal = None
 
     figures = build_factors_figures(
         dsm_cf=models.dsm_cf_prod,
@@ -1070,7 +1081,6 @@ def run_prod_plots_and_email(
         df=bundle.df,
         cf_calibrator=cf_calibrator,
         rg_calibrator=sev_cal,
-        cf_cal_label=cf_calibration_label,
     )
     print(f"FactorsPlot figures: {len(figures)}")
     if show_figures:
@@ -1080,12 +1090,12 @@ def run_prod_plots_and_email(
     zip_path: Path | None = None
     if save_plots_zip and figures:
         out_dir = Path(results_dir) if results_dir is not None else Path("results")
-        parts = []
+        parts = [str(plots_tag).strip()] if plots_tag else []
         if cf_calibrator is not None and cf_calibration_label:
             parts.append(cf_calibration_label)
         if sev_cal is not None:
             parts.append("sev_isotonic")
-        suffix = ("_" + "_".join(parts)) if parts else ""
+        suffix = ("_" + "_".join(p for p in parts if p)) if parts else ""
         zip_path = _save_figures_zip(
             figures,
             out_dir / f"querulus_prod_plots_{bundle.model_version}{suffix}.zip",

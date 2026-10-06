@@ -8,8 +8,12 @@ import numpy as np
 import pandas as pd
 
 from querulus import PROJECT_ROOT
-from querulus.features.inflation import deflate_to_base_year, real_feature_name
 from querulus.dataset.dtypes import cast_object_columns
+from querulus.features.derived import (
+    VICTIM_OBJECT_YEAR_COL,
+    ensure_victim_object_age_months,
+)
+from querulus.features.inflation import deflate_to_base_year, real_feature_name
 from querulus.features.inflation import ensure_legacy_real_column_aliases
 
 DEFAULT_OUTPUT = PROJECT_ROOT / "data" / "processed" / "df_final_3_synthetic.parquet"
@@ -101,11 +105,15 @@ def build_synthetic_final_dataset(
     premium_count = rng.integers(1, 4, size=n_rows).astype(float)
     premium_real = deflate_to_base_year(pd.Series(premium_sum), loss_dt)
 
-    return pd.DataFrame(
+    victim_object_year = (event_year - rng.integers(0, 18, size=n_rows)).astype(int)
+
+    df = pd.DataFrame(
         {
             "INCIDENT_NUMBER": [f"SYN-{i:06d}" for i in range(n_rows)],
             "LOSS_DATE_TIME": loss_dt,
+            "EVENT_DATE": loss_dt,
             "PAYMENT_ORDER_DATE_TIME": loss_dt,
+            VICTIM_OBJECT_YEAR_COL: victim_object_year,
             "TARGET_2": target_2,
             "TARGET_3_SEV": target_3_sev,
             "TARGET_FREQ": target_freq,
@@ -155,6 +163,7 @@ def build_synthetic_final_dataset(
             ),
         }
     )
+    return ensure_victim_object_age_months(df)
 
 def write_synthetic_final_dataset(
     path: Path | str | None = None,
