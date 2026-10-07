@@ -1,15 +1,16 @@
 """Политика порога τ для модели frequency (TARGET_FREQ).
 
-Подбор τ выполняется только в collect:
-- parity: max net_effect на Val → ``val_threshold_latest.json``;
-- prod refit: max net_effect на τ-cal (15% test) → ``prod_threshold_latest.json``.
+Collect может сохранить ориентиры:
+- parity Val → ``val_threshold_latest.json``;
+- research prod → ``prod_threshold_latest.json``.
 
-example.ipynb и prod-пайплайн **не подбирают** τ повторно: загрузка через
-``load_collect_val_threshold`` / ``load_collect_prod_threshold``.
+Сервисный τ для example / example_final — ``pick_prod_threshold_on_dsm``
+(raw DSM на τ-cal). Collect JSON опционален: без файла — placeholder ``0.5``.
 """
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,9 +25,13 @@ from querulus.fin_effect.calculator import (
 )
 from querulus.fin_effect.config import FinEffectConfig
 
+logger = logging.getLogger("querulus.fin_effect.threshold_policy")
+
 COLLECT_VAL_THRESHOLD_JSON = "val_threshold_latest.json"
 COLLECT_PROD_THRESHOLD_JSON = "prod_threshold_latest.json"
 DEFAULT_COLLECT_ARTIFACTS_DIR = PROJECT_ROOT / "data" / "processed" / "train_loop_new"
+# Placeholder на время fit / если collect JSON нет (сервисный τ — после DSM fit).
+DEFAULT_FIT_THRESHOLD: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -210,8 +215,9 @@ def load_collect_val_threshold(
     *,
     training: object | None = None,
     artifacts_dir: Path | str | None = None,
+    default: float = DEFAULT_FIT_THRESHOLD,
 ) -> float:
-    """Загрузить τ frequency из in-memory training или ``val_threshold_latest.json``."""
+    """Загрузить τ из training / ``val_threshold_latest.json``; иначе ``default``."""
     if training is not None:
         thr = getattr(training, "val_threshold", None)
         if thr is not None:
@@ -236,11 +242,14 @@ def load_collect_val_threshold(
             continue
         return float(raw)
 
-    tried = ", ".join(str(p) for p in seen)
-    raise FileNotFoundError(
-        "Нет val_threshold из collect. Запустите collect (блок B fit / C3) или положите "
-        f"{COLLECT_VAL_THRESHOLD_JSON} в train_loop_new. Пробовали: {tried}"
+    tried = ", ".join(str(p) for p in seen) if seen else "(нет кандидатов)"
+    logger.warning(
+        "Нет val_threshold из collect (%s) — placeholder τ=%.2f "
+        "(сервисный порог подбирается в example после DSM fit)",
+        tried,
+        default,
     )
+    return float(default)
 
 
 def collect_prod_threshold_path(
@@ -277,8 +286,9 @@ def load_collect_prod_threshold(
     project_root: Path | str | None = None,
     *,
     artifacts_dir: Path | str | None = None,
+    default: float = DEFAULT_FIT_THRESHOLD,
 ) -> float:
-    """Загрузить τ prod-refit из ``prod_threshold_latest.json``."""
+    """Загрузить τ из ``prod_threshold_latest.json``; иначе ``default`` (не сервисный)."""
     root = Path(project_root) if project_root is not None else PROJECT_ROOT
     candidates = [
         collect_prod_threshold_path(artifacts_dir),
@@ -298,8 +308,11 @@ def load_collect_prod_threshold(
             continue
         return float(raw)
 
-    tried = ", ".join(str(p) for p in seen)
-    raise FileNotFoundError(
-        "Нет prod_threshold из collect. Запустите collect (блок C3b) или положите "
-        f"{COLLECT_PROD_THRESHOLD_JSON} в train_loop_new. Пробовали: {tried}"
+    tried = ", ".join(str(p) for p in seen) if seen else "(нет кандидатов)"
+    logger.warning(
+        "Нет prod_threshold из collect (%s) — placeholder τ=%.2f "
+        "(сервисный порог — pick_prod_threshold_on_dsm)",
+        tried,
+        default,
     )
+    return float(default)

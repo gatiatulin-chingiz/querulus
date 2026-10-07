@@ -46,6 +46,7 @@ from querulus.fin_effect.config import ANALYTICS_RENAME_DICT, FinEffectConfig
 from querulus.fin_effect.threshold_policy import (
     COLLECT_PROD_THRESHOLD_JSON,
     COLLECT_VAL_THRESHOLD_JSON,
+    DEFAULT_FIT_THRESHOLD,
     ValThresholdResult,
     collect_prod_threshold_path,
     collect_val_threshold_path,
@@ -194,6 +195,7 @@ __all__ = [
     "ValThresholdResult",
     "COLLECT_PROD_THRESHOLD_JSON",
     "COLLECT_VAL_THRESHOLD_JSON",
+    "DEFAULT_FIT_THRESHOLD",
     "collect_prod_threshold_path",
     "collect_val_threshold_path",
     "load_collect_prod_threshold",

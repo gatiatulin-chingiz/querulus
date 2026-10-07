@@ -315,10 +315,19 @@ def load_example_thresholds(
     *,
     collect_training: object | None = None,
 ) -> ExampleThresholds:
-    """τ из collect (parity Val / research prod). Для сервиса — см. ``pick_prod_threshold_on_dsm``."""
+    """Опциональные τ из collect (или placeholder 0.5).
+
+    Сервисный порог — ``pick_prod_threshold_on_dsm`` после prod DSM fit.
+    Collect JSON больше не обязателен для запуска example / example_final.
+    """
     parity = load_collect_val_threshold(project_root, training=collect_training)
     prod = load_collect_prod_threshold(project_root)
-    logger.info("τ collect parity (Val) = %.2f; τ collect prod (τ-cal) = %.2f", parity, prod)
+    logger.info(
+        "τ fit-placeholder/collect parity=%.2f; prod=%.2f "
+        "(сервисный τ — после pick_prod_threshold_on_dsm)",
+        parity,
+        prod,
+    )
     return ExampleThresholds(parity=parity, prod=prod)
 
 

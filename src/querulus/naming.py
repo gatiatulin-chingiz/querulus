@@ -142,8 +142,12 @@ def resolve_dataset_partitions(
     data_date: str | None = None,
     dataset_version: str | None = None,
     pointer_path: Path | str | None = None,
-) -> dict[str, str]:
-    """Явные аргументы → иначе latest pointer → иначе сегодня / defaults."""
+) -> dict[str, str | None]:
+    """Партиции для **чтения**: явные args → pointer → иначе ``data_date=None``.
+
+    ``data_date=None`` значит «взять latest в Hive» (см. ``load_df_final``).
+    Для **записи** используйте ``dataset_partition_values`` (там default = сегодня).
+    """
     pointer = read_latest_dataset_pointer(pointer_path)
     return {
         PARTITION_MODEL_VERSION: model_version
@@ -151,7 +155,7 @@ def resolve_dataset_partitions(
         or MODEL_VERSION,
         PARTITION_DATA_DATE: data_date
         or (pointer or {}).get(PARTITION_DATA_DATE)
-        or today_data_date(),
+        or None,
         PARTITION_DATASET_VERSION: dataset_version
         or (pointer or {}).get(PARTITION_DATASET_VERSION)
         or DEFAULT_DATASET_VERSION,

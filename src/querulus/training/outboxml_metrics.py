@@ -1,13 +1,13 @@
 """Метрики DSM в стиле collect без правок OutBoxML и без modeldiagnostics.
 
 Встроенные classification-метрики ядра OutBoxML (F1 @ 0.5) не используем.
-Для frequency порог τ берётся из collect (``load_collect_val_threshold``) и
-передаётся в ``enrich_dsm_model_metrics`` / ``fit_dsm_classification``.
+Для frequency τ задаёт вызывающий код и передаёт в
+``enrich_dsm_model_metrics`` / ``fit_dsm_classification`` (в example —
+после ``pick_prod_threshold_on_dsm``; collect JSON опционален).
 
 Здесь — полный набор метрик как в train_loop/collect; результат пишется
 в ``result.metrics[*]['full']`` (см. ``enrich_dsm_model_metrics``).
-Classification: обязателен ``val_threshold``; значение 0.5 по умолчанию не
-применяется.
+Classification: обязателен ``val_threshold``.
 """
 from __future__ import annotations
 

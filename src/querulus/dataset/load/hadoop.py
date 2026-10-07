@@ -30,10 +30,14 @@ import pandas as pd
 
 from querulus.naming import (
     DEFAULT_APP_NAME,
+    DEFAULT_DATASET_VERSION,
     DEFAULT_HIVE_TABLE,
     DEFAULT_PARQUET_PATH,
     HIVE_PARTITION_COLUMNS,
     LEGACY_PARQUET_PATH,
+    PARTITION_DATA_DATE,
+    PARTITION_DATASET_VERSION,
+    PARTITION_MODEL_VERSION,
     dataset_partition_values,
     resolve_dataset_partitions,
     write_latest_dataset_pointer,
@@ -374,6 +378,68 @@ def hive_table_to_pandas(
         if own_spark and stop_spark:
             spark.stop()
 
+
+def parse_hive_partition_spec(spec: str) -> dict[str, str]:
+    """``model_version=2.0.0/data_date=2026-01-01/dataset_version=1`` → dict."""
+    out: dict[str, str] = {}
+    for part in str(spec).strip().split("/"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        out[key.strip()] = value.strip()
+    return out
+
+
+def pick_latest_hive_partition(
+    partitions: list[dict[str, str]],
+    *,
+    model_version: str,
+    dataset_version: str | None = None,
+) -> dict[str, str] | None:
+    """Максимальный ``data_date`` (ISO) среди партиций модели."""
+    matched = [
+        p
+        for p in partitions
+        if p.get(PARTITION_MODEL_VERSION) == model_version
+        and p.get(PARTITION_DATA_DATE)
+        and (
+            dataset_version is None
+            or p.get(PARTITION_DATASET_VERSION) == dataset_version
+        )
+    ]
+    if not matched:
+        return None
+    best = max(
+        matched,
+        key=lambda p: (
+            p[PARTITION_DATA_DATE],
+            p.get(PARTITION_DATASET_VERSION) or "",
+        ),
+    )
+    return {
+        PARTITION_MODEL_VERSION: best[PARTITION_MODEL_VERSION],
+        PARTITION_DATA_DATE: best[PARTITION_DATA_DATE],
+        PARTITION_DATASET_VERSION: best.get(PARTITION_DATASET_VERSION)
+        or DEFAULT_DATASET_VERSION,
+    }
+
+
+def list_hive_partitions(
+    table_name: str,
+    *,
+    spark: Any,
+) -> list[dict[str, str]]:
+    """``SHOW PARTITIONS`` → список dict партиций."""
+    rows = spark.sql(f"SHOW PARTITIONS {table_name}").collect()
+    specs: list[dict[str, str]] = []
+    for row in rows:
+        raw = row[0] if not hasattr(row, "asDict") else next(iter(row.asDict().values()))
+        parsed = parse_hive_partition_spec(str(raw))
+        if parsed:
+            specs.append(parsed)
+    return specs
+
+
 def load_df_final(
     *,
     hive_table: str = DEFAULT_HIVE_TABLE,
@@ -389,52 +455,139 @@ def load_df_final(
     data_date: str | None = None,
     dataset_version: str | None = None,
 ) -> tuple[pd.DataFrame, str]:
-    """Читает итоговый df: Hive (партиция) → при сбое локальный parquet."""
+    """Читает итоговый df: Hive (pointer / latest) → локальный parquet.
+
+    Чтение ``data_date``: явный arg → pointer JSON → **latest partition в Hive**
+    (не «сегодня»). ``today_data_date`` только при записи через ``save_df_final``.
+    """
     path = Path(parquet_path) if parquet_path is not None else DEFAULT_PARQUET_PATH
-    parts = resolve_dataset_partitions(
+    resolved_parts = resolve_dataset_partitions(
         model_version=model_version,
         data_date=data_date,
         dataset_version=dataset_version,
     )
+    explicit_data_date = data_date is not None
     hive_error: str | None = None
     if prefer_hive:
+        own_spark = spark is None
+        active_spark = spark
         try:
-            pdf = hive_table_to_pandas(
-                hive_table,
-                spark=spark,
-                stop_spark=stop_spark,
-                app_name=app_name,
-                partition_filters=parts,
-            )
-            if pdf is None or len(pdf) == 0:
-                hive_error = (
-                    "EmptyDataFrame: Hive вернул 0 строк для "
-                    f"filters={parts}"
+            active_spark = active_spark or build_spark_session(app_name=app_name)
+            attempts: list[dict[str, str]] = []
+            if resolved_parts.get(PARTITION_DATA_DATE):
+                attempts.append(
+                    {
+                        PARTITION_MODEL_VERSION: str(
+                            resolved_parts[PARTITION_MODEL_VERSION]
+                        ),
+                        PARTITION_DATA_DATE: str(resolved_parts[PARTITION_DATA_DATE]),
+                        PARTITION_DATASET_VERSION: str(
+                            resolved_parts[PARTITION_DATASET_VERSION]
+                        ),
+                    }
                 )
-                logger.warning(
-                    "%s — fallback на parquet: %s (кэш не перезаписываем)",
-                    hive_error,
-                    path,
+            # latest, если даты нет или pointer/сегодняшняя попытка пуста
+            try_latest = not explicit_data_date
+            pdf: pd.DataFrame | None = None
+            used_parts: dict[str, str] | None = None
+            empty_notes: list[str] = []
+
+            for parts in attempts:
+                pdf = hive_table_to_pandas(
+                    hive_table,
+                    spark=active_spark,
+                    stop_spark=False,
+                    app_name=app_name,
+                    partition_filters=parts,
                 )
-                print(
-                    f"[dataset] Hive пуст ({parts}) → локальный parquet, "
-                    "кэш не затираем"
-                )
-            else:
+                if pdf is not None and len(pdf) > 0:
+                    used_parts = parts
+                    break
+                empty_notes.append(f"empty filters={parts}")
+                pdf = None
+
+            if pdf is None and try_latest:
+                try:
+                    listed = list_hive_partitions(hive_table, spark=active_spark)
+                    latest = pick_latest_hive_partition(
+                        listed,
+                        model_version=str(resolved_parts[PARTITION_MODEL_VERSION]),
+                        dataset_version=str(
+                            resolved_parts[PARTITION_DATASET_VERSION]
+                        ),
+                    )
+                    if latest is None:
+                        # без фильтра dataset_version — любая версия датасета
+                        latest = pick_latest_hive_partition(
+                            listed,
+                            model_version=str(
+                                resolved_parts[PARTITION_MODEL_VERSION]
+                            ),
+                            dataset_version=None,
+                        )
+                    if latest is not None:
+                        if attempts and latest != attempts[0]:
+                            logger.warning(
+                                "Hive партиция %s пуста/не задана — берём latest %s",
+                                attempts[0] if attempts else None,
+                                latest,
+                            )
+                            print(
+                                f"[dataset] Hive: pointer/дата пусты → latest "
+                                f"{latest}"
+                            )
+                        pdf = hive_table_to_pandas(
+                            hive_table,
+                            spark=active_spark,
+                            stop_spark=False,
+                            app_name=app_name,
+                            partition_filters=latest,
+                        )
+                        if pdf is not None and len(pdf) > 0:
+                            used_parts = latest
+                        else:
+                            empty_notes.append(f"empty latest={latest}")
+                            pdf = None
+                    else:
+                        empty_notes.append(
+                            "no partitions for "
+                            f"model_version={resolved_parts[PARTITION_MODEL_VERSION]}"
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    empty_notes.append(
+                        f"SHOW PARTITIONS failed: {type(exc).__name__}: {exc}"
+                    )
+                    logger.warning("Hive latest partition lookup failed: %s", exc)
+
+            if pdf is not None and used_parts is not None and len(pdf) > 0:
                 source = (
                     f"hive:{hive_table}"
-                    f"|model_version={parts['model_version']}"
-                    f"|data_date={parts['data_date']}"
-                    f"|dataset_version={parts['dataset_version']}"
+                    f"|model_version={used_parts[PARTITION_MODEL_VERSION]}"
+                    f"|data_date={used_parts[PARTITION_DATA_DATE]}"
+                    f"|dataset_version={used_parts[PARTITION_DATASET_VERSION]}"
                 )
                 logger.info("dataset source=%s shape=%s", source, pdf.shape)
                 print("=" * 72)
                 print("ИСТОЧНИК ДАТАСЕТА: Hive (Hadoop)")
                 print(f"  таблица: {hive_table}")
-                print(f"  партиции: {parts}")
+                print(f"  партиции: {used_parts}")
                 print(f"  shape:   {pdf.shape}")
                 print("=" * 72)
                 return pdf, source
+
+            hive_error = (
+                "EmptyDataFrame: Hive без данных; "
+                + "; ".join(empty_notes[:3])
+            )
+            logger.warning(
+                "%s — fallback на parquet: %s (кэш не перезаписываем)",
+                hive_error,
+                path,
+            )
+            print(
+                f"[dataset] Hive пуст → локальный parquet, кэш не затираем "
+                f"({empty_notes[0] if empty_notes else hive_error})"
+            )
         except Exception as exc:  # noqa: BLE001
             hive_error = f"{type(exc).__name__}: {exc}"
             logger.warning(
@@ -442,6 +595,12 @@ def load_df_final(
                 hive_error.splitlines()[0][:200],
                 path,
             )
+        finally:
+            if own_spark and stop_spark and active_spark is not None:
+                try:
+                    active_spark.stop()
+                except Exception:  # noqa: BLE001
+                    pass
 
     candidates: list[Path] = [path]
     if fallback_parquet_path is not None:
