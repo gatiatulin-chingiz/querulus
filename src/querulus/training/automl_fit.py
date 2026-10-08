@@ -1,8 +1,9 @@
-"""Fit CF+RG через AutoMLManager (без FS/HPO — уже в collect JSON)."""
+"""Fit CF+RG через AutoMLManager.update_models (без FS/HPO — уже в collect JSON)."""
 from __future__ import annotations
 
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_AUTOML_CONFIG = PROJECT_ROOT / "configs" / "automl_querulus.json"
 _LOCAL_MLRUNS = PROJECT_ROOT / "data" / "processed" / "mlruns"
+SERVICE_ENSEMBLE_PICKLE = "querulus_ansamble.pickle"
+
 
 def _make_extractor(data: pd.DataFrame) -> Any:
 
@@ -41,10 +44,12 @@ def _make_extractor(data: pd.DataFrame) -> Any:
 
     return _FrameExtractor(data)
 
+
 def _set_tracking_uri(external_config: Any, uri: str) -> None:
     if hasattr(external_config, "mlflow_tracking_uri"):
         external_config.mlflow_tracking_uri = uri
     os.environ["MLFLOW_TRACKING_URI"] = uri
+
 
 def _use_local_mlflow(external_config: Any, *, reason: str) -> None:
     """File store: AutoMLManager.__init__ всегда зовёт set_experiment."""
@@ -52,6 +57,7 @@ def _use_local_mlflow(external_config: Any, *, reason: str) -> None:
     uri = _LOCAL_MLRUNS.resolve().as_uri()
     _set_tracking_uri(external_config, uri)
     logger.warning("MLflow → local %s (%s)", uri, reason)
+
 
 def _prepare_mlflow_for_automl(external_config: Any, *, log_mlflow: bool) -> None:
     """До ``AutoMLManager(...)``: без Keycloak remote URI падает на HTML login.
@@ -89,6 +95,7 @@ def _prepare_mlflow_for_automl(external_config: Any, *, log_mlflow: bool) -> Non
         else:
             raise
 
+
 def create_querulus_automl(
     data: pd.DataFrame,
     models_config: str | Path,
@@ -102,7 +109,7 @@ def create_querulus_automl(
     """AutoMLManager с extractor=df; runtime-патчи Querulus через prepare_datasets_from_config."""
 
     config_path = str(models_config)
-    # side-effect: ensure_outboxml_runtime_patches (severity X/y + default replace)
+    # side-effect: ensure_outboxml_runtime_patches (parity X/y + default replace)
     prepare_datasets_from_config(config_path)
 
     automl_cfg = auto_ml_config or DEFAULT_AUTOML_CONFIG
@@ -120,6 +127,29 @@ def create_querulus_automl(
         hp_tune=hp_tune,
     )
 
+
+def _copy_stable_ensemble_pickle(
+    automl: Any,
+    *,
+    stable_name: str = SERVICE_ENSEMBLE_PICKLE,
+) -> Path | None:
+    """Копия timestamped AutoML pickle → ``querulus_ansamble.pickle`` для shadow."""
+    stamped = getattr(getattr(automl, "automl_results", None), "result_pickle_name", None)
+    if not stamped or stamped == "No pickle":
+        logger.warning("Нет result_pickle_name после update_models — stable copy skip")
+        return None
+    results_path = Path(automl._external_config.results_path)
+    src = results_path / stamped
+    if not src.is_file():
+        logger.warning("AutoML pickle не найден: %s", src)
+        return None
+    dst = results_path / stable_name
+    shutil.copy2(src, dst)
+    logger.info("AutoML pickle: %s → stable %s", src.name, dst.name)
+    print(f"=== AutoML models saved ===\n  {src}\n  stable: {dst}")
+    return dst
+
+
 def fit_automl_bundle(
     data: pd.DataFrame,
     models_config: str | Path,
@@ -131,20 +161,22 @@ def fit_automl_bundle(
     send_mail: bool = False,
     log_mlflow: bool = False,
     enrich_metrics: bool = True,
+    results_dir: Path | str | None = None,
 ) -> tuple[Any, Any]:
-    """Обучить CF+RG через AutoMLManager (без записи pickle).
+    """Обучить CF+RG через ``AutoMLManager.update_models`` (fit + pickle + review).
 
-    Pickle для сервиса — ``save_prod_models_via_automl`` после sidecar
-    (``df_for_service`` / ``metadata.json``). ``retro=False``, ``hp_tune=False``.
-    ``send_mail`` / ``log_mlflow`` сохранены для API-совместимости; pickle/mail
-    не через ``update_models`` (чтобы sidecar успел записаться раньше).
+    ``retro=False``, ``hp_tune=False`` — FS/HPO уже в collect JSON.
+    ``load_dataset`` внутри ``update_models`` — отдельно не вызываем.
+    Pickle → ``results_dir`` или ``integration/results``; плюс
+    ``querulus_ansamble.pickle`` для shadow.
     Returns ``(automl_manager, None)``.
     """
-    if send_mail or log_mlflow:
-        logger.info(
-            "fit_automl_bundle: send_mail/log_mlflow игнорируются на fit; "
-            "pickle — save_prod_models_via_automl после metadata/df_for_service"
-        )
+    out = Path(results_dir) if results_dir is not None else (
+        PROJECT_ROOT / "integration" / "results"
+    )
+    out.mkdir(parents=True, exist_ok=True)
+    external_config.results_path = out
+
     automl = create_querulus_automl(
         data,
         models_config,
@@ -152,24 +184,29 @@ def fit_automl_bundle(
         auto_ml_config=auto_ml_config,
         retro=False,
         hp_tune=False,
-        log_mlflow=False,
+        log_mlflow=log_mlflow,
     )
 
-    automl.load_dataset()
-    automl.fit_models()
+    automl.update_models(send_mail=send_mail)
 
-    for res in automl.get_result().values():
+    results = automl.get_result()
+    if not results:
+        raise RuntimeError(
+            "update_models не заполнил get_result() — смотри log / email error"
+        )
+
+    for res in results.values():
         res.model = ensure_predictable_model(res.model)
 
     if enrich_metrics:
-        if threshold is not None and cf_name in automl.get_result():
+        if threshold is not None and cf_name in results:
             enrich_dsm_model_metrics(
                 automl,
                 cf_name,
                 task_type="classification",
                 val_threshold=threshold,
             )
-        for name in automl.get_result():
+        for name in results:
             if name == cf_name:
                 continue
             try:
@@ -182,8 +219,10 @@ def fit_automl_bundle(
             except Exception as exc:
                 logger.warning("enrich metrics %s skip: %s", name, exc)
 
+    _copy_stable_ensemble_pickle(automl)
+
     logger.info(
-        "AutoML fit done (no pickle yet): models=%s",
-        list(automl.get_result()),
+        "AutoML update_models done: models=%s",
+        list(results),
     )
     return automl, None

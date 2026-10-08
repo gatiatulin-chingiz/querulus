@@ -142,9 +142,9 @@ SERVICE_ENSEMBLE_PICKLE = "querulus_ansamble.pickle"
 
 @dataclass
 class ProdExportResult:
-    """Sidecar для сервиса (без записи моделей — их пишет AutoML)."""
+    """Артефакты сервиса: meta (± df_for_service). Модели — update_models."""
 
-    service_df_path: Path
+    service_df_path: Path | None
     meta_path: Path
     ensemble_pkl: Path | None
     dq_bounds_path: Path | None
@@ -402,6 +402,7 @@ def fit_parity_models(
     use_automl: bool = True,
     send_mail: bool = False,
     log_mlflow: bool = False,
+    results_dir: Path | str | None = None,
 ) -> ExampleDsmBundle:
     """Parity: CF+RG из ``config_parity.json`` (по умолчанию через AutoMLManager)."""
     if use_automl:
@@ -413,6 +414,7 @@ def fit_parity_models(
             threshold=threshold,
             send_mail=send_mail,
             log_mlflow=log_mlflow,
+            results_dir=results_dir,
         )
         return ExampleDsmBundle(dsm_cf=dsm, dsm_rg=dsm)
 
@@ -432,6 +434,7 @@ def fit_prod_models(
     use_automl: bool = True,
     send_mail: bool = False,
     log_mlflow: bool = False,
+    results_dir: Path | str | None = None,
 ) -> ExampleDsmBundle:
     """Prod-refit: CF+RG из ``config_prod.json`` (AutoMLManager; MLflow опционально)."""
     base = parity or ExampleDsmBundle(dsm_cf=None, dsm_rg=None)
@@ -444,6 +447,7 @@ def fit_prod_models(
             threshold=threshold,
             send_mail=send_mail,
             log_mlflow=log_mlflow,
+            results_dir=results_dir,
         )
         return ExampleDsmBundle(
             dsm_cf=base.dsm_cf,
@@ -1128,6 +1132,29 @@ def run_prod_plots_and_email(
     return ProdPlotsResult(zip_path=zip_path, rg_calibrator=sev_cal)
 
 
+def save_df_for_service(
+    models: ExampleDsmBundle,
+    bundle: ExampleDatasetBundle,
+    paths: ExamplePaths,
+) -> Path:
+    """``df_for_service.parquet``: датасет + ``preds_cf`` / ``preds_rg`` (для vector_checker)."""
+    if models.dsm_cf_prod is None or models.dsm_rg_prod is None:
+        raise ValueError("Нужны dsm_cf_prod / dsm_rg_prod")
+
+    paths.results_dir.mkdir(parents=True, exist_ok=True)
+    df_service = bundle.df.copy()
+    df_service["preds_cf"] = predict_cf(models.dsm_cf_prod, bundle.cf_name, bundle.df)
+    df_service["preds_rg"] = predict_rg(models.dsm_rg_prod, bundle.rg_name, bundle.df)
+    service_df_path = paths.results_dir / "df_for_service.parquet"
+    df_service.to_parquet(service_df_path, index=True)
+    print("=== df_for_service ===")
+    print(f"  {service_df_path}")
+    print(f"  shape: {df_service.shape[0]:,} × {df_service.shape[1]}")
+    print(f"  preds_cf NA: {df_service['preds_cf'].isna().mean():.1%}")
+    print(f"  preds_rg NA: {df_service['preds_rg'].isna().mean():.1%}")
+    return service_df_path
+
+
 def export_prod_service_artifacts(
     models: ExampleDsmBundle,
     bundle: ExampleDatasetBundle,
@@ -1136,23 +1163,17 @@ def export_prod_service_artifacts(
     thresholds: ExampleThresholds,
     ensemble_pickle_name: str = SERVICE_ENSEMBLE_PICKLE,
 ) -> ProdExportResult:
-    """Sidecar для сервиса: ``df_for_service.parquet`` + ``metadata.json``.
+    """``metadata.json`` для shadow (``best_threshold`` = τ).
 
-    Модели **не** пишет — их сохраняет ``save_prod_models_via_automl`` (AutoML).
-    ``best_threshold`` в meta — τ для shadow. DQ clip — в OutBoxML feature.clip.
+    Модели пишет ``update_models`` в ``fit_automl_bundle``.
+    Parquet — отдельно через ``save_df_for_service``.
     """
     if models.dsm_cf_prod is None or models.dsm_rg_prod is None:
         raise ValueError("Нужны dsm_cf_prod / dsm_rg_prod")
 
     paths.results_dir.mkdir(parents=True, exist_ok=True)
-    dq_bounds_path: Path | None = None
     ensemble_pkl = paths.results_dir / ensemble_pickle_name
-
-    df_service = bundle.df.copy()
-    df_service["preds_cf"] = predict_cf(models.dsm_cf_prod, bundle.cf_name, bundle.df)
-    df_service["preds_rg"] = predict_rg(models.dsm_rg_prod, bundle.rg_name, bundle.df)
     service_df_path = paths.results_dir / "df_for_service.parquet"
-    df_service.to_parquet(service_df_path, index=True)
 
     periods = bundle.periods
     meta_path = paths.results_dir / "metadata.json"
@@ -1183,7 +1204,7 @@ def export_prod_service_artifacts(
         "calibration": None,
         "artifacts": {
             "ensemble": str(ensemble_pkl),
-            "ensemble_note": "пишет AutoML save_results → копия "
+            "ensemble_note": "пишет AutoML update_models → копия "
             f"{ensemble_pickle_name}",
             "dq_bounds": None,
             "dq_clip_in_outboxml_configs": True,
@@ -1201,67 +1222,15 @@ def export_prod_service_artifacts(
         encoding="utf-8",
     )
 
-    print("=== Sidecar для сервиса (до AutoML pickle) ===")
-    print(f"  df_for_service : {service_df_path}")
-    print(f"    shape        : {df_service.shape[0]:,} × {df_service.shape[1]}")
-    print(f"    preds_cf NA  : {df_service['preds_cf'].isna().mean():.1%}")
-    print(f"    preds_rg NA  : {df_service['preds_rg'].isna().mean():.1%}")
-    print(f"  metadata.json  : {meta_path}")
-    print(f"    best_threshold (τ): {meta['best_threshold']:.2f}")
-    print(f"    ensemble (ожидается): {ensemble_pkl}")
-    print("=== Sidecar готов — дальше save_prod_models_via_automl ===")
+    print("=== metadata.json (shadow τ) ===")
+    print(f"  {meta_path}")
+    print(f"  best_threshold (τ): {meta['best_threshold']:.2f}")
+    print(f"  ensemble: {ensemble_pkl}")
 
     return ProdExportResult(
-        service_df_path=service_df_path,
+        service_df_path=service_df_path if service_df_path.is_file() else None,
         meta_path=meta_path,
         ensemble_pkl=ensemble_pkl if ensemble_pkl.is_file() else None,
-        dq_bounds_path=dq_bounds_path,
+        dq_bounds_path=None,
         meta=meta,
     )
-
-
-def save_prod_models_via_automl(
-    models: ExampleDsmBundle,
-    *,
-    results_dir: Path | str | None = None,
-    stable_ensemble_name: str = SERVICE_ENSEMBLE_PICKLE,
-) -> Path:
-    """Сохранить CF+RG через ``AutoMLManager.save_results`` + стабильная копия.
-
-    Пишет timestamped pickle AutoML и копирует в ``querulus_ansamble.pickle``
-    для shadow. Вызывать **после** ``export_prod_service_artifacts``.
-    """
-    import shutil
-
-    automl = models.dsm_cf_prod
-    if automl is None:
-        raise ValueError("Нужен dsm_cf_prod (AutoMLManager после fit_prod_models)")
-    if not hasattr(automl, "save_results"):
-        raise TypeError(
-            f"dsm_cf_prod={type(automl).__name__} без save_results — нужен AutoMLManager"
-        )
-    results = automl.get_result()
-    if not results:
-        raise ValueError("Пустой get_result() — нечего сохранять")
-
-    if results_dir is not None:
-        out = Path(results_dir)
-        out.mkdir(parents=True, exist_ok=True)
-        automl._external_config.results_path = out
-
-    for res in results.values():
-        res.model = ensure_predictable_model(res.model)
-
-    automl.save_results(results)
-    results_path = Path(automl._external_config.results_path)
-    stamped = getattr(automl.automl_results, "result_pickle_name", None)
-    if not stamped:
-        raise RuntimeError("AutoML save_results не выставил result_pickle_name")
-    src = results_path / stamped
-    if not src.is_file():
-        raise FileNotFoundError(f"AutoML pickle не найден: {src}")
-    dst = results_path / stable_ensemble_name
-    shutil.copy2(src, dst)
-    logger.info("AutoML pickle: %s → stable %s", src.name, dst.name)
-    print(f"=== AutoML models saved ===\n  {src}\n  stable: {dst}")
-    return dst

@@ -62,10 +62,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         ".example_pipeline",
         "export_prod_service_artifacts",
     ),
-    "save_prod_models_via_automl": (
-        ".example_pipeline",
-        "save_prod_models_via_automl",
-    ),
+    "save_df_for_service": (".example_pipeline", "save_df_for_service"),
     "SERVICE_ENSEMBLE_PICKLE": (".example_pipeline", "SERVICE_ENSEMBLE_PICKLE"),
     "create_querulus_automl": (".automl_fit", "create_querulus_automl"),
     "fit_automl_bundle": (".automl_fit", "fit_automl_bundle"),

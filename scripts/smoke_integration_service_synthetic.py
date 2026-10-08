@@ -67,7 +67,7 @@ from querulus.training.example_pipeline import (  # noqa: E402
     ExamplePaths,
     ExampleThresholds,
     export_prod_service_artifacts,
-    save_prod_models_via_automl,
+    save_df_for_service,
 )
 from querulus.training.outboxml_metrics import predict_dsm_series  # noqa: E402
 
@@ -276,6 +276,9 @@ def main() -> None:
     train_mask = df.index.isin(periods["splits"].train.union(periods["splits"].val))
 
     print("=== [3] prod fit (2.0.0) + export ===")
+    # Плоский integration/results/ — pickle из update_models + meta/df.
+    results_dir = INTEGRATION / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
     dsm_prod, _ = fit_automl_bundle(
         df,
         built["prod_path"],
@@ -284,10 +287,8 @@ def main() -> None:
         threshold=0.37,
         send_mail=False,
         log_mlflow=False,
+        results_dir=results_dir,
     )
-    # Плоский integration/results/ (sidecar + AutoML pickle рядом с legacy).
-    results_dir = INTEGRATION / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
     paths = ExamplePaths(
         project_root=PROJECT_ROOT,
         results_dir=results_dir,
@@ -312,18 +313,16 @@ def main() -> None:
         dsm_cf_prod=dsm_prod,
         dsm_rg_prod=dsm_prod,
     )
+    # Pickle уже из update_models (+ stable copy в fit_automl_bundle).
+    service_df = save_df_for_service(models, bundle, paths)
     export = export_prod_service_artifacts(
         models,
         bundle,
         paths,
         thresholds=thresholds,
     )
-    ensemble_pkl = save_prod_models_via_automl(
-        models,
-        results_dir=results_dir,
-    )
     _write_dq_bounds(df, results_dir / "dq_bounds.json")
-    print("export", export.meta_path, "ensemble", ensemble_pkl)
+    print("df_for_service", service_df, "meta", export.meta_path)
 
     # Эталонные preds на holdout test_prod (как example_final)
     test_prod_idx = periods["prod_holdout_idx"]
