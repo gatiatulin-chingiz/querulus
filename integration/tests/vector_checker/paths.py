@@ -17,6 +17,7 @@ FIXTURES_DIR = PACKAGE_DIR / "fixtures" / "synthetic"
 
 DEFAULT_QUERY_PATH = INTEGRATION_DIR / "Сутяжность.txt"
 DEFAULT_QUERY_OUT = WORK_DIR / "Сутяжность_for_1c.txt"
+DEFAULT_SAMPLE_META = WORK_DIR / "sampled_losses.json"
 DEFAULT_DF_CANDIDATES = (
     INTEGRATION_DIR / "results" / "df_for_service.parquet",
     QUERULUS_ROOT / "data" / "processed" / "df_for_service.parquet",

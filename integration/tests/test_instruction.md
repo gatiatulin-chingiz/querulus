@@ -72,10 +72,13 @@ python -m unittest discover -s integration/tests -p "*tests.py" -v
 ```bash
 # из examples/querulus
 python -m integration.tests.vector_checker prepare
+# выборка N убытков с фиксированным seed (пишет work/sampled_losses.json)
+python -m integration.tests.vector_checker prepare -n 50 --seed 42
 python -m integration.tests.vector_checker compare --excel integration/tests/vector_checker/work/excel/export.xlsx
 
 # синтетический smoke (без 1С)
 python -m integration.tests.vector_checker demo
+python -m integration.tests.vector_checker demo -n 3 --seed 7
 ```
 
 Отчёты: `integration/tests/vector_checker/work/reports/`.
