@@ -24,7 +24,7 @@ outboxml_preds_rg_col = env_reader.str("OUTBOXML_PREDS_RG_COL", "preds_rg")
 
 # --- Shadow 2.0.0 (second_ only; # CUTOVER → main_) ---
 SHADOW_NEW_AS_SECOND = True
-shadow_models_subdir = env_reader.str("SHADOW_MODELS_SUBDIR", "querulus/2.0.0")
+shadow_models_subdir = env_reader.str("SHADOW_MODELS_SUBDIR", "")
 shadow_model_group = env_reader.str("SHADOW_MODEL_GROUP", "querulus_ansamble")
 shadow_meta_filename = env_reader.str("SHADOW_META_FILENAME", "metadata.json")
 shadow_dq_bounds_filename = env_reader.str("SHADOW_DQ_BOUNDS_FILENAME", "dq_bounds.json")

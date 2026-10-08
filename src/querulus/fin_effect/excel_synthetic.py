@@ -61,6 +61,12 @@ def build_synthetic_claims_excel(
             ),
             "Выплата по модели": payout.astype(int),
             "Заключено соглашение": agreement.astype(int),
+            # вызов чаще у model; часть control тоже «вызывали» (ответ −100)
+            "ВызовМодельСутяжность": np.where(
+                result != RESULT_OUT_OF_MODEL,
+                1,
+                (rng.random(n_rows) < 0.35).astype(int),
+            ),
             "Дата вызова модели сутяжности": today - pd.to_timedelta(
                 rng.integers(0, 120, n_rows),
                 unit="D",

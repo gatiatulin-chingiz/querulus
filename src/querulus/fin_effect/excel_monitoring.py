@@ -18,6 +18,8 @@ import os
 
 from querulus.fin_effect.excel_explore import (
     ALLOWED_REFUND_FORM_NEEDLES,
+    INCIDENT_COURT_COL,
+    INCIDENT_FU_COL,
     VITRINA_TABLE_DEFAULT,
     _to_numeric,
     analytics_base_mask,
@@ -28,8 +30,6 @@ from querulus.fin_effect.excel_explore import (
 from querulus.fin_effect.excel_synthetic import build_synthetic_claims_excel
 from querulus.fin_effect.monitoring_analytics import (
     agreement_mask,
-    compare_path_shares,
-    filial_path_shares,
     shares_as_percent,
 )
 
@@ -169,6 +169,8 @@ class MonitoringEffectResult:
     recommended_extra_summary: pd.DataFrame
     payment_descriptives: pd.DataFrame
     sample_size_guidance: pd.DataFrame
+    agreement_funnel: pd.DataFrame
+    agreement_funnel_money: pd.DataFrame
     contract: dict[str, str]
     t_calc: pd.Timestamp
     discount_rate: float
@@ -890,11 +892,40 @@ def _prepare_monitoring_contract(
             "Нет колонки «Иные затраты» — Σ выплаты по модели в описании = 0."
         )
     work["_agreement"] = agreement_mask(work)
+    call_col = resolve_column(work, "model_call")
+    if call_col is not None:
+        # после схлопа 0/1 может стать суммой по убыткам — любой вызов = True
+        work["_model_called"] = _to_numeric(work[call_col]).fillna(0.0).gt(0)
+    else:
+        # нет флага вызова: считаем «вызывали» = назначение в модель (Result 0/1)
+        work["_model_called"] = work["_group"].eq("model")
+        warnings.append(
+            "Нет колонки вызова модели — в воронке «вызывали» = Result∈{0,1}."
+        )
     for key, column in psr_columns.items():
         work[f"_psr_{key}"] = _to_numeric(work[column]).fillna(0.0).clip(lower=0.0)
     work["_observed_psr"] = work[
         ["_psr_pretension", "_psr_fu", "_psr_court"]
     ].sum(axis=1)
+    # Доли путей: на «первичных» строках суммы ПСР обычно 0 (они на
+    # претензионных/судебных убытках). Для shares — инцидентные флаги.
+    pret_flag_col = resolve_column(work, "pretension")
+    if pret_flag_col is not None:
+        work["_path_pretension"] = _to_numeric(work[pret_flag_col]).fillna(0).gt(0)
+    else:
+        work["_path_pretension"] = work["_psr_pretension"].gt(0)
+        warnings.append(
+            "Нет флага ЕстьПретензия* — доля претензий по сумме выплаты "
+            "(на первичных строках часто 0)."
+        )
+    if INCIDENT_FU_COL in work.columns:
+        work["_path_fu"] = _to_numeric(work[INCIDENT_FU_COL]).fillna(0).gt(0)
+    else:
+        work["_path_fu"] = work["_psr_fu"].gt(0)
+    if INCIDENT_COURT_COL in work.columns:
+        work["_path_court"] = _to_numeric(work[INCIDENT_COURT_COL]).fillna(0).gt(0)
+    else:
+        work["_path_court"] = work["_psr_court"].gt(0)
 
     call_dates = pd.to_datetime(work[call_date_col], errors="coerce")
     application_dates = pd.to_datetime(work[application_col], errors="coerce")
@@ -1204,6 +1235,262 @@ def _payment_descriptives(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _itt_path_shares(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Доли и количества соглашений / претензий / ФУ / суда на ITT-инцидентах."""
+    agr = frame["_agreement"].fillna(False).astype(bool)
+    pret = (
+        frame["_path_pretension"]
+        if "_path_pretension" in frame.columns
+        else frame["_psr_pretension"].fillna(0).gt(0)
+    ).fillna(False).astype(bool)
+    fu = (
+        frame["_path_fu"]
+        if "_path_fu" in frame.columns
+        else frame["_psr_fu"].fillna(0).gt(0)
+    ).fillna(False).astype(bool)
+    court = (
+        frame["_path_court"]
+        if "_path_court" in frame.columns
+        else frame["_psr_court"].fillna(0).gt(0)
+    ).fillna(False).astype(bool)
+
+    def _row(label: str, mask: pd.Series) -> dict[str, Any]:
+        n = int(mask.sum())
+        return {
+            "segment": label,
+            "n": n,
+            "n_agreement": int(agr[mask].sum()) if n else 0,
+            "n_pretension": int(pret[mask].sum()) if n else 0,
+            "n_fu": int(fu[mask].sum()) if n else 0,
+            "n_court": int(court[mask].sum()) if n else 0,
+            "agreement_share": float(agr[mask].mean()) if n else np.nan,
+            "pretension_share": float(pret[mask].mean()) if n else np.nan,
+            "fu_incident_share": float(fu[mask].mean()) if n else np.nan,
+            "court_incident_share": float(court[mask].mean()) if n else np.nan,
+        }
+
+    rows = [
+        _row("control", frame["_group"].eq("control")),
+        _row("model", frame["_group"].eq("model")),
+    ]
+    by_label = {row["segment"]: row for row in rows}
+    a, b = by_label["model"], by_label["control"]
+    lift_pp: dict[str, Any] = {
+        "segment": "lift_pp (model - control)",
+        "n": np.nan,
+        "n_agreement": np.nan,
+        "n_pretension": np.nan,
+        "n_fu": np.nan,
+        "n_court": np.nan,
+    }
+    lift_rel: dict[str, Any] = {
+        "segment": "lift_rel (model / control - 1)",
+        "n": np.nan,
+        "n_agreement": np.nan,
+        "n_pretension": np.nan,
+        "n_fu": np.nan,
+        "n_court": np.nan,
+    }
+    for col in (
+        "agreement_share",
+        "pretension_share",
+        "fu_incident_share",
+        "court_incident_share",
+    ):
+        xa, xb = a[col], b[col]
+        lift_pp[col] = (
+            float(xa - xb) if pd.notna(xa) and pd.notna(xb) else np.nan
+        )
+        lift_rel[col] = (
+            float(xa / xb - 1.0)
+            if pd.notna(xa) and pd.notna(xb) and xb
+            else np.nan
+        )
+    path = pd.DataFrame(rows + [lift_pp, lift_rel])
+
+    filial_rows: list[dict[str, Any]] = []
+    for filial, part in frame.groupby("_filial", observed=True):
+        agr_f = part["_agreement"].fillna(False).astype(bool)
+        pret_f = (
+            part["_path_pretension"]
+            if "_path_pretension" in part.columns
+            else part["_psr_pretension"].fillna(0).gt(0)
+        ).fillna(False).astype(bool)
+        fu_f = (
+            part["_path_fu"]
+            if "_path_fu" in part.columns
+            else part["_psr_fu"].fillna(0).gt(0)
+        ).fillna(False).astype(bool)
+        court_f = (
+            part["_path_court"]
+            if "_path_court" in part.columns
+            else part["_psr_court"].fillna(0).gt(0)
+        ).fillna(False).astype(bool)
+        for label in ("control", "model"):
+            mask = part["_group"].eq(label)
+            n = int(mask.sum())
+            filial_rows.append(
+                {
+                    "filial": filial,
+                    "segment": label,
+                    "n": n,
+                    "n_agreement": int(agr_f[mask].sum()) if n else 0,
+                    "n_pretension": int(pret_f[mask].sum()) if n else 0,
+                    "n_fu": int(fu_f[mask].sum()) if n else 0,
+                    "n_court": int(court_f[mask].sum()) if n else 0,
+                    "agreement_share": float(agr_f[mask].mean()) if n else np.nan,
+                    "pretension_share": float(pret_f[mask].mean()) if n else np.nan,
+                    "fu_incident_share": float(fu_f[mask].mean()) if n else np.nan,
+                    "court_incident_share": float(court_f[mask].mean()) if n else np.nan,
+                }
+            )
+    filial = pd.DataFrame(filial_rows)
+    if not filial.empty:
+        filial["segment"] = pd.Categorical(
+            filial["segment"], categories=["control", "model"], ordered=True
+        )
+        filial = filial.sort_values(["filial", "segment"]).reset_index(drop=True)
+    return path, filial
+
+
+def _money_cell(part: pd.DataFrame) -> dict[str, float]:
+    """Средние/суммы выплат и использование рекомендации на срезе."""
+    n = len(part)
+    if n == 0:
+        return {
+            "mean_paid": np.nan,
+            "sum_paid": 0.0,
+            "sum_recommended": 0.0,
+            "sum_model_payout": 0.0,
+            "sum_recommended_used": 0.0,
+            "sum_over_recommended": 0.0,
+        }
+    paid = part["_paid_to_date"]
+    rec = part["_recommended_extra"]
+    payout = part["_model_payout_amount"]
+    used = np.minimum(payout.to_numpy(dtype=float), rec.to_numpy(dtype=float))
+    over = np.maximum(
+        payout.to_numpy(dtype=float) - rec.to_numpy(dtype=float), 0.0
+    )
+    return {
+        "mean_paid": float(paid.mean()),
+        "sum_paid": float(paid.sum()),
+        "sum_recommended": float(rec.sum()),
+        "sum_model_payout": float(payout.sum()),
+        "sum_recommended_used": float(used.sum()),
+        "sum_over_recommended": float(over.sum()),
+    }
+
+
+def _agreement_funnel_tables(
+    frame: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Воронка: обычное соглашение / с доплатой / без; вызов модели; деньги.
+
+    Обычное соглашение = есть соглашение и нет выплаты по модели.
+    Группа 2 = не обычное соглашение (без соглашения или соглашение с доплатой).
+    """
+    n_all = len(frame)
+    agr = frame["_agreement"].fillna(False).astype(bool)
+    topup = frame["_payout_by_model"].fillna(False).astype(bool)
+    ordinary = agr & ~topup
+    with_topup = agr & topup
+    no_agr = ~agr
+    group2 = ~ordinary
+    called = frame["_model_called"].fillna(False).astype(bool)
+
+    funnel_rows: list[dict[str, Any]] = []
+
+    def add_funnel(
+        layer: str,
+        stage: str,
+        mask: pd.Series,
+        *,
+        base_n: int,
+    ) -> None:
+        n = int(mask.sum())
+        funnel_rows.append(
+            {
+                "layer": layer,
+                "stage": stage,
+                "n": n,
+                "share_of_base_pct": (
+                    float(100.0 * n / base_n) if base_n else np.nan
+                ),
+            }
+        )
+
+    add_funnel("all", "все заявленные инциденты", pd.Series(True, index=frame.index), base_n=n_all)
+    add_funnel("split", "обычное соглашение (без доплаты по модели)", ordinary, base_n=n_all)
+    add_funnel("split", "соглашение с доплатой по модели", with_topup, base_n=n_all)
+    add_funnel("split", "без соглашения", no_agr, base_n=n_all)
+    add_funnel("split", "без обычного соглашения (группа 2)", group2, base_n=n_all)
+
+    n_g2 = int(group2.sum())
+    add_funnel(
+        "group2_call",
+        "группа 2 · вызывали модель",
+        group2 & called,
+        base_n=n_g2,
+    )
+    add_funnel(
+        "group2_call",
+        "группа 2 · не вызывали модель",
+        group2 & ~called,
+        base_n=n_g2,
+    )
+
+    called_g2 = group2 & called
+    n_called_g2 = int(called_g2.sum())
+    for result_val, label in (
+        (RESULT_OUT_OF_MODEL, "ответ −100 (не в пилоте / ручеек)"),
+        (0, "ответ 0 (нет ПСР)"),
+        (1, "ответ 1 (есть ПСР)"),
+    ):
+        add_funnel(
+            "group2_answer",
+            f"группа 2 · вызывали · {label}",
+            called_g2 & frame["_result"].eq(result_val),
+            base_n=n_called_g2,
+        )
+
+    money_specs: list[tuple[str, str, pd.Series]] = [
+        ("split", "обычное соглашение (без доплаты по модели)", ordinary),
+        ("split", "соглашение с доплатой по модели", with_topup),
+        ("split", "без соглашения", no_agr),
+        ("group2_call", "группа 2 · вызывали модель", group2 & called),
+        ("group2_call", "группа 2 · не вызывали модель", group2 & ~called),
+        (
+            "group2_answer",
+            "группа 2 · вызывали · ответ −100",
+            called_g2 & frame["_result"].eq(RESULT_OUT_OF_MODEL),
+        ),
+        (
+            "group2_answer",
+            "группа 2 · вызывали · ответ 0",
+            called_g2 & frame["_result"].eq(0),
+        ),
+        (
+            "group2_answer",
+            "группа 2 · вызывали · ответ 1",
+            called_g2 & frame["_result"].eq(1),
+        ),
+    ]
+    money_rows: list[dict[str, Any]] = []
+    for layer, stage, mask in money_specs:
+        part = frame.loc[mask]
+        money_rows.append(
+            {
+                "layer": layer,
+                "stage": stage,
+                "n": len(part),
+                **_money_cell(part),
+            }
+        )
+
+    return pd.DataFrame(funnel_rows), pd.DataFrame(money_rows)
+
+
 def _sample_size_guidance(effects: pd.DataFrame) -> pd.DataFrame:
     """Во сколько раз вырастить N, чтобы 95% CI ITT не содержал 0.
 
@@ -1278,6 +1565,7 @@ def _attention_filials(
     ):
         pivot = (
             filial_paths.pivot_table(
+                observed=False,
                 index="filial",
                 columns="segment",
                 values="agreement_share",
@@ -1675,6 +1963,7 @@ def estimate_monitoring_effect(
     recommended_extra_summary = _recommended_extra_summary(current)
     payment_descriptives = _payment_descriptives(current)
     sample_size_guidance = _sample_size_guidance(effects)
+    agreement_funnel, agreement_funnel_money = _agreement_funnel_tables(current)
     current_100 = _add_outcomes(
         current,
         priors.pilot,
@@ -1743,12 +2032,9 @@ def estimate_monitoring_effect(
             "в outcome используется только СуммаПлатежа."
         )
 
-    path_shares = shares_as_percent(
-        compare_path_shares(monitoring_df, filial_scope="pilot", variant=1)
-    )
-    filial_paths = shares_as_percent(
-        filial_path_shares(monitoring_df, filial_scope="pilot", variant=1)
-    )
+    path_raw, filial_raw = _itt_path_shares(current)
+    path_shares = shares_as_percent(path_raw)
+    filial_paths = shares_as_percent(filial_raw)
     attention = _attention_filials(filial_paths, filial_effects)
     if not attention.empty:
         warnings.append(
@@ -1779,6 +2065,8 @@ def estimate_monitoring_effect(
         recommended_extra_summary=recommended_extra_summary,
         payment_descriptives=payment_descriptives,
         sample_size_guidance=sample_size_guidance,
+        agreement_funnel=agreement_funnel,
+        agreement_funnel_money=agreement_funnel_money,
         contract=contract,
         t_calc=calc_date,
         discount_rate=discount_rate,

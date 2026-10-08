@@ -16,7 +16,8 @@ import config
 # CUTOVER: True пока 2.0.0 живёт только в second_
 SHADOW_NEW_AS_SECOND: bool = True
 
-DEFAULT_SHADOW_SUBDIR = "querulus/2.0.0"
+# Плоский results/ (без querulus/2.0.0): pickle + metadata рядом.
+DEFAULT_SHADOW_SUBDIR = ""
 DEFAULT_SHADOW_STEM = "querulus_ansamble"
 DEFAULT_SHADOW_META = "metadata.json"
 DEFAULT_SHADOW_DQ = "dq_bounds.json"
@@ -42,27 +43,34 @@ def shadow_subdir() -> str:
 
 
 def shadow_models_dir() -> Path:
-    """Каталог артефактов 2.0.0: results/querulus/2.0.0/."""
-    return (prod_models_dir() / Path(shadow_subdir())).resolve()
+    """Каталог артефактов 2.0.0: плоский ``results/`` (опционально subdir из env)."""
+    sub = shadow_subdir()
+    if not sub or sub in {".", "./"}:
+        return prod_models_dir()
+    return (prod_models_dir() / Path(sub)).resolve()
 
 
 def shadow_pickle_path(group_name: str) -> Path:
-    """Сначала versioned subdir, затем плоский results/ (fallback)."""
+    """``{stem}.pickle`` в shadow_models_dir; fallback на legacy ``querulus/2.0.0/``."""
     stem = group_name.strip()
-    versioned = shadow_models_dir() / f"{stem}.pickle"
-    if versioned.is_file():
-        return versioned
-    flat = prod_models_dir() / f"{stem}.pickle"
-    return flat
+    primary = shadow_models_dir() / f"{stem}.pickle"
+    if primary.is_file():
+        return primary
+    legacy = prod_models_dir() / "querulus" / "2.0.0" / f"{stem}.pickle"
+    if legacy.is_file():
+        return legacy
+    return primary
 
 
 def shadow_meta_path(group_name: str | None = None) -> Path:
-    """metadata.json рядом с pickle 2.0.0."""
+    """metadata.json рядом с pickle (τ = best_threshold)."""
     name = getattr(config, "shadow_meta_filename", None) or DEFAULT_SHADOW_META
     primary = shadow_models_dir() / name
     if primary.is_file():
         return primary
-    # fallback: querulus_meta_{stem}.json
+    legacy = prod_models_dir() / "querulus" / "2.0.0" / name
+    if legacy.is_file():
+        return legacy
     if group_name:
         alt = shadow_models_dir() / f"querulus_meta_{group_name}.json"
         if alt.is_file():

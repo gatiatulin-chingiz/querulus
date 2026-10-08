@@ -19,7 +19,7 @@ RUN chown -R model_user:model_user /home/model_user
 # 5. Переключаемся на непривилегированного пользователя
 USER model_user
 
-# 6. Копируем модели и исходный код (legacy flat results/ + shadow querulus/2.0.0/)
+# 6. Копируем модели и исходный код (плоский results/: legacy + shadow pickle/meta)
 COPY --chown=model_user:model_user results/ /home/model_user/model/results/
 COPY --chown=model_user:model_user main.py /home/model_user/model/main.py
 COPY --chown=model_user:model_user config.py /home/model_user/model/config.py

@@ -42,6 +42,7 @@ from querulus.features.data_quality import (  # noqa: E402
     apply_dataset_data_quality,
     build_service_dq_bounds,
 )
+from querulus.features.inflation import add_real_monetary_columns  # noqa: E402
 from querulus.fin_effect.threshold_policy import (  # noqa: E402
     save_collect_prod_threshold,
     save_collect_val_threshold,
@@ -66,6 +67,7 @@ from querulus.training.example_pipeline import (  # noqa: E402
     ExamplePaths,
     ExampleThresholds,
     export_prod_service_artifacts,
+    save_prod_models_via_automl,
 )
 from querulus.training.outboxml_metrics import predict_dsm_series  # noqa: E402
 
@@ -259,6 +261,9 @@ def main() -> None:
         df, report_path=PROJECT_ROOT / "data" / "processed" / "data_quality_report.json"
     )
     df = _ensure_service_columns(df_dq)
+    # DQ клипает REAL отдельно от VALUE; shadow снова считает CPI по EVENT_DATE —
+    # синхронизируем, иначе RG на сверке разъедется.
+    df = add_real_monetary_columns(df, pd.to_datetime(df["EVENT_DATE"]))
     df.to_parquet(DEFAULT_OUTPUT, index=False)
 
     built = write_outboxml_configs(
@@ -280,7 +285,8 @@ def main() -> None:
         send_mail=False,
         log_mlflow=False,
     )
-    results_dir = INTEGRATION / "results" / "querulus" / MODEL_VERSION
+    # Плоский integration/results/ (sidecar + AutoML pickle рядом с legacy).
+    results_dir = INTEGRATION / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
     paths = ExamplePaths(
         project_root=PROJECT_ROOT,
@@ -312,8 +318,12 @@ def main() -> None:
         paths,
         thresholds=thresholds,
     )
+    ensemble_pkl = save_prod_models_via_automl(
+        models,
+        results_dir=results_dir,
+    )
     _write_dq_bounds(df, results_dir / "dq_bounds.json")
-    print("export", export.meta_path)
+    print("export", export.meta_path, "ensemble", ensemble_pkl)
 
     # Эталонные preds на holdout test_prod (как example_final)
     test_prod_idx = periods["prod_holdout_idx"]

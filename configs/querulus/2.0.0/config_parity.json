@@ -5,7 +5,7 @@
   "data_config": {
     "source": "parquet",
     "table_name_source": "",
-    "local_name_source": "/home/jovyan/old_home/querulus/data/processed/querulus_train_dataset.parquet",
+    "local_name_source": "C:/Users/grchi/Desktop/pet_projects/outboxml/examples/querulus/data/processed/df_final_3_synthetic.parquet",
     "processing": true,
     "showGraphs": false,
     "separation": {
@@ -40,108 +40,61 @@
       "objective": "binary",
       "wrapper": "catboost",
       "params_catboost": {
-        "iterations": 299,
+        "iterations": 1100,
         "random_seed": 0,
         "verbose": false,
         "allow_writing_files": false,
         "auto_class_weights": "Balanced",
-        "bootstrap_type": "No",
+        "bootstrap_type": "Bernoulli",
         "grow_policy": "SymmetricTree",
-        "learning_rate": 0.029835110993877915,
-        "depth": 6,
-        "min_data_in_leaf": 39,
-        "l2_leaf_reg": 11.0,
-        "random_strength": 0.661442161557443,
-        "rsm": 0.8701141838915996,
+        "learning_rate": 0.013281300533724715,
+        "depth": 10,
+        "l2_leaf_reg": 9.0,
+        "random_strength": 6.536930531051615e-06,
+        "rsm": 0.5714096390585404,
         "leaf_estimation_method": "Newton",
-        "one_hot_max_size": 2,
-        "thread_count": 3
+        "one_hot_max_size": 215,
+        "subsample": 0.5790231589473285
       },
       "cat_features_catboost": [
-        "FILIAL",
         "EVENT_CREATED_BY_GIBDD_FLAG",
-        "RECIEVE_METHOD",
-        "FL_PHOTO_VIDEO",
-        "APPLICANT_FORM",
-        "PAYMENT_RECIPIENT_TYPE",
-        "VICTIM_TS_REGION",
-        "LOSS_UNIT_TYPE",
+        "FILIAL",
         "VICTIM_VEHICLE_CATEGORY",
-        "VIC_TS_COUNTRY",
-        "NOT_NOTIFICATION",
-        "FE_SHARE_WORK_TIER",
-        "IS_TOTAL"
+        "APPLICANT_FORM",
+        "RECIEVE_METHOD"
       ],
       "relative_features": [],
       "features": [
         {
-          "name": "FILIAL",
-          "default": 0,
-          "replace": {
-            "ПРОЧИЕ": 0,
-            "ВСК-МОСКВА": 1,
-            "КРАСНОДАРСКИЙ": 2,
-            "РОСТОВСКИЙ": 3,
-            "УФИМСКИЙ": 4,
-            "ДАЛЬНЕВОСТОЧНЫЙ": 5,
-            "ЧЕЛЯБИНСКИЙ": 6,
-            "НОВОСИБИРСКИЙ": 7,
-            "КАЗАНСКИЙ": 8,
-            "ЕКАТЕРИНБУРГСКИЙ": 9,
-            "ТЮМЕНСКИЙ": 10,
-            "НИЖЕГОРОДСКИЙ": 11,
-            "ИЖЕВСКИЙ": 12,
-            "САРАТОВСКИЙ": 13,
-            "САМАРСКИЙ": 14,
-            "КРАСНОЯРСКИЙ": 15,
-            "АРХАНГЕЛЬСКИЙ": 16,
-            "МАРИЙСКИЙ": 17,
-            "ЯРОСЛАВСКИЙ": 18,
-            "МАГНИТОГОРСКИЙ": 19,
-            "АЛТАЙСКИЙ": 20
-          },
-          "encoding": "to_int"
-        },
-        {
-          "name": "FE_VALUE_BEFORE_WITH_REAL_2022",
-          "default": "_MEDIAN_",
-          "replace": {
-            "_TYPE_": "_NUM_"
-          },
-          "encoding": "to_float",
-          "clip": {
-            "min_value": 1919.7935691832151,
-            "max_value": 1041064.9677140542
-          }
-        },
-        {
           "name": "EVENT_CREATED_BY_GIBDD_FLAG",
-          "default": 1,
-          "replace": {
-            "0": 0,
-            "1": 1
-          },
-          "encoding": "to_int"
-        },
-        {
-          "name": "RECIEVE_METHOD",
-          "default": 1,
-          "replace": {
-            "ПРОЧИЕ": 0,
-            "ЛИЧНО": 1,
-            "ПОЧТА": 2,
-            "ПАРТНЕР": 3,
-            "ЭЛЕКТРОННОЕ ОБРАЩЕНИЕ": 4,
-            "ИНТЕРНЕТ": 5
-          },
-          "encoding": "to_int"
-        },
-        {
-          "name": "FL_PHOTO_VIDEO",
           "default": 0,
           "replace": {
             "0": 0,
             "1": 1
+          },
+          "encoding": "to_int",
+          "fillna": 0
+        },
+        {
+          "name": "FILIAL",
+          "default": 1,
+          "replace": {
+            "ПРОЧИЕ": 0,
+            "КАЗАНЬ": 1,
+            "ЕКАТЕРИНБУРГ": 2,
+            "СПБ": 3,
+            "МОСКВА": 4
+          },
+          "encoding": "to_int"
+        },
+        {
+          "name": "VICTIM_VEHICLE_CATEGORY",
+          "default": 1,
+          "replace": {
+            "ПРОЧИЕ": 0,
+            "C": 1,
+            "D": 2,
+            "B": 3
           },
           "encoding": "to_int"
         },
@@ -150,193 +103,74 @@
           "default": 1,
           "replace": {
             "ПРОЧИЕ": 0,
-            "ПОТЕРПЕВШИЙ": 1,
-            "ВЫГОДОПРИОБРЕТАТЕЛЬ": 2,
-            "ПРЕДСТАВИТЕЛЬ (ПО ДОВЕРЕННОСТИ)": 3,
-            "ЮРИСТ С ПОТЕРПЕВШИМ": 4,
-            "ПРЕДСТАВИТЕЛЬ (ПО ДОГОВОРУ ЦЕССИИ)": 5
+            "ПРЕДСТАВИТЕЛЬ": 1,
+            "ПОТЕРПЕВШИЙ": 2,
+            "ЮРИСТ": 3
           },
           "encoding": "to_int"
         },
         {
-          "name": "FE_VALUE_BEFORE_WITHOUT_REAL_2022",
-          "default": "_MEDIAN_",
+          "name": "RECIEVE_METHOD",
+          "default": 1,
           "replace": {
-            "_TYPE_": "_NUM_"
+            "ПРОЧИЕ": 0,
+            "ЭЛЕКТРОННО": 1,
+            "ПОЧТА": 2,
+            "ОЧНО": 3
           },
-          "encoding": "to_float",
-          "clip": {
-            "min_value": 1870.1924290091893,
-            "max_value": 1904208.179309617
-          }
+          "encoding": "to_int"
         },
         {
-          "name": "FE_DAYS_EVENT_TO_LOSS",
-          "default": "_MEDIAN_",
+          "name": "VICTIM_VEHICLE_AGE",
+          "default": 9,
           "replace": {
             "_TYPE_": "_NUM_"
           },
           "encoding": "to_int",
           "clip": {
-            "min_value": -17.0,
-            "max_value": 36.0
+            "min_value": 0.0,
+            "max_value": 31.0
           }
         },
         {
-          "name": "PAYMENT_RECIPIENT_TYPE",
-          "default": 1,
-          "replace": {
-            "ФИЗ. ЛИЦО": 0,
-            "ЮР. ЛИЦО": 1
-          },
-          "encoding": "to_int"
-        },
-        {
-          "name": "VICTIM_TS_REGION",
-          "default": 0,
-          "replace": {
-            "ПРОЧИЕ": 0,
-            "КРАСНОДАРСКИЙ КРАЙ": 1,
-            "МОСКВА": 2,
-            "ЧЕЛЯБИНСКАЯ ОБЛАСТЬ": 3,
-            "ПРИМОРСКИЙ КРАЙ": 4,
-            "РЕСПУБЛИКА БАШКОРТОСТАН": 5,
-            "РОСТОВСКАЯ ОБЛАСТЬ": 6,
-            "МОСКОВСКАЯ ОБЛАСТЬ": 7,
-            "РЕСПУБЛИКА ТАТАРСТАН": 8,
-            "СВЕРДЛОВСКАЯ ОБЛАСТЬ": 9,
-            "НИЖЕГОРОДСКАЯ ОБЛАСТЬ": 10,
-            "НОВОСИБИРСКАЯ ОБЛАСТЬ": 11,
-            "УДМУРТСКАЯ РЕСПУБЛИКА": 12,
-            "САРАТОВСКАЯ ОБЛАСТЬ": 13,
-            "САМАРСКАЯ ОБЛАСТЬ": 14,
-            "ТЮМЕНСКАЯ ОБЛАСТЬ": 15,
-            "КРАСНОЯРСКИЙ КРАЙ": 16,
-            "АРХАНГЕЛЬСКАЯ ОБЛАСТЬ": 17,
-            "РЕСПУБЛИКА МАРИЙ ЭЛ": 18,
-            "ЯРОСЛАВСКАЯ ОБЛАСТЬ": 19,
-            "СТАВРОПОЛЬСКИЙ КРАЙ": 20
-          },
-          "encoding": "to_int"
-        },
-        {
-          "name": "LOSS_UNIT_TYPE",
-          "default": 1,
-          "replace": {
-            "ПРОЧИЕ": 0,
-            "ОСНОВНОЙ ОФИС": 1,
-            "ДОПОЛНИТЕЛЬНЫЙ ОФИС": 2,
-            "СТОА": 3,
-            "ОДТУ": 4,
-            "АВАРИЙНЫЙ КОМИССАР": 5
-          },
-          "encoding": "to_int"
-        },
-        {
-          "name": "FE_VALUE_BEFORE_RATIO",
-          "default": "_MEDIAN_",
+          "name": "VICTIM_MAX_WEIGHT",
+          "default": 2374.5138256074415,
           "replace": {
             "_TYPE_": "_NUM_"
           },
           "encoding": "to_float",
           "clip": {
-            "min_value": 0.37562028858094126,
-            "max_value": 1.238393403142518
+            "min_value": 884.3954080468534,
+            "max_value": 5966.1620064757
           }
         },
         {
-          "name": "VICTIM_VEHICLE_CATEGORY",
-          "default": 0,
-          "replace": {
-            "ПРОЧИЕ": 0,
-            "СРЕДНИЙ 7+": 1,
-            "СРЕДНИЙ 0-6": 2,
-            "ЭКОНОМ 7+": 3,
-            "ЭКОНОМ 0-6": 4,
-            "ЯПОНСКАЯ. ПРАВЫЙ РУЛЬ": 5,
-            "ПРЕМИУМ 7+": 6,
-            "ИНОЕ": 7,
-            "ПРЕМИУМ 0-6": 8
-          },
-          "encoding": "to_int"
-        },
-        {
-          "name": "VICTIM_OBJECT_AGE_MONTHS",
-          "default": 84,
+          "name": "GUILTY_CAPACITY_ENGINE",
+          "default": 1957.4968293641086,
           "replace": {
             "_TYPE_": "_NUM_"
           },
-          "encoding": "to_int",
+          "encoding": "to_float",
           "clip": {
-            "min_value": 0,
-            "max_value": 480
+            "min_value": 673.7919551825331,
+            "max_value": 5331.536598504306
           }
-        },
-        {
-          "name": "VIC_TS_COUNTRY",
-          "default": 0,
-          "replace": {
-            "ПРОЧИЕ": 0,
-            "JAPAN": 1,
-            "KOREA": 2,
-            "OTHER": 3,
-            "GERMANY": 4,
-            "FRANCE": 5,
-            "USA": 6,
-            "CZECH": 7,
-            "CHINA": 8,
-            "RUSSIA": 9
-          },
-          "encoding": "to_int"
         },
         {
           "name": "APPLICANT_AGE",
-          "default": "_MEDIAN_",
+          "default": 44,
           "replace": {
             "_TYPE_": "_NUM_"
           },
           "encoding": "to_int",
           "clip": {
-            "min_value": 10.0,
-            "max_value": 74.0
+            "min_value": 0.0,
+            "max_value": 104.0
           }
-        },
-        {
-          "name": "VICTIM_AGE",
-          "default": "_MEDIAN_",
-          "replace": {
-            "_TYPE_": "_NUM_"
-          },
-          "encoding": "to_int",
-          "clip": {
-            "min_value": 10.0,
-            "max_value": 71.0
-          }
-        },
-        {
-          "name": "NOT_NOTIFICATION",
-          "default": 0,
-          "replace": {
-            "0": 0,
-            "1": 1
-          },
-          "encoding": "to_int"
-        },
-        {
-          "name": "FE_SHARE_WORK_TIER",
-          "default": 0,
-          "replace": {
-            "LOW": 0,
-            "MID": 1,
-            "HIGH": 2,
-            "NAN": 3
-          },
-          "encoding": "to_int",
-          "fillna": 4
         },
         {
           "name": "EVENT_YEAR",
-          "default": 2026,
+          "default": 2024,
           "replace": {
             "_TYPE_": "_NUM_"
           },
@@ -345,27 +179,6 @@
             "min_value": 2020.0,
             "max_value": 2026.0
           }
-        },
-        {
-          "name": "FE_DAYS_TO_PH_CONTRACT_END",
-          "default": "_MEDIAN_",
-          "replace": {
-            "_TYPE_": "_NUM_"
-          },
-          "encoding": "to_int",
-          "clip": {
-            "min_value": 0,
-            "max_value": 573.0
-          }
-        },
-        {
-          "name": "IS_TOTAL",
-          "default": 0,
-          "replace": {
-            "0": 0,
-            "1": 1
-          },
-          "encoding": "to_int"
         }
       ]
     },
@@ -375,205 +188,71 @@
       "objective": "regression",
       "wrapper": "catboost",
       "params_catboost": {
-        "iterations": 224,
+        "iterations": 1500,
         "random_seed": 0,
         "verbose": false,
         "allow_writing_files": false,
-        "bootstrap_type": "Bayesian",
-        "grow_policy": "Lossguide",
-        "learning_rate": 0.05435568763121069,
-        "depth": 4,
-        "min_data_in_leaf": 30,
-        "l2_leaf_reg": 14.0,
-        "random_strength": 8.69542360825955,
-        "rsm": 0.7464125053018245,
+        "bootstrap_type": "No",
+        "grow_policy": "Depthwise",
+        "learning_rate": 0.004289847451479052,
+        "depth": 7,
+        "l2_leaf_reg": 5.0,
+        "random_strength": 1.4317391755413188e-09,
+        "rsm": 0.8441274468228888,
         "leaf_estimation_method": "Gradient",
-        "one_hot_max_size": 14,
-        "bagging_temperature": 0.1666529402160674,
-        "max_leaves": 35,
-        "thread_count": 3
+        "one_hot_max_size": 230
       },
       "cat_features_catboost": [
-        "VICTIM_VEHICLE_CATEGORY",
-        "REGION",
-        "EVENT_CREATED_BY_GIBDD_FLAG",
-        "VICTIM_VEHICLE_COUNTRY",
-        "FL_PHOTO_VIDEO"
+        "LOSS_UNIT_ZONE",
+        "VICTIM_VEHICLE_COUNTRY"
       ],
       "relative_features": [],
       "features": [
         {
-          "name": "FE_VALUE_BEFORE_WITHOUT_REAL_2022",
-          "default": "_MEDIAN_",
-          "replace": {
-            "_TYPE_": "_NUM_"
-          },
-          "encoding": "to_float",
-          "clip": {
-            "min_value": 1870.1924290091893,
-            "max_value": 1904208.179309617
-          }
-        },
-        {
-          "name": "VICTIM_VEHICLE_CATEGORY",
-          "default": 0,
-          "replace": {
-            "ПРОЧИЕ": 0,
-            "СРЕДНИЙ 7+": 1,
-            "СРЕДНИЙ 0-6": 2,
-            "ЭКОНОМ 7+": 3,
-            "ЭКОНОМ 0-6": 4,
-            "ЯПОНСКАЯ. ПРАВЫЙ РУЛЬ": 5,
-            "ПРЕМИУМ 7+": 6,
-            "ИНОЕ": 7,
-            "ПРЕМИУМ 0-6": 8
-          },
-          "encoding": "to_int"
-        },
-        {
-          "name": "FE_VALUE_BEFORE_DIFF",
-          "default": "_MEDIAN_",
-          "replace": {
-            "_TYPE_": "_NUM_"
-          },
-          "encoding": "to_float",
-          "clip": {
-            "min_value": 116.5752594741401,
-            "max_value": 1431476.0369095926
-          }
-        },
-        {
-          "name": "REGION",
-          "default": 0,
-          "replace": {
-            "ПРОЧИЕ": 0,
-            "КРАСНОДАРСКИЙ": 1,
-            "МОСКВА": 2,
-            "МОСКОВСКАЯ": 3,
-            "ПРИМОРСКИЙ": 4,
-            "ЧЕЛЯБИНСКАЯ": 5,
-            "РОСТОВСКАЯ": 6,
-            "БАШКОРТОСТАН": 7,
-            "ТАТАРСТАН": 8,
-            "НОВОСИБИРСКАЯ": 9,
-            "СВЕРДЛОВСКАЯ": 10,
-            "НИЖЕГОРОДСКАЯ": 11,
-            "УДМУРТСКАЯ": 12,
-            "ТЮМЕНСКАЯ": 13,
-            "САРАТОВСКАЯ": 14,
-            "САМАРСКАЯ": 15,
-            "КРАСНОЯРСКИЙ": 16,
-            "АРХАНГЕЛЬСКАЯ": 17,
-            "ЯРОСЛАВСКАЯ": 18,
-            "МАРИЙ ЭЛ": 19,
-            "ВОРОНЕЖСКАЯ": 20
-          },
-          "encoding": "to_int"
-        },
-        {
-          "name": "GUILTY_MAX_WEIGHT",
-          "default": "_MEDIAN_",
-          "replace": {
-            "_TYPE_": "_NUM_"
-          },
-          "encoding": "to_float",
-          "clip": {
-            "min_value": 1082.6782766529097,
-            "max_value": 2866.9646597690744
-          }
-        },
-        {
-          "name": "FE_VALUE_BEFORE_RATIO",
-          "default": "_MEDIAN_",
-          "replace": {
-            "_TYPE_": "_NUM_"
-          },
-          "encoding": "to_float",
-          "clip": {
-            "min_value": 0.37562028858094126,
-            "max_value": 1.238393403142518
-          }
-        },
-        {
-          "name": "EVENT_CREATED_BY_GIBDD_FLAG",
+          "name": "LOSS_UNIT_ZONE",
           "default": 1,
           "replace": {
-            "0": 0,
-            "1": 1
+            "ПРОЧИЕ": 0,
+            "ЮГ": 1,
+            "ЦЕНТР": 2,
+            "ВОСТОК": 3,
+            "СЕВЕР": 4
           },
           "encoding": "to_int"
-        },
-        {
-          "name": "FE_VALUE_BEFORE_WITH_REAL_2022",
-          "default": "_MEDIAN_",
-          "replace": {
-            "_TYPE_": "_NUM_"
-          },
-          "encoding": "to_float",
-          "clip": {
-            "min_value": 1919.7935691832151,
-            "max_value": 1041064.9677140542
-          }
-        },
-        {
-          "name": "APPLICANT_AGE",
-          "default": "_MEDIAN_",
-          "replace": {
-            "_TYPE_": "_NUM_"
-          },
-          "encoding": "to_int",
-          "clip": {
-            "min_value": 10.0,
-            "max_value": 74.0
-          }
         },
         {
           "name": "VICTIM_VEHICLE_COUNTRY",
-          "default": 0,
+          "default": 1,
           "replace": {
             "ПРОЧИЕ": 0,
-            "ЯПОНИЯ": 1,
-            "КОРЕЯ": 2,
-            "РОССИЯ": 3,
-            "ГЕРМАНИЯ": 4,
-            "ФРАНЦИЯ": 5,
-            "США": 6,
-            "ЧЕХИЯ": 7,
-            "КИТАЙ": 8
+            "РОССИЯ": 1,
+            "КАЗАХСТАН": 2,
+            "БЕЛАРУСЬ": 3
           },
           "encoding": "to_int"
         },
         {
-          "name": "FL_PHOTO_VIDEO",
-          "default": 0,
-          "replace": {
-            "0": 0,
-            "1": 1
-          },
-          "encoding": "to_int"
-        },
-        {
-          "name": "VICTIM_VEHICLE_AGE",
-          "default": "_MEDIAN_",
+          "name": "APPLY_DELAY",
+          "default": 55,
           "replace": {
             "_TYPE_": "_NUM_"
           },
           "encoding": "to_int",
           "clip": {
             "min_value": 0.0,
-            "max_value": 25.0
+            "max_value": 178.0
           }
         },
         {
-          "name": "FE_VICTIM_POWER_PER_TON",
-          "default": "_MEDIAN_",
+          "name": "FE_VALUE_BEFORE_WITHOUT_REAL_2022",
+          "default": 34994.01953828821,
           "replace": {
             "_TYPE_": "_NUM_"
           },
           "encoding": "to_float",
           "clip": {
-            "min_value": 717.1440025007745,
-            "max_value": 1271.1632965172
+            "min_value": 11647.919377468697,
+            "max_value": 95250.82425041255
           }
         }
       ],

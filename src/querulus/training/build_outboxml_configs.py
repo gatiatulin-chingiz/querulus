@@ -835,6 +835,50 @@ def _pos_count(df: pd.DataFrame, index: pd.Index, target: str) -> int:
     y = pd.to_numeric(df.loc[index, target], errors="coerce").fillna(0)
     return int((y.astype(int) == 1).sum())
 
+
+def _snap_cut_to_day_boundary(ordered_dates: pd.Series, cut: int) -> int:
+    """Сдвиг cut, чтобы не резать один календарный день на два окна.
+
+    Берётся ближайшая граница дня (начало или конец). Так date-окна и
+    ``mask_date_period`` не дают пересечения выборок на стыке.
+    """
+    n = int(len(ordered_dates))
+    cut_i = int(cut)
+    if cut_i <= 0 or cut_i >= n:
+        return max(0, min(n, cut_i))
+    left_day = pd.Timestamp(ordered_dates.iloc[cut_i - 1]).normalize()
+    right_day = pd.Timestamp(ordered_dates.iloc[cut_i]).normalize()
+    if left_day != right_day:
+        return cut_i
+    day = left_day
+    start = cut_i - 1
+    while start > 0 and pd.Timestamp(ordered_dates.iloc[start - 1]).normalize() == day:
+        start -= 1
+    end = cut_i
+    while end < n and pd.Timestamp(ordered_dates.iloc[end]).normalize() == day:
+        end += 1
+    if (cut_i - start) <= (end - cut_i):
+        return int(start)
+    return int(end)
+
+
+def _assert_disjoint_prod_windows(
+    prod_fit_idx: pd.Index,
+    prod_tau_cal_idx: pd.Index,
+    prod_holdout_idx: pd.Index,
+) -> None:
+    overlap_fit_tau = prod_fit_idx.intersection(prod_tau_cal_idx)
+    overlap_fit_hold = prod_fit_idx.intersection(prod_holdout_idx)
+    overlap_tau_hold = prod_tau_cal_idx.intersection(prod_holdout_idx)
+    if len(overlap_fit_tau) or len(overlap_fit_hold) or len(overlap_tau_hold):
+        raise ValueError(
+            "Пересечение prod-окон: "
+            f"fit∩τ-cal={len(overlap_fit_tau)}, "
+            f"fit∩Test_prod={len(overlap_fit_hold)}, "
+            f"τ-cal∩Test_prod={len(overlap_tau_hold)}"
+        )
+
+
 def compute_period_windows(
     df: pd.DataFrame,
     *,
@@ -846,7 +890,12 @@ def compute_period_windows(
     prod_tau_cal_fraction: float = PROD_TAU_CAL_FRACTION,
     prod_holdout_fraction: float = PROD_HOLDOUT_FRACTION,
 ) -> dict[str, Any]:
-    """Parity (train_core∪val / cal / test) и prod 70/15/15 внутри holdout Test."""
+    """Parity (train_core∪val / cal / test) и prod 70/15/15 внутри holdout Test.
+
+    Разрез 70/15/15 внутри Test **по границам календарных дней**, чтобы
+    τ-cal и Test_prod не делили один день (иначе date-mask и OutBoxML
+    ``between`` дают пересечение выборок).
+    """
     cfg = TrainingConfig()
     train_period = train_period or cfg.train_period
     test_period = test_period or cfg.test_period
@@ -876,22 +925,65 @@ def compute_period_windows(
         n_hold = n_test - n_fit - n_tau
 
     ordered_idx = pd.Index(ordered.index)
-    fit_test_idx = ordered_idx[:n_fit]
-    tau_cal_test_idx = ordered_idx[n_fit : n_fit + n_tau]
-    holdout_test_idx = ordered_idx[n_fit + n_tau :]
+    cut1 = _snap_cut_to_day_boundary(ordered, n_fit)
+    cut2 = _snap_cut_to_day_boundary(ordered, n_fit + n_tau)
+    # После snap: cut1 < cut2 < n, в каждом окне ≥1 строка, если возможно.
+    if cut1 <= 0:
+        cut1 = _snap_cut_to_day_boundary(ordered, max(1, n_fit))
+        if cut1 <= 0:
+            cut1 = 1
+    if cut2 >= n_test:
+        cut2 = _snap_cut_to_day_boundary(ordered, min(n_test - 1, n_fit + n_tau))
+        if cut2 >= n_test:
+            cut2 = n_test - 1
+    if cut2 <= cut1:
+        # Схлопнулись на одном дне — сдвигаем вторую границу вперёд к след. дню.
+        cut2 = cut1 + 1
+        while cut2 < n_test and pd.Timestamp(ordered.iloc[cut2 - 1]).normalize() == pd.Timestamp(
+            ordered.iloc[cut1]
+        ).normalize():
+            cut2 += 1
+        if cut2 >= n_test:
+            cut2 = n_test - 1
+        if cut2 <= cut1:
+            raise ValueError(
+                "Не удалось развести τ-cal и Test_prod по календарным дням "
+                f"(test n={n_test}, cut1={cut1}, cut2={cut2})"
+            )
 
-    tau_start_ts = pd.Timestamp(ordered.iloc[n_fit])
-    tau_end_ts = pd.Timestamp(ordered.iloc[n_fit + n_tau - 1])
-    holdout_start_ts = pd.Timestamp(ordered.iloc[n_fit + n_tau])
-    prod_train_end = tau_start_ts - pd.Timedelta(days=1)
+    tau_cal_test_idx = ordered_idx[cut1:cut2]
+    holdout_test_idx = ordered_idx[cut2:]
+
+    tau_start_ts = pd.Timestamp(ordered.iloc[cut1])
+    tau_end_ts = pd.Timestamp(ordered.iloc[cut2 - 1])
+    holdout_start_ts = pd.Timestamp(ordered.iloc[cut2])
+    if tau_end_ts.normalize() >= holdout_start_ts.normalize():
+        raise ValueError(
+            "После snap τ-cal и Test_prod всё ещё делят календарный день: "
+            f"τ-cal end={_fmt(tau_end_ts)}, Test_prod start={_fmt(holdout_start_ts)}"
+        )
+    prod_train_end = tau_start_ts.normalize() - pd.Timedelta(days=1)
     prod_train_period = (train_period[0], _fmt(prod_train_end))
     prod_tau_cal_period = (_fmt(tau_start_ts), _fmt(tau_end_ts))
     prod_test_period = (_fmt(holdout_start_ts), test_period[1])
     prod_fit_idx = df.index[
         mask_date_period(dates, prod_train_period[0], prod_train_period[1]).fillna(False)
     ]
+    # Индексы — из day-aligned разреза (не из date-mask), чтобы совпадать с окнами.
     prod_tau_cal_idx = tau_cal_test_idx
     prod_holdout_idx = holdout_test_idx
+    _assert_disjoint_prod_windows(prod_fit_idx, prod_tau_cal_idx, prod_holdout_idx)
+    # Согласованность date-mask ↔ индексы (после snap не должно быть сюрпризов).
+    tau_from_dates = df.index[
+        mask_date_period(dates, *prod_tau_cal_period).fillna(False)
+    ]
+    hold_from_dates = df.index[
+        mask_date_period(dates, *prod_test_period).fillna(False)
+    ]
+    if len(tau_from_dates.intersection(hold_from_dates)):
+        raise ValueError(
+            "Date-mask τ-cal ∩ Test_prod непуст после snap — баг границ периодов"
+        )
     prod_cal_idx = prod_holdout_idx
     parity_fit_idx = splits.train.union(splits.val)
 
@@ -1045,6 +1137,34 @@ def rebuild_periods_from_manifest(
     prod_holdout_idx = df.index[
         mask_date_period(dates, *prod_test_period).fillna(False)
     ]
+    # Старые манифесты могли делить один календарный день между τ-cal и Test_prod.
+    # День на стыке отдаём Test_prod (более позднему окну), пересечения быть не должно.
+    overlap_tau_hold = prod_tau_cal_idx.intersection(prod_holdout_idx)
+    if len(overlap_tau_hold):
+        logger.warning(
+            "Манифест: τ-cal ∩ Test_prod = %s строк (общий день на стыке) — "
+            "убираем из τ-cal, оставляем в Test_prod. Перезапишите period_windows "
+            "через write_outboxml_configs для day-aligned окон.",
+            len(overlap_tau_hold),
+        )
+        prod_tau_cal_idx = prod_tau_cal_idx.difference(overlap_tau_hold)
+        # Поджать правую дату τ-cal в манифесте-наследнике (только в runtime periods).
+        if len(prod_tau_cal_idx):
+            tau_end_live = _fmt(dates.loc[prod_tau_cal_idx].max())
+            prod_tau_cal_period = (prod_tau_cal_period[0], tau_end_live)
+    overlap_fit_tau = prod_fit_idx.intersection(prod_tau_cal_idx)
+    overlap_fit_hold = prod_fit_idx.intersection(prod_holdout_idx)
+    if len(overlap_fit_tau) or len(overlap_fit_hold):
+        logger.warning(
+            "Манифест: prod_fit пересекается с τ-cal=%s / Test_prod=%s — "
+            "вычитаем из fit.",
+            len(overlap_fit_tau),
+            len(overlap_fit_hold),
+        )
+        prod_fit_idx = prod_fit_idx.difference(overlap_fit_tau).difference(
+            overlap_fit_hold
+        )
+    _assert_disjoint_prod_windows(prod_fit_idx, prod_tau_cal_idx, prod_holdout_idx)
     parity_fit_idx = splits.train.union(splits.val)
     prod_fit_frac = float(manifest.get("prod_fit_test_fraction", PROD_FIT_TEST_FRACTION))
     prod_tau_frac = float(manifest.get("prod_tau_cal_fraction", PROD_TAU_CAL_FRACTION))

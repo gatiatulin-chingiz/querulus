@@ -185,8 +185,16 @@ def _share_row(
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     n = int(mask.sum())
+    n_agr = int(agr[mask].sum()) if n else 0
+    n_pret = int(pret[mask].sum()) if n else 0
+    n_fu = int(fu[mask].sum()) if n else 0
+    n_court = int(court[mask].sum()) if n else 0
     row: dict[str, Any] = {
         "n": n,
+        "n_agreement": n_agr,
+        "n_pretension": n_pret,
+        "n_fu": n_fu,
+        "n_court": n_court,
         "agreement_share": float(agr[mask].mean()) if n else np.nan,
         "pretension_share": float(pret[mask].mean()) if n else np.nan,
         "fu_incident_share": float(fu[mask].mean()) if n else np.nan,
@@ -227,6 +235,7 @@ def path_share_table(
         "fu_incident_share",
         "court_incident_share",
     )
+    count_cols = ("n_agreement", "n_pretension", "n_fu", "n_court")
     if lift_from and lift_to and lift_from in by_label and lift_to in by_label:
         a, b = by_label[lift_from], by_label[lift_to]
         lift_pp: dict[str, Any] = {
@@ -237,6 +246,9 @@ def path_share_table(
             "segment": f"lift_rel ({lift_from} / {lift_to} - 1)",
             "n": np.nan,
         }
+        for col in count_cols:
+            lift_pp[col] = np.nan
+            lift_rel[col] = np.nan
         for col in share_cols:
             xa, xb = a[col], b[col]
             lift_pp[col] = (

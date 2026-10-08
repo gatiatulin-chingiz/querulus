@@ -92,18 +92,22 @@ def build_synthetic_final_dataset(
     value_before[high_mask] = rng.uniform(55_000, 180_000, size=int(high_mask.sum()))
     value_before_without = value_before * rng.uniform(1.0, 1.25, size=n_rows)
 
-    event_year = pd.to_datetime(loss_dates).year.astype(int)
     loss_dt = pd.Series(pd.to_datetime(loss_dates), name="LOSS_DATE_TIME")
+    # APPLY_DELAY согласован с EVENT_DATE / PAYMENT (shadow пересчитывает delay из дат).
+    apply_delay = rng.integers(0, 120, size=n_rows)
+    event_dt = loss_dt - pd.to_timedelta(apply_delay, unit="D")
+    event_year = event_dt.dt.year.astype(int)
 
     with_s = pd.Series(value_before)
     without_s = pd.Series(value_before_without)
-    with_real = deflate_to_base_year(with_s, loss_dt)
-    without_real = deflate_to_base_year(without_s, loss_dt)
+    # CPI как на сервисе: по EVENT_DATE, не по PAYMENT/LOSS.
+    with_real = deflate_to_base_year(with_s, event_dt)
+    without_real = deflate_to_base_year(without_s, event_dt)
     col_with_real = real_feature_name("VALUE_BEFORE_WITH")
     col_without_real = real_feature_name("VALUE_BEFORE_WITHOUT")
     premium_sum = rng.uniform(3_000, 25_000, size=n_rows)
     premium_count = rng.integers(1, 4, size=n_rows).astype(float)
-    premium_real = deflate_to_base_year(pd.Series(premium_sum), loss_dt)
+    premium_real = deflate_to_base_year(pd.Series(premium_sum), event_dt)
 
     victim_object_year = (event_year - rng.integers(0, 18, size=n_rows)).astype(int)
 
@@ -111,7 +115,7 @@ def build_synthetic_final_dataset(
         {
             "INCIDENT_NUMBER": [f"SYN-{i:06d}" for i in range(n_rows)],
             "LOSS_DATE_TIME": loss_dt,
-            "EVENT_DATE": loss_dt,
+            "EVENT_DATE": event_dt,
             "PAYMENT_ORDER_DATE_TIME": loss_dt,
             VICTIM_OBJECT_YEAR_COL: victim_object_year,
             "TARGET_2": target_2,
@@ -135,7 +139,7 @@ def build_synthetic_final_dataset(
             "EVENT_YEAR": event_year,
             "LOSS_UNIT_ZONE": rng.choice(_ZONES, size=n_rows),
             "VICTIM_VEHICLE_COUNTRY": rng.choice(_COUNTRIES, size=n_rows),
-            "APPLY_DELAY": rng.integers(0, 120, size=n_rows).astype(float),
+            "APPLY_DELAY": apply_delay.astype(float),
             "VALUE_BEFORE_WITHOUT": value_before_without,
             "VALUE_BEFORE_WITH": value_before,
             "PREMIUM_SUM_ALL": premium_sum,

@@ -132,12 +132,19 @@ def fit_automl_bundle(
     log_mlflow: bool = False,
     enrich_metrics: bool = True,
 ) -> tuple[Any, Any]:
-    """Обучить CF+RG через AutoMLManager; опционально письмо и MLflow.
+    """Обучить CF+RG через AutoMLManager (без записи pickle).
 
-    ``retro=False``, ``hp_tune=False`` — фичи/HP уже в JSON из collect.
-    ``log_mlflow=False`` (по умолчанию) — локальный mlruns, без Keycloak.
-    Returns ``(automl_manager, automl_results | None)``.
+    Pickle для сервиса — ``save_prod_models_via_automl`` после sidecar
+    (``df_for_service`` / ``metadata.json``). ``retro=False``, ``hp_tune=False``.
+    ``send_mail`` / ``log_mlflow`` сохранены для API-совместимости; pickle/mail
+    не через ``update_models`` (чтобы sidecar успел записаться раньше).
+    Returns ``(automl_manager, None)``.
     """
+    if send_mail or log_mlflow:
+        logger.info(
+            "fit_automl_bundle: send_mail/log_mlflow игнорируются на fit; "
+            "pickle — save_prod_models_via_automl после metadata/df_for_service"
+        )
     automl = create_querulus_automl(
         data,
         models_config,
@@ -145,15 +152,11 @@ def fit_automl_bundle(
         auto_ml_config=auto_ml_config,
         retro=False,
         hp_tune=False,
-        log_mlflow=log_mlflow,
+        log_mlflow=False,
     )
 
-    results = None
-    if log_mlflow or send_mail:
-        results = automl.update_models(send_mail=send_mail)
-    else:
-        automl.load_dataset()
-        automl.fit_models()
+    automl.load_dataset()
+    automl.fit_models()
 
     for res in automl.get_result().values():
         res.model = ensure_predictable_model(res.model)
@@ -180,9 +183,7 @@ def fit_automl_bundle(
                 logger.warning("enrich metrics %s skip: %s", name, exc)
 
     logger.info(
-        "AutoML fit done: models=%s send_mail=%s mlflow=%s",
+        "AutoML fit done (no pickle yet): models=%s",
         list(automl.get_result()),
-        send_mail,
-        log_mlflow,
     )
-    return automl, results
+    return automl, None

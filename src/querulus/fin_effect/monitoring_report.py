@@ -25,7 +25,7 @@ from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_
 PLAN_FILENAME = "fin_effect_plan.html"
 REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
-FORMULA_VERSION = "ITT-U-2026-09-21-v18-ult"
+FORMULA_VERSION = "ITT-U-2026-10-07-v19-funnel"
 
 
 def report_export_stamp(
@@ -1315,29 +1315,121 @@ def _contract_table(result: MonitoringEffectResult) -> pd.DataFrame:
     )
 
 
+def _agreement_funnel_section(result: MonitoringEffectResult) -> str:
+    """Воронка соглашений / вызов модели и деньги по ячейкам."""
+    funnel = getattr(result, "agreement_funnel", None)
+    money = getattr(result, "agreement_funnel_money", None)
+    if funnel is None or getattr(funnel, "empty", True):
+        return ""
+    funnel_html = _table(
+        funnel,
+        columns={
+            "layer": _c("слой", "all / split / group2_call / group2_answer"),
+            "stage": _c("ступень", "Описание ячейки воронки"),
+            "n": _c("n", "Число инцидентов"),
+            "share_of_base_pct": _c(
+                "% базы",
+                "Доля от базы слоя: для split — от всех; "
+                "для group2_call — от группы 2; для answer — от вызывали в группе 2",
+            ),
+        },
+        rows=[
+            "all — все заявленные инциденты ITT-выборки",
+            "split — обычное соглашение / с доплатой / без соглашения / группа 2",
+            "group2_call — среди группы 2: вызывали / не вызывали",
+            "group2_answer — среди вызывали в группе 2: ответы −100 / 0 / 1",
+        ],
+        notes=[
+            "Описательная воронка, не ITT-эффект.",
+        ],
+    )
+    money_html = _table(
+        money if money is not None else pd.DataFrame(),
+        columns={
+            "layer": _c("слой", "Слой воронки"),
+            "stage": _c("ступень", "Ячейка"),
+            "n": _c("n", "Число инцидентов"),
+            "mean_paid": _c("mean выплата", "Средняя СуммаПлатежа, ₽"),
+            "sum_paid": _c("Σ выплата", "Сумма СуммаПлатежа, ₽"),
+            "sum_recommended": _c("Σ рек.", "Сумма рекомендованной доплаты, ₽"),
+            "sum_model_payout": _c("Σ доплата", "Сумма Иные затраты, ₽"),
+            "sum_recommended_used": _c(
+                "Σ из рек.",
+                "Сколько из рекомендации использовали, ₽",
+                "Σ min(Иные затраты, рекомендация)",
+            ),
+            "sum_over_recommended": _c(
+                "Σ сверх рек.",
+                "Доплата сверх рекомендации, ₽",
+                "Σ max(Иные затраты − рекомендация, 0)",
+            ),
+        },
+        rows=[
+            "Те же ячейки, что в воронке (split + group2).",
+        ],
+    )
+    return f"""
+  <h2>4b. Воронка соглашений и вызов модели</h2>
+  <div class="card">
+    <p><b>Обычное соглашение</b> — есть соглашение и нет выплаты по модели
+    (в ручейке это просто соглашение; в модели — соглашение без доплаты).
+    <b>Группа 2</b> — все остальные: без соглашения или соглашение с доплатой.
+    Дальше по группе 2: вызывали модель или нет; где вызывали — ответы
+    −100 / 0 / 1.</p>
+    {funnel_html}
+    <h3>Деньги по ячейкам воронки</h3>
+    <p class="muted">Выплата = <code>СуммаПлатежа</code>. Для соглашений с доплатой
+    и срезов с выплатой по модели: рекомендация, сколько из неё использовали
+    (<code>min(Иные затраты, рекомендация)</code>), сколько сверх
+    (<code>max(Иные затраты − рекомендация, 0)</code>).</p>
+    {money_html}
+  </div>
+"""
+
+
 def _path_share_columns(*, include_filial: bool = False) -> dict[str, Any]:
     """Легенда долей путей. ``filial`` только для таблицы по филиалам."""
     cols: dict[str, Any] = {
         "segment": _c("segment", "Сегмент строки: control, model или lift"),
-        "n": _c("n", "Число строк сегмента в ITT-выборке", "count(rows|segment)"),
+        "n": _c("n", "Число инцидентов сегмента в ITT-выборке", "count(rows|segment)"),
+        "n_agreement": _c(
+            "n согл.",
+            "Число инцидентов с соглашением",
+            "count(agreement)",
+        ),
         "agreement_share": _c(
             "agreement %",
-            "Доля строк с соглашением, %",
+            "Доля инцидентов с соглашением, %",
             "100 × mean(is_agreement)",
+        ),
+        "n_pretension": _c(
+            "n прет.",
+            "Число инцидентов с претензией",
+            "count(pretension)",
         ),
         "pretension_share": _c(
             "pretension %",
-            "Доля строк с претензией, %",
+            "Доля инцидентов с претензией, %",
             "100 × mean(is_pretension)",
+        ),
+        "n_fu": _c(
+            "n ФУ",
+            "Число инцидентов с обращением к ФУ",
+            "count(fu_incident)",
         ),
         "fu_incident_share": _c(
             "FU %",
-            "Доля строк с флагом ФУ на уровне инцидента, %",
+            "Доля инцидентов с флагом ФУ, %",
             "100 × mean(fu_incident)",
+        ),
+        "n_court": _c(
+            "n суд",
+            "Число инцидентов с обращением к суду",
+            "count(court_incident)",
         ),
         "court_incident_share": _c(
             "court %",
-            "Доля строк с флагом суда на уровне инцидента, %",
+            "Доля инцидентов с флагом суда, %",
             "100 × mean(court_incident)",
         ),
     }
@@ -1556,20 +1648,20 @@ def build_monitoring_html(
     {quality.get("mean_losses_per_incident", "—")}.</p>
   </div>
 
-  <h2>4. Доли соглашений / претензий / ФУ / суда</h2>
+  <h2>4. Доли и количества: соглашения / претензии / ФУ / суд</h2>
   <div class="card">
-    <p>Доли считаются на той же ITT-выборке. Сначала control, затем model.
-    ФУ и суд подняты на уровень инцидента: если хотя бы один убыток инцидента
-    имел ФУ/суд, флаг ставится всем строкам инцидента.</p>
+    <p>На той же ITT-выборке (инциденты). Для каждого пути — и доля (%),
+    и число инцидентов. Сначала control (ручеек), затем model.
+    ФУ и суд: если хотя бы один убыток инцидента имел ФУ/суд, флаг на весь инцидент.</p>
     <h3>Control vs model</h3>
     {_table(
       result.path_shares,
       columns=_path_share_columns(include_filial=False),
       rows=[
-        "control — группа без модели",
-        "model — группа с назначением в модель",
-        "lift_pp (model - control) — разница долей в процентных пунктах",
-        "lift_rel (model / control - 1) — относительный рост доли model к control",
+        "control — ручеек (Result=−100)",
+        "model — назначение в модель (Result∈{{0,1}})",
+        "lift_pp (model - control) — разница долей в процентных пунктах (counts пустые)",
+        "lift_rel (model / control - 1) — относительный рост доли",
       ],
     )}
     <h3>По филиалам</h3>
@@ -1581,6 +1673,8 @@ def build_monitoring_html(
       ],
     )}
   </div>
+
+  {_agreement_funnel_section(result)}
 
   <h2>5. Терминальные ретро-коэффициенты</h2>
   <div class="card">
@@ -2231,6 +2325,63 @@ def _fmt_million(value: Any) -> str:
     return f"{mln:,.2f}".replace(",", " ")
 
 
+def _fmt_pct_or_dash(value: Any) -> str:
+    if value is None or (isinstance(value, float) and not np.isfinite(value)):
+        return "—"
+    try:
+        if pd.isna(value):
+            return "—"
+    except (TypeError, ValueError):
+        pass
+    return f"{float(value):.1f}"
+
+
+def _funnel_stage(
+    funnel: pd.DataFrame | None, stage_substr: str
+) -> dict[str, Any]:
+    """Первая строка воронки, у которой stage содержит подстроку."""
+    empty = {"n": 0, "share_of_base_pct": np.nan}
+    if funnel is None or getattr(funnel, "empty", True):
+        return empty
+    match = funnel.loc[
+        funnel["stage"].astype(str).str.contains(stage_substr, regex=False)
+    ]
+    if match.empty:
+        return empty
+    return match.iloc[0].to_dict()
+
+
+def _funnel_money_stage(
+    money: pd.DataFrame | None, stage_substr: str
+) -> dict[str, Any]:
+    empty = {
+        "n": 0,
+        "mean_paid": np.nan,
+        "sum_paid": 0.0,
+        "sum_recommended": 0.0,
+        "sum_model_payout": 0.0,
+        "sum_recommended_used": 0.0,
+        "sum_over_recommended": 0.0,
+    }
+    if money is None or getattr(money, "empty", True):
+        return empty
+    match = money.loc[
+        money["stage"].astype(str).str.contains(stage_substr, regex=False)
+    ]
+    if match.empty:
+        return empty
+    return match.iloc[0].to_dict()
+
+
+def _path_count(paths: pd.DataFrame | None, segment: str, column: str) -> str:
+    if paths is None or segment not in paths.index or column not in paths.columns:
+        return "—"
+    value = paths.loc[segment, column]
+    if pd.isna(value):
+        return "—"
+    return f"{int(value)}"
+
+
 def _path_pct(paths: pd.DataFrame | None, segment: str, column: str) -> str:
     if paths is None or segment not in paths.index or column not in paths.columns:
         return "—"
@@ -2374,6 +2525,18 @@ def build_conclusion_body_from_result(
     agr_m = _path_pct(paths, "model", "agreement_share")
     pret_c = _path_pct(paths, "control", "pretension_share")
     pret_m = _path_pct(paths, "model", "pretension_share")
+    n_agr_c = _path_count(paths, "control", "n_agreement")
+    n_agr_m = _path_count(paths, "model", "n_agreement")
+    n_pret_c = _path_count(paths, "control", "n_pretension")
+    n_pret_m = _path_count(paths, "model", "n_pretension")
+    n_fu_c = _path_count(paths, "control", "n_fu")
+    n_fu_m = _path_count(paths, "model", "n_fu")
+    n_court_c = _path_count(paths, "control", "n_court")
+    n_court_m = _path_count(paths, "model", "n_court")
+    fu_c = _path_pct(paths, "control", "fu_incident_share")
+    fu_m = _path_pct(paths, "model", "fu_incident_share")
+    court_c = _path_pct(paths, "control", "court_incident_share")
+    court_m = _path_pct(paths, "model", "court_incident_share")
     lift_agr = _path_pct(paths, "lift_pp (model - control)", "agreement_share")
     lift_pret = _path_pct(paths, "lift_pp (model - control)", "pretension_share")
     if paths is not None:
@@ -2383,6 +2546,22 @@ def build_conclusion_body_from_result(
         if lift_idx:
             lift_agr = _path_pct(paths, lift_idx[0], "agreement_share")
             lift_pret = _path_pct(paths, lift_idx[0], "pretension_share")
+
+    funnel = getattr(result, "agreement_funnel", None)
+    funnel_money = getattr(result, "agreement_funnel_money", None)
+    f_all = _funnel_stage(funnel, "все заявленные")
+    f_ord = _funnel_stage(funnel, "обычное соглашение")
+    f_top = _funnel_stage(funnel, "соглашение с доплатой")
+    f_no = _funnel_stage(funnel, "без соглашения")
+    f_g2 = _funnel_stage(funnel, "без обычного соглашения (группа 2)")
+    f_call = _funnel_stage(funnel, "группа 2 · вызывали модель")
+    f_nocall = _funnel_stage(funnel, "группа 2 · не вызывали модель")
+    f_a100 = _funnel_stage(funnel, "ответ −100")
+    f_a0 = _funnel_stage(funnel, "ответ 0 (нет ПСР)")
+    f_a1 = _funnel_stage(funnel, "ответ 1 (есть ПСР)")
+    m_ord = _funnel_money_stage(funnel_money, "обычное соглашение")
+    m_top = _funnel_money_stage(funnel_money, "соглашение с доплатой")
+    m_no = _funnel_money_stage(funnel_money, "без соглашения")
 
     confirmed = lo_y > 0
     ci_note = (
@@ -2481,18 +2660,80 @@ def build_conclusion_body_from_result(
       </tr>
     </table>
 
-    <h4>Доля соглашений по потокам</h4>
+    <h4>Соглашения / претензии / ФУ / суд по потокам</h4>
+    <p class="muted">Доля и число инцидентов (ручеек vs модель).</p>
     <table class="kv">
-      <tr><th>Ручеек</th><td>{agr_c}</td></tr>
-      <tr><th>Модель</th><td>{agr_m}</td></tr>
-      <tr><th>Δ модель − ручеек</th><td>{lift_agr} п.п.</td></tr>
+      <tr>
+        <th>Соглашения</th>
+        <td>ручеек {agr_c} ({n_agr_c} шт.) · модель {agr_m} ({n_agr_m} шт.) ·
+        Δ {lift_agr} п.п.</td>
+      </tr>
+      <tr>
+        <th>Претензии</th>
+        <td>ручеек {pret_c} ({n_pret_c} шт.) · модель {pret_m} ({n_pret_m} шт.) ·
+        Δ {lift_pret} п.п.</td>
+      </tr>
+      <tr>
+        <th>ФУ</th>
+        <td>ручеек {fu_c} ({n_fu_c} шт.) · модель {fu_m} ({n_fu_m} шт.)</td>
+      </tr>
+      <tr>
+        <th>Суд</th>
+        <td>ручеек {court_c} ({n_court_c} шт.) · модель {court_m} ({n_court_m} шт.)</td>
+      </tr>
     </table>
 
-    <h4>Конверсия в претензии по потокам</h4>
+    <h4>Воронка соглашений</h4>
+    <p class="muted">Обычное соглашение = соглашение без доплаты по модели.
+    Группа 2 = все остальные. Подробные таблицы — в report §4b.</p>
     <table class="kv">
-      <tr><th>Ручеек</th><td>{pret_c}</td></tr>
-      <tr><th>Модель</th><td>{pret_m}</td></tr>
-      <tr><th>Δ модель − ручеек</th><td>{lift_pret} п.п.</td></tr>
+      <tr>
+        <th>Всего инцидентов</th>
+        <td><b>{int(f_all.get("n", 0))}</b></td>
+      </tr>
+      <tr>
+        <th>Обычное соглашение</th>
+        <td><b>{int(f_ord.get("n", 0))}</b>
+        <small>({_fmt_pct_or_dash(f_ord.get("share_of_base_pct"))}% ·
+        mean выплата {_fmt_money_or_dash(m_ord.get("mean_paid"))} ₽ ·
+        Σ {_fmt_money_or_dash(m_ord.get("sum_paid"))} ₽)</small></td>
+      </tr>
+      <tr>
+        <th>Соглашение с доплатой</th>
+        <td><b>{int(f_top.get("n", 0))}</b>
+        <small>({_fmt_pct_or_dash(f_top.get("share_of_base_pct"))}% ·
+        Σ доплата {_fmt_money_or_dash(m_top.get("sum_model_payout"))} ₽ ·
+        из рек. {_fmt_money_or_dash(m_top.get("sum_recommended_used"))} ·
+        сверх {_fmt_money_or_dash(m_top.get("sum_over_recommended"))})</small></td>
+      </tr>
+      <tr>
+        <th>Без соглашения</th>
+        <td><b>{int(f_no.get("n", 0))}</b>
+        <small>({_fmt_pct_or_dash(f_no.get("share_of_base_pct"))}% ·
+        mean {_fmt_money_or_dash(m_no.get("mean_paid"))} ₽ ·
+        Σ {_fmt_money_or_dash(m_no.get("sum_paid"))} ₽)</small></td>
+      </tr>
+      <tr>
+        <th>Группа 2 (без обычного соглашения)</th>
+        <td><b>{int(f_g2.get("n", 0))}</b>
+        <small>({_fmt_pct_or_dash(f_g2.get("share_of_base_pct"))}% от всех)</small></td>
+      </tr>
+      <tr>
+        <th>Из группы 2: вызов модели</th>
+        <td>вызывали <b>{int(f_call.get("n", 0))}</b>
+        ({_fmt_pct_or_dash(f_call.get("share_of_base_pct"))}%) ·
+        не вызывали <b>{int(f_nocall.get("n", 0))}</b>
+        ({_fmt_pct_or_dash(f_nocall.get("share_of_base_pct"))}%)</td>
+      </tr>
+      <tr>
+        <th>Где вызывали — ответы</th>
+        <td>−100: <b>{int(f_a100.get("n", 0))}</b>
+        ({_fmt_pct_or_dash(f_a100.get("share_of_base_pct"))}%) ·
+        0: <b>{int(f_a0.get("n", 0))}</b>
+        ({_fmt_pct_or_dash(f_a0.get("share_of_base_pct"))}%) ·
+        1: <b>{int(f_a1.get("n", 0))}</b>
+        ({_fmt_pct_or_dash(f_a1.get("share_of_base_pct"))}%)</td>
+      </tr>
     </table>
   </div>
 

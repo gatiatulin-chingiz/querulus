@@ -31,7 +31,7 @@ python -m unittest integration.tests.unit_tests -v
 python -m unittest integration.tests.test_shadow_v2 -v
 ```
 
-Артефакты для second_ (класть в `integration/results/querulus/2.0.0/`):
+Артефакты для second_ (класть в плоский `integration/results/`; legacy fallback `querulus/2.0.0/`):
 
 - `querulus_ansamble.pickle` — из `example_final` export
 - `metadata.json` — `best_threshold`
