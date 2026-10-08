@@ -57,3 +57,30 @@ python -m unittest integration.tests.integration_tests -v
 ```bash
 python -m unittest discover -s integration/tests -p "*tests.py" -v
 ```
+
+## vector_checker — сверка вектора 1С с df_for_service
+
+Пакет: `integration/tests/vector_checker`.
+
+Рабочий цикл:
+
+1. `prepare` — берёт актуальный `df_for_service.parquet`, подставляет все `LOSS_NUMBER` в шаблон `integration/Сутяжность.txt`, пишет запрос для консоли 1С.
+2. Вставить `work/Сутяжность_for_1c.txt` в 1С → выгрузить Excel.
+3. Положить Excel в `integration/tests/vector_checker/work/excel/`.
+4. `compare` — 1:1 сверка фич по `LOSS_NUMBER`.
+
+```bash
+# из examples/querulus
+python -m integration.tests.vector_checker prepare
+python -m integration.tests.vector_checker compare --excel integration/tests/vector_checker/work/excel/export.xlsx
+
+# синтетический smoke (без 1С)
+python -m integration.tests.vector_checker demo
+```
+
+Отчёты: `integration/tests/vector_checker/work/reports/`.
+Шаблон `Сутяжность.txt` не перезаписывается — выходной файл отдельный.
+
+Разбор расхождений в DataFrame (вместо JSON): ноутбук
+`integration/tests/vector_checker/vector_checker.ipynb`
+(`USE_SYNTHETIC=True` для демо, иначе Excel из `work/excel/`).
