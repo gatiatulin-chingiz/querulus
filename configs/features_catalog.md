@@ -131,7 +131,7 @@
 | `FE_VALUE_BEFORE_DIFF` | Износ в руб. 2022 | `WITHOUT_REAL − WITH_REAL` |
 | `FE_VALUE_BEFORE_RATIO` | Отношение with/without | безразмерное (CPI сокращается) |
 
-> В обучение не идут: `AMOUNT_REPAIR`, `REPAIR_VALUE`, `SHARE_WEAROUT`, `LATITUDE`/`LONGITUDE` и старые FE от них (`TO_DROP` в `mvp_types.py`).
+> В обучение не идут: `AMOUNT_REPAIR`, `Work`, `REPAIR_VALUE`, `SHARE_WEAROUT`, `LATITUDE`/`LONGITUDE` и старые FE от них (`TO_DROP` в `mvp_types.py`).
 
 ### J. История убытков (past only, из victim)
 
@@ -234,7 +234,8 @@
 
 | Фича | Описание | Как собирается |
 |------|----------|----------------|
-| `SHARE_WORK` | Доля работ в калькуляции | `Работы` (`_InfoRg14746`) / `VALUE_BEFORE_WITHOUT` (victim-строка); фолбэк — `AMOUNT_REPAIR`, если колонки нет |
+| `SHARE_WORK` | Доля работ в калькуляции | `Work` / `VALUE_BEFORE_WITHOUT` (victim-строка); фолбэк — `AMOUNT_REPAIR`, если колонки нет |
+| `Work` | Сумма работ в калькуляции | `_InfoRg14746`.`Работы` → **TO_DROP** |
 | `AMOUNT_REPAIR` | Сумма ремонта без износа | `_InfoRg14746` → **TO_DROP** |
 | `SHARE_WEAROUT` | Процент износа (cap 50) | `_InfoRg14746` → **TO_DROP** |
 | `FLAG_APPLICANT_SAME_VICTIM_PH` | Заявитель = PH victim | `APPLICANT_ID == VICTIM_POLICYHOLDER_PERSON_ID` |
@@ -293,7 +294,7 @@
 
 ### 5.7 Минимизация / стоимости
 
-`MINIMIZATION_*`, `VALUE_BEFORE_*`, `VALUE_AFTER_*`, `REPAIR_VALUE`, `CPM_*`, `AMOUNT_REPAIR`, `RSA_RE_OUT`, `FL_PHOTO_VIDEO` — калькуляция и проверки.
+`MINIMIZATION_*`, `VALUE_BEFORE_*`, `VALUE_AFTER_*`, `REPAIR_VALUE`, `CPM_*`, `AMOUNT_REPAIR`, `Work`, `RSA_RE_OUT`, `FL_PHOTO_VIDEO` — калькуляция и проверки.
 
 ### 5.8 История убытков (из victim)
 
