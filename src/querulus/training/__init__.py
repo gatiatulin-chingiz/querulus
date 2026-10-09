@@ -63,6 +63,15 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "export_prod_service_artifacts",
     ),
     "save_df_for_service": (".example_pipeline", "save_df_for_service"),
+    "export_model_features_for_vector_checker": (
+        ".example_pipeline",
+        "export_model_features_for_vector_checker",
+    ),
+    "feature_columns_from_models_config": (
+        ".example_pipeline",
+        "feature_columns_from_models_config",
+    ),
+    "MODEL_FEATURES_JSON": (".example_pipeline", "MODEL_FEATURES_JSON"),
     "SERVICE_ENSEMBLE_PICKLE": (".example_pipeline", "SERVICE_ENSEMBLE_PICKLE"),
     "create_querulus_automl": (".automl_fit", "create_querulus_automl"),
     "fit_automl_bundle": (".automl_fit", "fit_automl_bundle"),

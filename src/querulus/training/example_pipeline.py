@@ -138,6 +138,8 @@ class TestProdCompareResult:
 
 # Стабильное имя ensemble-pickle для shadow (копия AutoML timestamped dump).
 SERVICE_ENSEMBLE_PICKLE = "querulus_ansamble.pickle"
+# Список фич CF∪RG для vector_checker (FEATURES=...).
+MODEL_FEATURES_JSON = "model_features.json"
 
 
 @dataclass
@@ -1132,6 +1134,87 @@ def run_prod_plots_and_email(
     return ProdPlotsResult(zip_path=zip_path, rg_calibrator=sev_cal)
 
 
+def feature_columns_from_models_config(
+    config_path: Path | str,
+    *,
+    cf_name: str = MODEL_CF_NAME,
+    rg_name: str = MODEL_RG_NAME,
+) -> dict[str, Any]:
+    """Имена фич CF/RG из AllModelsConfig JSON.
+
+    Returns dict с ``classification``, ``regression``, ``features`` (union без дублей).
+    """
+    path = Path(config_path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    models = raw.get("models_configs") or raw.get("models") or []
+    by_name: dict[str, dict[str, Any]] = {}
+    for item in models:
+        if isinstance(item, dict) and item.get("name"):
+            by_name[str(item["name"])] = item
+
+    def _names(model_name: str) -> list[str]:
+        cfg = by_name.get(model_name) or {}
+        feats = cfg.get("features") or []
+        out: list[str] = []
+        for feat in feats:
+            if isinstance(feat, dict) and feat.get("name"):
+                out.append(str(feat["name"]))
+            elif isinstance(feat, str):
+                out.append(feat)
+        return out
+
+    classification = _names(cf_name)
+    regression = _names(rg_name)
+    if not classification and not regression:
+        raise ValueError(
+            f"В {path} нет features для {cf_name!r}/{rg_name!r} "
+            f"(models: {sorted(by_name)})"
+        )
+    features = list(dict.fromkeys([*classification, *regression]))
+    return {
+        "source": str(path.resolve()),
+        "cf_name": cf_name,
+        "rg_name": rg_name,
+        "classification": classification,
+        "regression": regression,
+        "features": features,
+    }
+
+
+def export_model_features_for_vector_checker(
+    paths: ExamplePaths,
+    *,
+    config_path: Path | str,
+    cf_name: str = MODEL_CF_NAME,
+    rg_name: str = MODEL_RG_NAME,
+    model_version: str | None = None,
+    filename: str = MODEL_FEATURES_JSON,
+) -> Path:
+    """Записать ``model_features.json``: множества CF/RG + union для vector_checker.
+
+    В vector_checker::
+
+        FEATURES = json.loads(Path("model_features.json").read_text())["features"]
+    """
+    payload = feature_columns_from_models_config(
+        config_path, cf_name=cf_name, rg_name=rg_name
+    )
+    payload["model_name"] = "querulus"
+    payload["model_version"] = model_version or default_model_version()
+    paths.results_dir.mkdir(parents=True, exist_ok=True)
+    out = paths.results_dir / filename
+    out.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print("=== model_features.json (vector_checker) ===")
+    print(f"  {out}")
+    print(f"  classification: {len(payload['classification'])}")
+    print(f"  regression:     {len(payload['regression'])}")
+    print(f"  features (∪):   {len(payload['features'])}")
+    return out
+
+
 def save_df_for_service(
     models: ExampleDsmBundle,
     bundle: ExampleDatasetBundle,
@@ -1152,6 +1235,20 @@ def save_df_for_service(
     print(f"  shape: {df_service.shape[0]:,} × {df_service.shape[1]}")
     print(f"  preds_cf NA: {df_service['preds_cf'].isna().mean():.1%}")
     print(f"  preds_rg NA: {df_service['preds_rg'].isna().mean():.1%}")
+
+    prod_path = bundle.built.get("prod_path")
+    if prod_path:
+        try:
+            export_model_features_for_vector_checker(
+                paths,
+                config_path=prod_path,
+                cf_name=bundle.cf_name,
+                rg_name=bundle.rg_name,
+                model_version=bundle.model_version,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("model_features.json skip: %s", exc)
+
     return service_df_path
 
 
