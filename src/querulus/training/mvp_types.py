@@ -88,7 +88,7 @@ DEFAULT_MVP_INPUT_TYPES: dict[str, list[str]] = {'NUMERIC': [],
              'Взысканный_износ_ФУ',
              'REPAIR_VALUE',
              'AMOUNT_REPAIR',
-             'Work',  # номинал «Работы» из calc; в модель идёт SHARE_WORK / FE_SHARE_WORK_TIER
+             'WORK',  # номинал «Работы» из calc; в модель идёт SHARE_WORK / FE_SHARE_WORK_TIER
              # AMOUNT_REPAIR / REPAIR_VALUE-derived FE (заменены на VALUE_BEFORE_*)
              'FE_AMOUNT_REPAIR_BIN',
              'FE_HIGH_REPAIR',

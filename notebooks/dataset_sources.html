@@ -240,16 +240,16 @@ WHERE YEAR(l.IssueDate) IS NOT NULL
         </li>
         <li>
           После выгрузки: процент износа выше 50 обрезается до 50;
-          <code>SHARE_WORK</code> = <code>Work</code> (<code>Работы</code> из calc) /
+          <code>SHARE_WORK</code> = <code>WORK</code> (<code>Работы</code> из calc) /
           <code>VALUE_BEFORE_WITHOUT</code> (victim-строка, в calc-выгрузке этой колонки нет;
           фолбэк — <code>AMOUNT_REPAIR</code>, если её нет);
-          в df уходят <code>Work</code>, <code>AMOUNT_REPAIR</code>, <code>SHARE_WORK</code>, <code>SHARE_WEAROUT</code>
+          в df уходят <code>WORK</code>, <code>AMOUNT_REPAIR</code>, <code>SHARE_WORK</code>, <code>SHARE_WEAROUT</code>
           (LEFT JOIN к каркасу по номеру инцидента).
         </li>
         <li>
           Важно: каркас строк — убыток с <em>минимальным</em> номером;
           калькуляция — с <em>максимального</em> убытка инцидента:
-          числитель <code>Work</code> — от calc, знаменатель
+          числитель <code>WORK</code> — от calc, знаменатель
           <code>VALUE_BEFORE_WITHOUT</code> — от каркасной (victim) строки.
         </li>
       </ul>

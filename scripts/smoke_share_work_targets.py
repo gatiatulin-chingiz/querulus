@@ -6,7 +6,7 @@
 2) нулевой знаменатель → `NaN` (не делим);
 3) если `VALUE_BEFORE_WITHOUT` в общем фрейме нет — фолбэк на `AMOUNT_REPAIR`
    с warning;
-4) `Работы` в датасете → `Work` (русская колонка не остаётся).
+4) `Работы` в датасете → `WORK` (русская колонка не остаётся).
 """
 from __future__ import annotations
 
@@ -152,12 +152,12 @@ def main() -> int:
     )
     if "Работы" in out.columns:
         failures.append("в датасете осталась русская колонка 'Работы'")
-    if "Work" not in out.columns:
-        failures.append("в датасете нет колонки 'Work'")
+    if "WORK" not in out.columns:
+        failures.append("в датасете нет колонки 'WORK'")
     else:
-        work_got = out.set_index("INCIDENT_NUMBER")["Work"].to_dict()
+        work_got = out.set_index("INCIDENT_NUMBER")["WORK"].to_dict()
         work_exp = {1: 100.0, 2: 50.0, 3: 30.0, 4: 10.0}
-        _check("Work", work_got, work_exp, failures)
+        _check("WORK", work_got, work_exp, failures)
 
     fallback = _run(with_value_before_without=False)
     _check(
@@ -172,7 +172,7 @@ def main() -> int:
         for item in failures:
             print(" -", item)
         return 1
-    print("\nOK: SHARE_WORK = Work / VALUE_BEFORE_WITHOUT (+ фолбэк AMOUNT_REPAIR); Work сохранён")
+    print("\nOK: SHARE_WORK = WORK / VALUE_BEFORE_WITHOUT (+ фолбэк AMOUNT_REPAIR); WORK сохранён")
     return 0
 
 
