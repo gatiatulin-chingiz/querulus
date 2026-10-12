@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Querulus Integration — карта функций</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0f1419;
+      --bg-elev: #1a222c;
+      --bg-card: #222b36;
+      --line: #3a4654;
+      --text: #e8eef4;
+      --muted: #9aabbc;
+      --accent: #3db88a;
+      --accent-dim: #2a7a5c;
+      --main: #4a9fd8;
+      --second: #e0a04a;
+      --new: #5ec8a0;
+      --reviewed: #7a8fa3;
+      --hot: #e8c36a;
+      --caller: #6bb3e8;
+      --callee: #e0a04a;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+      --sans: "IBM Plex Sans", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background:
+        radial-gradient(ellipse 80% 50% at 10% -10%, #1a3a32 0%, transparent 55%),
+        radial-gradient(ellipse 60% 40% at 100% 0%, #1a2a3a 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      font-size: 15px;
+    }
+    .wrap { max-width: 1280px; margin: 0 auto; padding: 2rem 1.25rem 3.5rem; }
+    header {
+      margin-bottom: 1.5rem;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 1.25rem;
+    }
+    header .eyebrow {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin: 0 0 0.5rem;
+    }
+    h1 {
+      font-size: clamp(1.45rem, 2.8vw, 1.95rem);
+      font-weight: 600;
+      margin: 0 0 0.5rem;
+      letter-spacing: -0.02em;
+    }
+    header p { margin: 0; color: var(--muted); max-width: 48rem; }
+    header a { color: var(--main); }
+    header code {
+      font-family: var(--mono);
+      font-size: 0.85em;
+      color: var(--accent);
+    }
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center;
+      margin: 1.25rem 0 1rem;
+    }
+    .toolbar input[type="search"] {
+      flex: 1 1 220px;
+      min-width: 180px;
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 0.55rem 0.75rem;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+    }
+    .toolbar input:focus { outline: 1px solid var(--accent-dim); }
+    .chip {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      padding: 0.4rem 0.65rem;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--bg-elev);
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+    }
+    .chip.on { color: var(--text); border-color: var(--accent-dim); background: rgba(61,184,138,0.12); }
+    .chip.tag-new.on { color: var(--new); border-color: #2a7a5c; }
+    .chip.tag-reviewed.on { color: #b8c8d6; border-color: #4a5a6a; }
+    .stats {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-left: auto;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 1rem;
+      align-items: start;
+    }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+    .panel {
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .panel-h {
+      padding: 0.7rem 1rem;
+      border-bottom: 1px solid var(--line);
+      font-weight: 600;
+      font-size: 0.92rem;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .panel-h span { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); font-weight: 500; }
+    .mod { border-bottom: 1px solid var(--line); }
+    .mod:last-child { border-bottom: none; }
+    .mod-h {
+      padding: 0.55rem 1rem;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--main);
+      background: rgba(74,159,216,0.06);
+      display: flex; justify-content: space-between;
+    }
+    .mod-h.second { color: var(--second); background: rgba(224,160,74,0.06); }
+    .mod-body { padding: 0.45rem 0.65rem 0.7rem; display: flex; flex-wrap: wrap; gap: 0.35rem; }
+    .fn {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      padding: 0.28rem 0.5rem;
+      border-radius: 4px;
+      border: 1px solid transparent;
+      background: var(--bg-card);
+      color: var(--text);
+      cursor: pointer;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .fn.new { box-shadow: inset 3px 0 0 var(--new); }
+    .fn.reviewed { box-shadow: inset 3px 0 0 var(--reviewed); }
+    .fn:hover { border-color: var(--line); }
+    .fn.selected { border-color: var(--hot); background: rgba(232,195,106,0.15); color: var(--hot); }
+    .fn.caller { border-color: var(--caller); background: rgba(107,179,232,0.12); }
+    .fn.callee { border-color: var(--callee); background: rgba(224,160,74,0.14); }
+    .fn.dim { opacity: 0.28; }
+    .detail { padding: 1rem; min-height: 280px; }
+    .detail.empty { color: var(--muted); font-size: 0.92rem; }
+    .detail .name {
+      font-family: var(--mono);
+      font-size: 1.05rem;
+      font-weight: 500;
+      color: var(--hot);
+      word-break: break-all;
+    }
+    .detail .meta {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin: 0.35rem 0 1rem;
+    }
+    .badge {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 3px;
+      margin-right: 0.35rem;
+    }
+    .badge.new { background: rgba(94,200,160,0.18); color: var(--new); }
+    .badge.reviewed { background: rgba(122,143,163,0.2); color: #b8c8d6; }
+    .sec-title {
+      font-size: 0.72rem;
+      font-family: var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin: 1rem 0 0.4rem;
+    }
+    .sec-title.calls { color: var(--callee); }
+    .sec-title.called { color: var(--caller); }
+    .link-list { list-style: none; margin: 0; padding: 0; }
+    .link-list li {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      padding: 0.35rem 0.5rem;
+      border-radius: 4px;
+      cursor: pointer;
+      color: var(--text);
+    }
+    .link-list li:hover { background: var(--bg-card); }
+    .link-list li .arrow { color: var(--muted); margin: 0 0.35rem; }
+    .flow-box {
+      margin-top: 1.25rem;
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 1rem;
+    }
+    .flow-box h2 { margin: 0 0 0.75rem; font-size: 1rem; font-weight: 600; }
+    .flow-box p { margin: 0 0 0.75rem; color: var(--muted); font-size: 0.88rem; }
+    .entry-btns { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.75rem; }
+    .entry-btns button {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      padding: 0.4rem 0.7rem;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: var(--bg-card);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .entry-btns button:hover, .entry-btns button.on {
+      border-color: var(--accent-dim);
+      background: rgba(61,184,138,0.12);
+      color: var(--accent);
+    }
+    #tree {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      line-height: 1.55;
+      overflow-x: auto;
+      white-space: pre;
+      color: var(--text);
+      background: #121820;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0.85rem 1rem;
+      max-height: 420px;
+      overflow-y: auto;
+    }
+    #tree .t-new { color: var(--new); }
+    #tree .t-rev { color: var(--reviewed); }
+    #tree .t-sel { color: var(--hot); font-weight: 500; }
+    #tree .clickable { cursor: pointer; }
+    #tree .clickable:hover { text-decoration: underline; }
+    .legend {
+      display: flex; flex-wrap: wrap; gap: 1rem;
+      font-size: 0.8rem; color: var(--muted);
+      margin-top: 0.75rem;
+    }
+    .legend i {
+      display: inline-block; width: 10px; height: 10px;
+      border-radius: 2px; margin-right: 0.35rem; vertical-align: middle;
+    }
+    .note {
+      margin-top: 1.5rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      padding-top: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <p class="eyebrow">querulus / integration</p>
+      <h1>Карта функций</h1>
+      <p>
+        Кто кого вызывает внутри <code>service</code>, <code>scoring</code>, <code>features</code>.
+        Клик по функции — список вызывающих и вызываемых.
+        Маркеры <code style="color:var(--new)">#new</code> /
+        <code style="color:var(--reviewed)">#reviewed</code>.
+        <a href="architecture.html">← архитектура</a>
+      </p>
+    </header>
+
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="поиск: score_second, FE, calibrator…" autocomplete="off" />
+      <button type="button" class="chip tag-new on" data-tag="new">#new</button>
+      <button type="button" class="chip tag-reviewed on" data-tag="reviewed">#reviewed</button>
+      <span class="stats" id="stats"></span>
+    </div>
+
+    <div class="layout">
+      <div class="panel">
+        <div class="panel-h">Модули <span id="count-label"></span></div>
+        <div id="modules"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h">Связи <span>click → callers / callees</span></div>
+        <div class="detail empty" id="detail">Выберите функцию слева или entry-point ниже.</div>
+      </div>
+    </div>
+
+    <div class="flow-box">
+      <h2>Дерево вызовов от entry-point</h2>
+      <p>Исходящие вызовы (глубина ≤ 8). Повтор функции — ↻.</p>
+      <div class="entry-btns" id="entries"></div>
+      <div id="tree">Выберите entry-point…</div>
+      <div class="legend">
+        <span><i style="background:var(--new)"></i>#new</span>
+        <span><i style="background:var(--reviewed)"></i>#reviewed</span>
+        <span><i style="background:var(--hot)"></i>выбранная</span>
+        <span><i style="background:var(--caller)"></i>вызывает выбранную</span>
+        <span><i style="background:var(--callee)"></i>вызывается из выбранной</span>
+      </div>
+    </div>
+
+    <p class="note">
+      Граф собран статически (AST): прямые вызовы по имени внутри integration (без tests).
+      Одинаковые имена в разных модулях резолвятся в модуль вызывающего.
+      Внешние библиотеки не показаны. Пересобрать:
+      <code style="font-family:var(--mono);color:var(--accent)">python examples/querulus/scripts/_gen_functions_html.py</code>
+    </p>
+  </div>
+
+  <script>
+  const DATA = {"nodes": [{"id": "features.cpi._normalized_table", "module": "features.cpi", "name": "_normalized_table", "tag": "reviewed", "lineno": 63, "file": "features/cpi.py"}, {"id": "features.cpi.add_real_monetary_columns", "module": "features.cpi", "name": "add_real_monetary_columns", "tag": "reviewed", "lineno": 155, "file": "features/cpi.py"}, {"id": "features.cpi.cpi_level_for_years", "module": "features.cpi", "name": "cpi_level_for_years", "tag": "reviewed", "lineno": 118, "file": "features/cpi.py"}, {"id": "features.cpi.cpi_year_usage", "module": "features.cpi", "name": "cpi_year_usage", "tag": "reviewed", "lineno": 49, "file": "features/cpi.py"}, {"id": "features.cpi.deflate_to_base_year", "module": "features.cpi", "name": "deflate_to_base_year", "tag": "reviewed", "lineno": 139, "file": "features/cpi.py"}, {"id": "features.cpi.load_cpi_levels", "module": "features.cpi", "name": "load_cpi_levels", "tag": "reviewed", "lineno": 33, "file": "features/cpi.py"}, {"id": "features.cpi.real_feature_name", "module": "features.cpi", "name": "real_feature_name", "tag": "reviewed", "lineno": 54, "file": "features/cpi.py"}, {"id": "features.cpi.resolve_cpi_year", "module": "features.cpi", "name": "resolve_cpi_year", "tag": "reviewed", "lineno": 76, "file": "features/cpi.py"}, {"id": "features.derived._col", "module": "features.derived", "name": "_col", "tag": "new", "lineno": 27, "file": "features/derived.py"}, {"id": "features.derived._days_between", "module": "features.derived", "name": "_days_between", "tag": "new", "lineno": 39, "file": "features/derived.py"}, {"id": "features.derived._ensure_share_work", "module": "features.derived", "name": "_ensure_share_work", "tag": "new", "lineno": 68, "file": "features/derived.py"}, {"id": "features.derived._safe_div", "module": "features.derived", "name": "_safe_div", "tag": "new", "lineno": 44, "file": "features/derived.py"}, {"id": "features.derived._tier_from_bins", "module": "features.derived", "name": "_tier_from_bins", "tag": "new", "lineno": 51, "file": "features/derived.py"}, {"id": "features.derived._to_dt", "module": "features.derived", "name": "_to_dt", "tag": "new", "lineno": 34, "file": "features/derived.py"}, {"id": "features.derived.add_second_model_features", "module": "features.derived", "name": "add_second_model_features", "tag": "new", "lineno": 100, "file": "features/derived.py"}, {"id": "features.derived.vehicle_age_months_from_year", "module": "features.derived", "name": "vehicle_age_months_from_year", "tag": "new", "lineno": 87, "file": "features/derived.py"}, {"id": "scoring.profiles._base", "module": "scoring.profiles", "name": "_base", "tag": "reviewed", "lineno": 24, "file": "scoring/profiles.py"}, {"id": "scoring.profiles.feature_names_from_model_result", "module": "scoring.profiles", "name": "feature_names_from_model_result", "tag": "reviewed", "lineno": 124, "file": "scoring/profiles.py"}, {"id": "scoring.profiles.load_optional_pickle", "module": "scoring.profiles", "name": "load_optional_pickle", "tag": "new", "lineno": 117, "file": "scoring/profiles.py"}, {"id": "scoring.profiles.load_pickle", "module": "scoring.profiles", "name": "load_pickle", "tag": "new", "lineno": 111, "file": "scoring/profiles.py"}, {"id": "scoring.profiles.prod_models_dir", "module": "scoring.profiles", "name": "prod_models_dir", "tag": "reviewed", "lineno": 29, "file": "scoring/profiles.py"}, {"id": "scoring.profiles.second_cf_calibrator_path", "module": "scoring.profiles", "name": "second_cf_calibrator_path", "tag": "new", "lineno": 82, "file": "scoring/profiles.py"}, {"id": "scoring.profiles.second_meta_path", "module": "scoring.profiles", "name": "second_meta_path", "tag": "reviewed", "lineno": 66, "file": "scoring/profiles.py"}, {"id": "scoring.profiles.second_models_dir", "module": "scoring.profiles", "name": "second_models_dir", "tag": "reviewed", "lineno": 46, "file": "scoring/profiles.py"}, {"id": "scoring.profiles.second_pickle_path", "module": "scoring.profiles", "name": "second_pickle_path", "tag": "reviewed", "lineno": 54, "file": "scoring/profiles.py"}, {"id": "scoring.profiles.second_rg_calibrator_path", "module": "scoring.profiles", "name": "second_rg_calibrator_path", "tag": "new", "lineno": 88, "file": "scoring/profiles.py"}, {"id": "scoring.profiles.second_subdir", "module": "scoring.profiles", "name": "second_subdir", "tag": "reviewed", "lineno": 37, "file": "scoring/profiles.py"}, {"id": "scoring.profiles.threshold_from_meta", "module": "scoring.profiles", "name": "threshold_from_meta", "tag": "reviewed", "lineno": 94, "file": "scoring/profiles.py"}, {"id": "scoring.second._load_group", "module": "scoring.second", "name": "_load_group", "tag": "reviewed", "lineno": 93, "file": "scoring/second.py"}, {"id": "scoring.second._prepare_matrix", "module": "scoring.second", "name": "_prepare_matrix", "tag": "reviewed", "lineno": 112, "file": "scoring/second.py"}, {"id": "scoring.second._raw_classification_scores", "module": "scoring.second", "name": "_raw_classification_scores", "tag": "new", "lineno": 162, "file": "scoring/second.py"}, {"id": "scoring.second._require_columns", "module": "scoring.second", "name": "_require_columns", "tag": "reviewed", "lineno": 133, "file": "scoring/second.py"}, {"id": "scoring.second._round_numbers", "module": "scoring.second", "name": "_round_numbers", "tag": "reviewed", "lineno": 227, "file": "scoring/second.py"}, {"id": "scoring.second._unwrap_model", "module": "scoring.second", "name": "_unwrap_model", "tag": "reviewed", "lineno": 141, "file": "scoring/second.py"}, {"id": "scoring.second.apply_cf_calibrator", "module": "scoring.second", "name": "apply_cf_calibrator", "tag": "new", "lineno": 174, "file": "scoring/second.py"}, {"id": "scoring.second.apply_rg_calibrator", "module": "scoring.second", "name": "apply_rg_calibrator", "tag": "new", "lineno": 196, "file": "scoring/second.py"}, {"id": "scoring.second.enrich_dates_and_forms", "module": "scoring.second", "name": "enrich_dates_and_forms", "tag": "reviewed", "lineno": 60, "file": "scoring/second.py"}, {"id": "scoring.second.json_loads_records", "module": "scoring.second", "name": "json_loads_records", "tag": "reviewed", "lineno": 234, "file": "scoring/second.py"}, {"id": "scoring.second.pickle_load", "module": "scoring.second", "name": "pickle_load", "tag": "new", "lineno": 105, "file": "scoring/second.py"}, {"id": "scoring.second.prepare_vector_upper", "module": "scoring.second", "name": "prepare_vector_upper", "tag": "reviewed", "lineno": 47, "file": "scoring/second.py"}, {"id": "scoring.second.preprocess_second_vector", "module": "scoring.second", "name": "preprocess_second_vector", "tag": "new", "lineno": 79, "file": "scoring/second.py"}, {"id": "scoring.second.resolve_second_threshold", "module": "scoring.second", "name": "resolve_second_threshold", "tag": "reviewed", "lineno": 210, "file": "scoring/second.py"}, {"id": "scoring.second.score_second", "module": "scoring.second", "name": "score_second", "tag": "new", "lineno": 240, "file": "scoring/second.py"}, {"id": "service.main._classification_proba_and_labels", "module": "service.main", "name": "_classification_proba_and_labels", "tag": "reviewed", "lineno": 401, "file": "service/main.py"}, {"id": "service.main._df_to_json", "module": "service.main", "name": "_df_to_json", "tag": "reviewed", "lineno": 664, "file": "service/main.py"}, {"id": "service.main._get_or_load_group", "module": "service.main", "name": "_get_or_load_group", "tag": "reviewed", "lineno": 679, "file": "service/main.py"}, {"id": "service.main._masked_predictions", "module": "service.main", "name": "_masked_predictions", "tag": "reviewed", "lineno": 296, "file": "service/main.py"}, {"id": "service.main._prepare_matrix", "module": "service.main", "name": "_prepare_matrix", "tag": "reviewed", "lineno": 716, "file": "service/main.py"}, {"id": "service.main._prod_models_dir", "module": "service.main", "name": "_prod_models_dir", "tag": "reviewed", "lineno": 251, "file": "service/main.py"}, {"id": "service.main._require_columns", "module": "service.main", "name": "_require_columns", "tag": "reviewed", "lineno": 379, "file": "service/main.py"}, {"id": "service.main._round_numbers", "module": "service.main", "name": "_round_numbers", "tag": "reviewed", "lineno": 444, "file": "service/main.py"}, {"id": "service.main._shap_top_features_comment", "module": "service.main", "name": "_shap_top_features_comment", "tag": "reviewed", "lineno": 483, "file": "service/main.py"}, {"id": "service.main._startup_log", "module": "service.main", "name": "_startup_log", "tag": "reviewed", "lineno": 229, "file": "service/main.py"}, {"id": "service.main._unwrap_mldataworker_model", "module": "service.main", "name": "_unwrap_mldataworker_model", "tag": "reviewed", "lineno": 466, "file": "service/main.py"}, {"id": "service.main.enrich_common_vector_dataframe", "module": "service.main", "name": "enrich_common_vector_dataframe", "tag": "reviewed", "lineno": 336, "file": "service/main.py"}, {"id": "service.main.get_threshold_from_vector", "module": "service.main", "name": "get_threshold_from_vector", "tag": "reviewed", "lineno": 269, "file": "service/main.py"}, {"id": "service.main.health_route", "module": "service.main", "name": "health_route", "tag": "reviewed", "lineno": 1021, "file": "service/main.py"}, {"id": "service.main.main_predict", "module": "service.main", "name": "main_predict", "tag": "reviewed", "lineno": 845, "file": "service/main.py"}, {"id": "service.main.predict_route", "module": "service.main", "name": "predict_route", "tag": "reviewed", "lineno": 1038, "file": "service/main.py"}, {"id": "service.main.prepare_common_vector_dataframe", "module": "service.main", "name": "prepare_common_vector_dataframe", "tag": "reviewed", "lineno": 305, "file": "service/main.py"}, {"id": "service.main.preprocessing_and_validate_vector", "module": "service.main", "name": "preprocessing_and_validate_vector", "tag": "reviewed", "lineno": 197, "file": "service/main.py"}, {"id": "service.main.run_classification_model", "module": "service.main", "name": "run_classification_model", "tag": "reviewed", "lineno": 764, "file": "service/main.py"}, {"id": "service.main.run_regression_model", "module": "service.main", "name": "run_regression_model", "tag": "reviewed", "lineno": 803, "file": "service/main.py"}, {"id": "service.main.validate_derived_dates_strict", "module": "service.main", "name": "validate_derived_dates_strict", "tag": "reviewed", "lineno": 161, "file": "service/main.py"}, {"id": "service.main.validate_exact_columns_order", "module": "service.main", "name": "validate_exact_columns_order", "tag": "reviewed", "lineno": 146, "file": "service/main.py"}, {"id": "service.main.validate_no_duplicate_columns", "module": "service.main", "name": "validate_no_duplicate_columns", "tag": "reviewed", "lineno": 106, "file": "service/main.py"}, {"id": "service.main.validate_preprocessing_invariants", "module": "service.main", "name": "validate_preprocessing_invariants", "tag": "reviewed", "lineno": 113, "file": "service/main.py"}, {"id": "service.masking.masked_predictions", "module": "service.masking", "name": "masked_predictions", "tag": "reviewed", "lineno": 10, "file": "service/masking.py"}, {"id": "service.mldataworker_shim.install_mldataworker_shim", "module": "service.mldataworker_shim", "name": "install_mldataworker_shim", "tag": "reviewed", "lineno": 10, "file": "service/mldataworker_shim.py"}], "edges": [{"from": "features.cpi._normalized_table", "to": "features.cpi.load_cpi_levels"}, {"from": "features.cpi.add_real_monetary_columns", "to": "features.cpi.deflate_to_base_year"}, {"from": "features.cpi.add_real_monetary_columns", "to": "features.cpi.real_feature_name"}, {"from": "features.cpi.cpi_level_for_years", "to": "features.cpi._normalized_table"}, {"from": "features.cpi.cpi_level_for_years", "to": "features.cpi.load_cpi_levels"}, {"from": "features.cpi.cpi_level_for_years", "to": "features.cpi.resolve_cpi_year"}, {"from": "features.cpi.deflate_to_base_year", "to": "features.cpi.cpi_level_for_years"}, {"from": "features.cpi.resolve_cpi_year", "to": "features.cpi.load_cpi_levels"}, {"from": "features.derived._days_between", "to": "features.derived._to_dt"}, {"from": "features.derived._ensure_share_work", "to": "features.derived._col"}, {"from": "features.derived._ensure_share_work", "to": "features.derived._safe_div"}, {"from": "features.derived.add_second_model_features", "to": "features.cpi.add_real_monetary_columns"}, {"from": "features.derived.add_second_model_features", "to": "features.cpi.real_feature_name"}, {"from": "features.derived.add_second_model_features", "to": "features.derived._col"}, {"from": "features.derived.add_second_model_features", "to": "features.derived._days_between"}, {"from": "features.derived.add_second_model_features", "to": "features.derived._ensure_share_work"}, {"from": "features.derived.add_second_model_features", "to": "features.derived._safe_div"}, {"from": "features.derived.add_second_model_features", "to": "features.derived._tier_from_bins"}, {"from": "features.derived.add_second_model_features", "to": "features.derived.vehicle_age_months_from_year"}, {"from": "features.derived.vehicle_age_months_from_year", "to": "features.derived._to_dt"}, {"from": "scoring.profiles.load_optional_pickle", "to": "scoring.profiles.load_pickle"}, {"from": "scoring.profiles.prod_models_dir", "to": "scoring.profiles._base"}, {"from": "scoring.profiles.second_cf_calibrator_path", "to": "scoring.profiles.second_models_dir"}, {"from": "scoring.profiles.second_meta_path", "to": "scoring.profiles.prod_models_dir"}, {"from": "scoring.profiles.second_meta_path", "to": "scoring.profiles.second_models_dir"}, {"from": "scoring.profiles.second_models_dir", "to": "scoring.profiles.prod_models_dir"}, {"from": "scoring.profiles.second_models_dir", "to": "scoring.profiles.second_subdir"}, {"from": "scoring.profiles.second_pickle_path", "to": "scoring.profiles.prod_models_dir"}, {"from": "scoring.profiles.second_pickle_path", "to": "scoring.profiles.second_models_dir"}, {"from": "scoring.profiles.second_rg_calibrator_path", "to": "scoring.profiles.second_models_dir"}, {"from": "scoring.profiles.threshold_from_meta", "to": "scoring.profiles.second_meta_path"}, {"from": "scoring.second._load_group", "to": "scoring.profiles.second_pickle_path"}, {"from": "scoring.second._load_group", "to": "scoring.second.pickle_load"}, {"from": "scoring.second._raw_classification_scores", "to": "scoring.second._unwrap_model"}, {"from": "scoring.second.preprocess_second_vector", "to": "features.derived.add_second_model_features"}, {"from": "scoring.second.preprocess_second_vector", "to": "scoring.second.enrich_dates_and_forms"}, {"from": "scoring.second.preprocess_second_vector", "to": "scoring.second.prepare_vector_upper"}, {"from": "scoring.second.resolve_second_threshold", "to": "scoring.profiles.second_meta_path"}, {"from": "scoring.second.resolve_second_threshold", "to": "scoring.profiles.threshold_from_meta"}, {"from": "scoring.second.score_second", "to": "scoring.profiles.feature_names_from_model_result"}, {"from": "scoring.second.score_second", "to": "scoring.profiles.load_optional_pickle"}, {"from": "scoring.second.score_second", "to": "scoring.profiles.second_cf_calibrator_path"}, {"from": "scoring.second.score_second", "to": "scoring.profiles.second_rg_calibrator_path"}, {"from": "scoring.second.score_second", "to": "scoring.second._load_group"}, {"from": "scoring.second.score_second", "to": "scoring.second._prepare_matrix"}, {"from": "scoring.second.score_second", "to": "scoring.second._raw_classification_scores"}, {"from": "scoring.second.score_second", "to": "scoring.second._require_columns"}, {"from": "scoring.second.score_second", "to": "scoring.second._round_numbers"}, {"from": "scoring.second.score_second", "to": "scoring.second.apply_cf_calibrator"}, {"from": "scoring.second.score_second", "to": "scoring.second.apply_rg_calibrator"}, {"from": "scoring.second.score_second", "to": "scoring.second.json_loads_records"}, {"from": "scoring.second.score_second", "to": "scoring.second.preprocess_second_vector"}, {"from": "scoring.second.score_second", "to": "scoring.second.resolve_second_threshold"}, {"from": "scoring.second.score_second", "to": "service.masking.masked_predictions"}, {"from": "service.main._get_or_load_group", "to": "service.main._prod_models_dir"}, {"from": "service.main._masked_predictions", "to": "service.masking.masked_predictions"}, {"from": "service.main._shap_top_features_comment", "to": "service.main._unwrap_mldataworker_model"}, {"from": "service.main._startup_log", "to": "service.main._prod_models_dir"}, {"from": "service.main.main_predict", "to": "scoring.second.score_second"}, {"from": "service.main.main_predict", "to": "service.main._df_to_json"}, {"from": "service.main.main_predict", "to": "service.main._get_or_load_group"}, {"from": "service.main.main_predict", "to": "service.main._masked_predictions"}, {"from": "service.main.main_predict", "to": "service.main._require_columns"}, {"from": "service.main.main_predict", "to": "service.main._round_numbers"}, {"from": "service.main.main_predict", "to": "service.main._shap_top_features_comment"}, {"from": "service.main.main_predict", "to": "service.main._unwrap_mldataworker_model"}, {"from": "service.main.main_predict", "to": "service.main.get_threshold_from_vector"}, {"from": "service.main.main_predict", "to": "service.main.preprocessing_and_validate_vector"}, {"from": "service.main.main_predict", "to": "service.main.run_classification_model"}, {"from": "service.main.main_predict", "to": "service.main.run_regression_model"}, {"from": "service.main.main_predict", "to": "service.main.validate_exact_columns_order"}, {"from": "service.main.predict_route", "to": "service.main.main_predict"}, {"from": "service.main.preprocessing_and_validate_vector", "to": "service.main.enrich_common_vector_dataframe"}, {"from": "service.main.preprocessing_and_validate_vector", "to": "service.main.prepare_common_vector_dataframe"}, {"from": "service.main.preprocessing_and_validate_vector", "to": "service.main.validate_derived_dates_strict"}, {"from": "service.main.preprocessing_and_validate_vector", "to": "service.main.validate_no_duplicate_columns"}, {"from": "service.main.preprocessing_and_validate_vector", "to": "service.main.validate_preprocessing_invariants"}, {"from": "service.main.run_classification_model", "to": "service.main._classification_proba_and_labels"}, {"from": "service.main.run_classification_model", "to": "service.main._prepare_matrix"}, {"from": "service.main.run_regression_model", "to": "service.main._prepare_matrix"}]};
+
+  const byId = Object.fromEntries(DATA.nodes.map(n => [n.id, n]));
+  const out = {};
+  const inn = {};
+  DATA.nodes.forEach(n => { out[n.id] = []; inn[n.id] = []; });
+  DATA.edges.forEach(e => {
+    if (out[e.from] && inn[e.to]) {
+      out[e.from].push(e.to);
+      inn[e.to].push(e.from);
+    }
+  });
+  Object.keys(out).forEach(k => { out[k] = [...new Set(out[k])].sort(); });
+  Object.keys(inn).forEach(k => { inn[k] = [...new Set(inn[k])].sort(); });
+
+  const ENTRIES = [
+    'service.main.predict_route',
+    'service.main.main_predict',
+    'scoring.second.score_second',
+    'scoring.second.preprocess_second_vector',
+    'features.derived.add_second_model_features',
+    'service.main.preprocessing_and_validate_vector',
+    'service.main.health_route',
+  ].filter(id => byId[id]);
+
+  let selected = null;
+  let entry = ENTRIES[0] || null;
+  let tags = new Set(['new', 'reviewed']);
+  let query = '';
+
+  const $modules = document.getElementById('modules');
+  const $detail = document.getElementById('detail');
+  const $tree = document.getElementById('tree');
+  const $stats = document.getElementById('stats');
+  const $count = document.getElementById('count-label');
+  const $entries = document.getElementById('entries');
+
+  function short(id) {
+    const n = byId[id];
+    return n ? n.name : id;
+  }
+
+  function matchFilter(n) {
+    if (!tags.has(n.tag)) return false;
+    if (!query) return true;
+    const q = query.toLowerCase();
+    return n.name.toLowerCase().includes(q)
+      || n.module.toLowerCase().includes(q)
+      || n.id.toLowerCase().includes(q);
+  }
+
+  function renderModules() {
+    const groups = {};
+    DATA.nodes.forEach(n => {
+      (groups[n.module] ||= []).push(n);
+    });
+    const callers = selected ? new Set(inn[selected] || []) : new Set();
+    const callees = selected ? new Set(out[selected] || []) : new Set();
+    let visible = 0;
+    $modules.innerHTML = Object.keys(groups).sort().map(mod => {
+      const fns = groups[mod].filter(matchFilter);
+      visible += fns.length;
+      if (!fns.length) return '';
+      const secondish = mod.startsWith('scoring.second') || mod.startsWith('features');
+      return `<div class="mod">
+        <div class="mod-h${secondish ? ' second' : ''}"><span>${mod}</span><span>${fns.length}</span></div>
+        <div class="mod-body">${fns.map(n => {
+          let cls = 'fn ' + n.tag;
+          if (selected === n.id) cls += ' selected';
+          else if (selected) {
+            if (callers.has(n.id)) cls += ' caller';
+            else if (callees.has(n.id)) cls += ' callee';
+            else cls += ' dim';
+          }
+          return `<button type="button" class="${cls}" data-id="${n.id}" title="${n.id}">${n.name}</button>`;
+        }).join('')}</div>
+      </div>`;
+    }).join('');
+    $count.textContent = visible + ' / ' + DATA.nodes.length;
+    $stats.textContent = DATA.nodes.length + ' fn · ' + DATA.edges.length + ' edges';
+    $modules.querySelectorAll('.fn').forEach(btn => {
+      btn.addEventListener('click', () => select(btn.dataset.id));
+    });
+  }
+
+  function renderDetail() {
+    if (!selected || !byId[selected]) {
+      $detail.className = 'detail empty';
+      $detail.textContent = 'Выберите функцию слева или entry-point ниже.';
+      return;
+    }
+    const n = byId[selected];
+    const calls = out[selected] || [];
+    const called = inn[selected] || [];
+    $detail.className = 'detail';
+    $detail.innerHTML = `
+      <div><span class="badge ${n.tag}">#${n.tag}</span></div>
+      <div class="name">${n.name}</div>
+      <div class="meta">${n.file}:${n.lineno} · ${n.module}</div>
+      <div class="sec-title calls">Вызывает (${calls.length})</div>
+      <ul class="link-list">${calls.length ? calls.map(id =>
+        `<li data-id="${id}"><span class="arrow">→</span>${short(id)} <span style="color:var(--muted)">(${byId[id].module})</span></li>`
+      ).join('') : '<li style="color:var(--muted);cursor:default">—</li>'}</ul>
+      <div class="sec-title called">Вызывается из (${called.length})</div>
+      <ul class="link-list">${called.length ? called.map(id =>
+        `<li data-id="${id}"><span class="arrow">←</span>${short(id)} <span style="color:var(--muted)">(${byId[id].module})</span></li>`
+      ).join('') : '<li style="color:var(--muted);cursor:default">— (entry / leaf)</li>'}</ul>
+    `;
+    $detail.querySelectorAll('.link-list li[data-id]').forEach(li => {
+      li.addEventListener('click', () => select(li.dataset.id));
+    });
+  }
+
+  function renderTree() {
+    $entries.innerHTML = ENTRIES.map(id =>
+      `<button type="button" class="${entry===id?'on':''}" data-id="${id}">${short(id)}</button>`
+    ).join('');
+    $entries.querySelectorAll('button').forEach(b => {
+      b.addEventListener('click', () => { entry = b.dataset.id; select(entry); });
+    });
+    if (!entry) { $tree.textContent = 'нет entry-points'; return; }
+    const lines = [];
+    const seen = new Set();
+    function walk(id, prefix, isLast, depth) {
+      if (depth > 8) {
+        lines.push(prefix + (isLast ? '└─ ' : '├─ ') + short(id) + ' …');
+        return;
+      }
+      const n = byId[id];
+      if (!n) return;
+      const branch = depth === 0 ? '' : (isLast ? '└─ ' : '├─ ');
+      const mark = seen.has(id) ? ' ↻' : '';
+      const cls = id === selected ? 't-sel' : (n.tag === 'new' ? 't-new' : 't-rev');
+      lines.push(
+        `${prefix}${branch}<span class="clickable ${cls}" data-id="${id}">${n.name}</span>` +
+        `<span style="color:var(--muted)">  #${n.tag}${mark}</span>`
+      );
+      if (seen.has(id)) return;
+      seen.add(id);
+      const kids = out[id] || [];
+      const nextPrefix = depth === 0 ? '' : prefix + (isLast ? '   ' : '│  ');
+      kids.forEach((kid, i) => walk(kid, nextPrefix, i === kids.length - 1, depth + 1));
+    }
+    walk(entry, '', true, 0);
+    $tree.innerHTML = lines.join('\n');
+    $tree.querySelectorAll('.clickable').forEach(el => {
+      el.addEventListener('click', () => select(el.dataset.id));
+    });
+  }
+
+  function select(id) {
+    selected = id;
+    renderModules();
+    renderDetail();
+    renderTree();
+  }
+
+  document.getElementById('q').addEventListener('input', e => {
+    query = e.target.value.trim();
+    renderModules();
+  });
+  document.querySelectorAll('.chip[data-tag]').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const t = chip.dataset.tag;
+      if (tags.has(t) && tags.size === 1) return;
+      if (tags.has(t)) { tags.delete(t); chip.classList.remove('on'); }
+      else { tags.add(t); chip.classList.add('on'); }
+      renderModules();
+    });
+  });
+
+  renderModules();
+  renderTree();
+  if (entry) select(entry);
+  </script>
+</body>
+</html>

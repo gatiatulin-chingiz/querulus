@@ -15,6 +15,7 @@ _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 @dataclass(frozen=True)
+#new
 class TestArtifacts:
     """Пути к pickle / meta / калибраторам / эталонным df."""
 
@@ -33,11 +34,13 @@ class TestArtifacts:
     split_col: str = "split"  # train | test
 
 
+#new
 def _env_path(name: str, default: Path) -> Path:
     raw = os.environ.get(name, "").strip()
     return Path(raw) if raw else default
 
 
+#new
 def load_artifacts() -> TestArtifacts:
     results = _env_path("INTEGRATION_TEST_RESULTS_DIR", _RESULTS / "test_synth")
     main_stem = os.environ.get("INTEGRATION_TEST_MAIN_STEM", "querulus_ansamble_legacy")
@@ -66,6 +69,7 @@ def load_artifacts() -> TestArtifacts:
     )
 
 
+#new
 def require_file(path: Path, label: str) -> Path:
     if not path.is_file():
         raise FileNotFoundError(

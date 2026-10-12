@@ -100,6 +100,7 @@ SECOND_RG_FEATURES = [
 ]
 
 
+#new
 def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     if "EVENT_DATE" not in out.columns:
@@ -155,6 +156,7 @@ def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+#new
 def _encode_frame(
     frame: pd.DataFrame, cols: list[str]
 ) -> tuple[pd.DataFrame, list[dict]]:
@@ -200,6 +202,7 @@ def _encode_frame(
     return x, specs
 
 
+#new
 def _train_ensemble(
     df: pd.DataFrame,
     train_idx: pd.Index,
@@ -261,6 +264,7 @@ def _train_ensemble(
     ]
 
 
+#new
 def _score_legacy(group: list[dict], df_row: pd.DataFrame, thr: float) -> tuple[float, float]:
     clf_df = _require_columns(df_row, CLASSIFICATION_FEATURES, "clf")
     rg_df = _require_columns(df_row, REGRESSION_FEATURES, "rg")
@@ -272,6 +276,7 @@ def _score_legacy(group: list[dict], df_row: pd.DataFrame, thr: float) -> tuple[
     return float(proba[0]), float(masked[0])
 
 
+#new
 def _score_second_ref(
     group: list[dict],
     df_fe: pd.DataFrame,
@@ -297,6 +302,7 @@ def _score_second_ref(
     return float(proba[0]), float(masked[0])
 
 
+#new
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     print("=== synthetic df ===")

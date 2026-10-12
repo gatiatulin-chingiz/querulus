@@ -32,6 +32,7 @@ from integration.service.main import (
 from integration.service.masking import masked_predictions
 
 
+#new
 def _base_vector(**overrides) -> list[dict]:
     row = {
         "EVENT_DATE": "2024-06-01T10:00:00",
@@ -72,6 +73,7 @@ def _base_vector(**overrides) -> list[dict]:
     return [row]
 
 
+#new
 class TestCommonPreprocess(unittest.TestCase):
     def test_empty_string_to_nan_main(self):
         df = prepare_common_vector_dataframe(_base_vector())

@@ -102,14 +102,14 @@ REGRESSION_FEATURES: List[str] = [
 # любая проблема (отсутствующие колонки, невалидные даты, нарушение инвариантов
 # нормализации) должна завершить запрос до передачи данных в mldataworker.
 
-# reviewed
+#reviewed
 def validate_no_duplicate_columns(df: pd.DataFrame) -> None:
     """A6: запрещаем дубли имён колонок."""
     if df.columns.duplicated().any():
         dupes = df.columns[df.columns.duplicated()].tolist()
         raise ValueError(f"Дубли имён колонок во входном векторе: {dupes}")
 
-# reviewed
+#reviewed
 def validate_preprocessing_invariants(df: pd.DataFrame) -> None:
     """
     Runtime-проверки инвариантов предобработки (B1/B2).
@@ -142,7 +142,7 @@ def validate_preprocessing_invariants(df: pd.DataFrame) -> None:
     if non_upper_cols:
         raise ValueError(f"B2 нарушен: после предобработки есть не-UPPER значения в колонках: {non_upper_cols}")
 
-# reviewed
+#reviewed
 def validate_exact_columns_order(df: pd.DataFrame, expected_columns: List[str], role: str) -> None:
     """
     A3/A5 (после preprocess+enrich): проверка точного состава и порядка колонок
@@ -157,7 +157,7 @@ def validate_exact_columns_order(df: pd.DataFrame, expected_columns: List[str], 
             f"missing={missing} extra={extra} expected={expected_columns} actual={actual}"
         )
 
-# reviewed
+#reviewed
 def validate_derived_dates_strict(df: pd.DataFrame) -> None:
     """
     C1/C2/C3: строгая проверка дат и derived-полей после enrich.
@@ -193,7 +193,7 @@ def validate_derived_dates_strict(df: pd.DataFrame) -> None:
     if (apply_delay < -1).any():
         raise ValueError("Некорректное значение APPLY_DELAY")
 
-# reviewed
+#reviewed
 def preprocessing_and_validate_vector(features_values: Any) -> pd.DataFrame:
     """
     Единая точка жёсткой валидации вектора перед `prepare_dataset`.
@@ -224,7 +224,7 @@ def preprocessing_and_validate_vector(features_values: Any) -> pd.DataFrame:
     return df
 
 
-# reviewed
+#reviewed
 @app.on_event("startup")
 def _startup_log() -> None:
     """Логирует параметры процесса при старте приложения."""
@@ -247,7 +247,7 @@ def _startup_log() -> None:
         logger.exception("Service startup failed")
 
 
-# reviewed
+#reviewed
 def _prod_models_dir() -> Path:
     """
     Абсолютный путь к каталогу с файлами ``*.pickle``.
@@ -265,7 +265,7 @@ def _prod_models_dir() -> Path:
     return (base / models_path).resolve()
 
 
-# reviewed
+#reviewed
 def get_threshold_from_vector(df_common: pd.DataFrame) -> Optional[float]:
     """
     Пытается взять threshold из входного датафрейма (колонка 'THRESHOLD').
@@ -292,7 +292,7 @@ def get_threshold_from_vector(df_common: pd.DataFrame) -> Optional[float]:
 
     return float(value)
 
-# reviewed
+#reviewed
 def _masked_predictions(
     labels: List[float],
     raw_reg: List[float],
@@ -301,7 +301,7 @@ def _masked_predictions(
     """Обёртка над ``service.masking.masked_predictions`` (main_ и second_)."""
     return masked_predictions(labels, raw_reg, df_common)
 
-# reviewed
+#reviewed
 def prepare_common_vector_dataframe(features_values: List[Dict]) -> pd.DataFrame:
     """
     Превращает список JSON-объектов (по одной заявке) в DataFrame.
@@ -332,7 +332,7 @@ def prepare_common_vector_dataframe(features_values: List[Dict]) -> pd.DataFrame
         )
         raise
 
-# reviewed
+#reviewed
 def enrich_common_vector_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
     Дособирает производные признаки, которых нет во входном векторе.
@@ -375,7 +375,7 @@ def enrich_common_vector_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# reviewed
+#reviewed
 def _require_columns(df: pd.DataFrame, columns: List[str], role: str) -> pd.DataFrame:
     """
     Оставляет только перечисленные колонки в том же порядке списка ``columns``.
@@ -397,7 +397,7 @@ def _require_columns(df: pd.DataFrame, columns: List[str], role: str) -> pd.Data
     return df.loc[:, columns]
 
 
-# reviewed
+#reviewed
 def _classification_proba_and_labels(
     model: Any, t: pd.DataFrame, threshold: float
 ) -> tuple[Optional[List[float]], List[float]]:
@@ -440,7 +440,7 @@ def _classification_proba_and_labels(
     return scores_list, labels
 
 
-# reviewed
+#reviewed
 def _round_numbers(obj: Any, ndigits: int=2) -> Any:
     """
     Рекурсивно округляет float в структурах для JSON (списки, dict, вложенность).
@@ -462,7 +462,7 @@ def _round_numbers(obj: Any, ndigits: int=2) -> Any:
         return {k: _round_numbers(v, ndigits) for k, v in obj.items()}
     return obj
 
-# reviewed
+#reviewed
 def _unwrap_mldataworker_model(model: Any) -> Any:
     """
     Достаёт «сырой» estimator из обёрток mldataworker.
@@ -479,6 +479,7 @@ def _unwrap_mldataworker_model(model: Any) -> Any:
     return inner
 
 
+#reviewed
 def _shap_top_features_comment(
     model: Any,
     t: pd.DataFrame,
@@ -659,7 +660,7 @@ def _shap_top_features_comment(
         return f"{prefix}: SHAP error ({type(e).__name__}: {msg})"
 
 
-# reviewed
+#reviewed
 def _df_to_json(df: pd.DataFrame) -> List[Dict]:
     """
     Преобразует DataFrame в список записей для JSON; ключи в каждой записи по алфавиту.
@@ -674,7 +675,7 @@ def _df_to_json(df: pd.DataFrame) -> List[Dict]:
     return [{k: row[k] for k in sorted(row.keys())} for row in rows]
 
 
-# reviewed
+#reviewed
 def _get_or_load_group(group_name: str) -> Any:
     """
     Загружает pickle сборки моделей с диска.
@@ -711,7 +712,7 @@ def _get_or_load_group(group_name: str) -> Any:
     return group
 
 
-# reviewed
+#reviewed
 def _prepare_matrix(
     model_result: Dict[str, Any], df: pd.DataFrame
 ) -> tuple[Any, pd.DataFrame]:
@@ -759,7 +760,7 @@ def _prepare_matrix(
         raise
     return model, matrix
 
-# reviewed
+#reviewed
 def run_classification_model(
     model_result: Dict[str, Any],
     df: pd.DataFrame,
@@ -798,7 +799,7 @@ def run_classification_model(
         )
         raise
 
-# reviewed
+#reviewed
 def run_regression_model(
     model_result: Dict[str, Any],
     df: pd.DataFrame,
@@ -840,7 +841,7 @@ def run_regression_model(
         )
         raise
 
-# reviewed
+#reviewed
 def main_predict(
     group_name: str,
     features_values: List[Dict],
@@ -1015,7 +1016,7 @@ def main_predict(
         "second_response": second_response,
     }
 
-# reviewed
+#reviewed
 @app.get("/api/health")
 def health_route():
     """
@@ -1032,7 +1033,7 @@ def health_route():
         body["git_commit"] = git_commit
     return JSONResponse(content=body)
 
-# reviewed
+#reviewed
 @app.post("/api/predict")
 def predict_route(service_request: ServiceRequest):
     """
@@ -1070,7 +1071,6 @@ def predict_route(service_request: ServiceRequest):
             },
         )
 
-# reviewed
 if __name__ == "__main__":
     # Локальный запуск веб-сервера (для разработки); в проде обычно uvicorn/gunicorn снаружи.
     uvicorn.run(app, host="0.0.0.0", port=8080)

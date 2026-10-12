@@ -29,6 +29,7 @@ from integration.service.main import main_predict  # noqa: E402
 from integration.tests.artifacts import ART, require_file  # noqa: E402
 
 
+#new
 def _patch_models_dir() -> None:
     config.prod_models_path = str(ART.results_dir.resolve())
     config.base_path = _INTEGRATION
@@ -47,6 +48,7 @@ def _patch_models_dir() -> None:
         top.shadow_meta_filename = ART.metadata.name
 
 
+#new
 def _row_to_request(row: pd.Series) -> list[dict]:
     d = row.to_dict()
     for k in ("preds_cf", "preds_rg", "split"):
@@ -67,6 +69,7 @@ def _row_to_request(row: pd.Series) -> list[dict]:
     return [clean]
 
 
+#new
 class TestParityMain(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -97,6 +100,7 @@ class TestParityMain(unittest.TestCase):
                 )
 
 
+#new
 class TestParitySecond(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -130,6 +134,7 @@ class TestParitySecond(unittest.TestCase):
                 )
 
 
+#new
 class TestDualPredict(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

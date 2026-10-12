@@ -43,6 +43,7 @@ _APPLICANT_FORM_REMAP_UPPER: dict[str, str] = {
 DEFAULT_THRESHOLD_FALLBACK = 0.6
 
 
+#reviewed
 def prepare_vector_upper(features_values: List[Dict]) -> pd.DataFrame:
     df = pd.DataFrame(features_values)
     for column in df.columns:
@@ -55,6 +56,7 @@ def prepare_vector_upper(features_values: List[Dict]) -> pd.DataFrame:
     return df
 
 
+#reviewed
 def enrich_dates_and_forms(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     event_dt = pd.to_datetime(out["EVENT_DATE"], errors="coerce")
@@ -73,6 +75,7 @@ def enrich_dates_and_forms(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+#new
 def preprocess_second_vector(features_values: List[Dict]) -> pd.DataFrame:
     """UPPER → dates/forms → FE_* (CPI REAL + derived). Clip — в prepare_dataset из JSON."""
     df = prepare_vector_upper(features_values)
@@ -86,6 +89,7 @@ def preprocess_second_vector(features_values: List[Dict]) -> pd.DataFrame:
     return add_second_model_features(df)
 
 
+#reviewed
 def _load_group(group_name: str) -> Any:
     path = second_pickle_path(group_name)
     if not path.is_file():
@@ -97,12 +101,14 @@ def _load_group(group_name: str) -> Any:
     return group
 
 
+#new
 def pickle_load(f):
     import pickle
 
     return pickle.load(f)
 
 
+#reviewed
 def _prepare_matrix(model_result: Dict[str, Any], df: pd.DataFrame) -> tuple[Any, pd.DataFrame]:
     from mldataworker.core.data_prepare import prepare_dataset
     from mldataworker.core.pydantic_models import ModelConfig
@@ -123,6 +129,7 @@ def _prepare_matrix(model_result: Dict[str, Any], df: pd.DataFrame) -> tuple[Any
     return model, matrix
 
 
+#reviewed
 def _require_columns(df: pd.DataFrame, columns: List[str], role: str) -> pd.DataFrame:
     missing = [c for c in columns if c not in df.columns]
     if missing:
@@ -130,6 +137,7 @@ def _require_columns(df: pd.DataFrame, columns: List[str], role: str) -> pd.Data
     return df.loc[:, columns]
 
 
+#reviewed
 def _unwrap_model(model: Any) -> Any:
     if model is None:
         return model
@@ -150,6 +158,7 @@ def _unwrap_model(model: Any) -> Any:
     return model
 
 
+#new
 def _raw_classification_scores(model: Any, t: pd.DataFrame) -> List[float]:
     m = _unwrap_model(model)
     if hasattr(m, "model") and hasattr(m, "predict"):
@@ -161,6 +170,7 @@ def _raw_classification_scores(model: Any, t: pd.DataFrame) -> List[float]:
     return [float(x) for x in np.asarray(pred).ravel()]
 
 
+#new
 def apply_cf_calibrator(
     calibrator: Any | None,
     raw_scores: List[float],
@@ -182,6 +192,7 @@ def apply_cf_calibrator(
     return list(raw_scores)
 
 
+#new
 def apply_rg_calibrator(
     calibrator: Any | None,
     raw_reg: List[float],
@@ -195,6 +206,7 @@ def apply_rg_calibrator(
     return list(raw_reg)
 
 
+#reviewed
 def resolve_second_threshold(df_common: pd.DataFrame, group_name: str) -> float:
     if "THRESHOLD" in df_common.columns:
         value = pd.to_numeric(df_common["THRESHOLD"].iloc[0], errors="coerce")
@@ -211,17 +223,20 @@ def resolve_second_threshold(df_common: pd.DataFrame, group_name: str) -> float:
     return float(DEFAULT_THRESHOLD_FALLBACK)
 
 
+#reviewed
 def _round_numbers(values: Optional[List[float]], ndigits: int = 2) -> Optional[List[float]]:
     if values is None:
         return None
     return [round(float(v), ndigits) for v in values]
 
 
+#reviewed
 def json_loads_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
     rows = json.loads(df.to_json(orient="records", force_ascii=False))
     return [{k: row[k] for k in sorted(row.keys())} for row in rows]
 
 
+#new
 def score_second(
     group_name: str,
     features_values: List[Dict],

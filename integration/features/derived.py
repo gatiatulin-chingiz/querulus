@@ -23,26 +23,31 @@ SHARE_WORK_BINS: tuple[float, ...] = (0.3, 0.6)
 SHARE_WORK_LABELS: tuple[str, ...] = ("low", "mid", "high")
 
 
+#new
 def _col(df: pd.DataFrame, name: str) -> pd.Series:
     if name in df.columns:
         return df[name]
     return pd.Series(pd.NA, index=df.index)
 
 
+#new
 def _to_dt(series: pd.Series) -> pd.Series:
     return pd.to_datetime(series, errors="coerce")
 
 
+#new
 def _days_between(later: pd.Series, earlier: pd.Series) -> pd.Series:
     return (_to_dt(later) - _to_dt(earlier)).dt.days
 
 
+#new
 def _safe_div(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     num = pd.to_numeric(numerator, errors="coerce")
     den = pd.to_numeric(denominator, errors="coerce")
     return num / den.where(den != 0)
 
 
+#new
 def _tier_from_bins(
     value: pd.Series,
     edges: tuple[float, ...] = SHARE_WORK_BINS,
@@ -59,6 +64,7 @@ def _tier_from_bins(
     )
 
 
+#new
 def _ensure_share_work(df: pd.DataFrame) -> pd.DataFrame:
     """SHARE_WORK = Работы / VALUE_BEFORE_WITHOUT (не AMOUNT_REPAIR)."""
     out = df
@@ -77,6 +83,7 @@ def _ensure_share_work(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+#new
 def vehicle_age_months_from_year(
     object_year: pd.Series,
     base_date: pd.Series,
@@ -89,6 +96,7 @@ def vehicle_age_months_from_year(
     return age.round().astype("Int64")
 
 
+#new
 def add_second_model_features(
     df: pd.DataFrame,
     *,

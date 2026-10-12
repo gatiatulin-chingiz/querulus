@@ -28,6 +28,7 @@ MONETARY_COLUMNS_FOR_REAL: tuple[str, ...] = (
 _last_cpi_year_usage: dict[int, int] = {}
 
 
+#reviewed
 @lru_cache(maxsize=4)
 def load_cpi_levels(path: str | None = None) -> dict[int, float]:
     json_path = Path(path) if path is not None else DEFAULT_CPI_JSON_PATH
@@ -44,10 +45,12 @@ except FileNotFoundError:  # pragma: no cover
     RU_CPI_LEVEL_VS_BASE = {}
 
 
+#reviewed
 def cpi_year_usage() -> dict[int, int]:
     return dict(_last_cpi_year_usage)
 
 
+#reviewed
 def real_feature_name(column: str, base_year: int = INFLATION_BASE_YEAR) -> str:
     stem = column if column.startswith("FE_") else f"FE_{column}"
     suffix = f"_REAL_{base_year}"
@@ -56,6 +59,7 @@ def real_feature_name(column: str, base_year: int = INFLATION_BASE_YEAR) -> str:
     return f"{stem}{suffix}"
 
 
+#reviewed
 def _normalized_table(
     levels: Mapping[int, float] | None = None,
     *,
@@ -68,6 +72,7 @@ def _normalized_table(
     return {y: float(v) / base for y, v in table.items()}
 
 
+#reviewed
 def resolve_cpi_year(
     year: float | int | None,
     *,
@@ -109,6 +114,7 @@ def resolve_cpi_year(
     return nearest
 
 
+#reviewed
 def cpi_level_for_years(
     years: pd.Series | np.ndarray,
     *,
@@ -129,6 +135,7 @@ def cpi_level_for_years(
     return pd.Series(resolved, index=year.index, dtype=float)
 
 
+#reviewed
 def deflate_to_base_year(
     amounts: pd.Series,
     event_dates: pd.Series,
@@ -144,6 +151,7 @@ def deflate_to_base_year(
     return nominal / level.where(level > 0)
 
 
+#reviewed
 def add_real_monetary_columns(
     df: pd.DataFrame,
     *,

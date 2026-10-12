@@ -21,6 +21,7 @@ from integration.scoring.second import apply_cf_calibrator, apply_rg_calibrator
 from integration.tests.artifacts import ART, require_file
 
 
+#new
 class TestCpi(unittest.TestCase):
     def test_exact_year(self):
         self.assertEqual(resolve_cpi_year(2022), 2022)
@@ -45,6 +46,7 @@ class TestCpi(unittest.TestCase):
         self.assertIn("FE_VALUE_BEFORE_WITHOUT_REAL_2022", out.columns)
 
 
+#new
 class TestDerivedFe(unittest.TestCase):
     def test_share_work_tier_from_works(self):
         df = pd.DataFrame(
@@ -69,6 +71,7 @@ class TestDerivedFe(unittest.TestCase):
         self.assertEqual(str(out["FE_SHARE_WORK_TIER"].iloc[0]), "mid")
 
 
+#new
 class TestMetaThreshold(unittest.TestCase):
     def test_threshold_from_artifacts_meta(self):
         path = require_file(ART.metadata, "metadata")
@@ -77,6 +80,7 @@ class TestMetaThreshold(unittest.TestCase):
         self.assertGreater(float(thr), 0.0)
 
 
+#new
 class TestCalibrators(unittest.TestCase):
     def test_cf_rg_calibrators_load_and_apply(self):
         import pickle

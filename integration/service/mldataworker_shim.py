@@ -6,6 +6,7 @@ import types
 from pathlib import Path
 
 
+#reviewed
 def install_mldataworker_shim() -> None:
     if "mldataworker" in sys.modules:
         return
@@ -37,4 +38,4 @@ def install_mldataworker_shim() -> None:
 
 if __name__ == "__main__":
     install_mldataworker_shim()
-    print("mldataworker shim OK →", Path(__file__).resolve())
+    print("mldataworker shim OK ->", Path(__file__).resolve())
