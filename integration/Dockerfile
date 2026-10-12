@@ -19,14 +19,13 @@ RUN chown -R model_user:model_user /home/model_user
 # 5. Переключаемся на непривилегированного пользователя
 USER model_user
 
-# 6. Копируем модели и исходный код (плоский results/: legacy + shadow pickle/meta)
+# 6. Копируем модели и исходный код (пакеты service/features/scoring + root entry)
 COPY --chown=model_user:model_user results/ /home/model_user/model/results/
-COPY --chown=model_user:model_user main.py /home/model_user/model/main.py
 COPY --chown=model_user:model_user config.py /home/model_user/model/config.py
-COPY --chown=model_user:model_user features_cpi.py /home/model_user/model/features_cpi.py
-COPY --chown=model_user:model_user features_dq.py /home/model_user/model/features_dq.py
-COPY --chown=model_user:model_user model_profiles.py /home/model_user/model/model_profiles.py
-COPY --chown=model_user:model_user shadow_v2.py /home/model_user/model/shadow_v2.py
+COPY --chown=model_user:model_user main.py /home/model_user/model/main.py
+COPY --chown=model_user:model_user service/ /home/model_user/model/service/
+COPY --chown=model_user:model_user features/ /home/model_user/model/features/
+COPY --chown=model_user:model_user scoring/ /home/model_user/model/scoring/
 
 # 7. Рабочая директория и точка входа
 WORKDIR /home/model_user/model

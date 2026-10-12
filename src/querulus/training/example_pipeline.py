@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from querulus.dataset.hadoop import load_df_final
@@ -334,11 +335,15 @@ def load_example_thresholds(
 def pick_prod_threshold_on_dsm(
     models: ExampleDsmBundle,
     bundle: ExampleDatasetBundle,
+    *,
+    cf_calibrator: Any | None = None,
+    rg_calibrator: SeverityCalibrator | None = None,
 ) -> float:
-    """Вариант B: подобрать τ на τ-cal по **raw** proba prod DSM.
+    """Подобрать τ на τ-cal.
 
-    Калибратор в сервис не едет — порог только на сырой шкале модели, которая
-    уходит в прод (example_final), а не collect CatBoost.
+    Без калибраторов — на raw DSM proba/sev.
+    С ``cf_calibrator`` / ``rg_calibrator`` — на откалиброванной шкале
+    (сервисный порог должен совпадать со шкалой решения).
     """
     if models.dsm_cf_prod is None or models.dsm_rg_prod is None:
         raise ValueError("Нужны обученные dsm_cf_prod / dsm_rg_prod")
@@ -350,6 +355,37 @@ def pick_prod_threshold_on_dsm(
     df = bundle.df
     proba = predict_cf(models.dsm_cf_prod, bundle.cf_name, df.loc[tau_idx])
     sev = predict_rg(models.dsm_rg_prod, bundle.rg_name, df.loc[tau_idx])
+    scale = "raw"
+    if cf_calibrator is not None:
+        from querulus.training.outboxml_metrics import prepare_dsm_features
+
+        x_cf = prepare_dsm_features(
+            models.dsm_cf_prod,
+            bundle.cf_name,
+            df.loc[tau_idx],
+            ignore_row_filter=True,
+        )
+        if hasattr(cf_calibrator, "predict_proba"):
+            cal_idx = x_cf.index.intersection(proba.index)
+            cal_p = np.asarray(
+                cf_calibrator.predict_proba(x_cf.loc[cal_idx])[:, 1], dtype=float
+            )
+            proba = pd.Series(cal_p, index=cal_idx)
+            scale = "calibrated"
+        elif hasattr(cf_calibrator, "predict"):
+            proba = pd.Series(
+                np.asarray(cf_calibrator.predict(proba.to_numpy()), dtype=float),
+                index=proba.index,
+            )
+            scale = "calibrated"
+    if rg_calibrator is not None:
+        from querulus.training.calibration import apply_severity_calibrator
+
+        sev = apply_severity_calibrator(rg_calibrator, sev)
+        if scale == "raw":
+            scale = "calibrated_rg"
+        else:
+            scale = "calibrated"
     cfg = resolve_fin_effect_config(
         df,
         frequency_target="TARGET_FREQ",
@@ -366,7 +402,8 @@ def pick_prod_threshold_on_dsm(
     )
     thr = float(fe.best_threshold)
     logger.info(
-        "τ prod (DSM raw, τ-cal n=%s, period %s…%s) = %.2f; net_effect=%.0f",
+        "τ prod (DSM %s, τ-cal n=%s, period %s…%s) = %.2f; net_effect=%.0f",
+        scale,
         len(tau_idx),
         bundle.periods["prod_tau_cal_period"][0],
         bundle.periods["prod_tau_cal_period"][1],
@@ -374,7 +411,7 @@ def pick_prod_threshold_on_dsm(
         fe.net_effect,
     )
     print(
-        f"τ prod подобран на DSM (raw) на τ-cal "
+        f"τ prod подобран на DSM ({scale}) на τ-cal "
         f"({bundle.periods['prod_tau_cal_period'][0]} … "
         f"{bundle.periods['prod_tau_cal_period'][1]}, n={len(tau_idx)}): "
         f"{thr:.2f}"
@@ -1259,19 +1296,35 @@ def export_prod_service_artifacts(
     *,
     thresholds: ExampleThresholds,
     ensemble_pickle_name: str = SERVICE_ENSEMBLE_PICKLE,
+    cf_calibrator: Any | None = None,
+    rg_calibrator: SeverityCalibrator | None = None,
+    cf_calibrator_name: str = "cf_calibrator.pickle",
+    rg_calibrator_name: str = "rg_calibrator.pickle",
 ) -> ProdExportResult:
-    """``metadata.json`` для shadow (``best_threshold`` = τ).
+    """``metadata.json`` + калибраторы для second_ (``best_threshold`` = τ на cal-шкале).
 
     Модели пишет ``update_models`` в ``fit_automl_bundle``.
     Parquet — отдельно через ``save_df_for_service``.
     """
+    import pickle
+
     if models.dsm_cf_prod is None or models.dsm_rg_prod is None:
         raise ValueError("Нужны dsm_cf_prod / dsm_rg_prod")
 
     paths.results_dir.mkdir(parents=True, exist_ok=True)
     ensemble_pkl = paths.results_dir / ensemble_pickle_name
     service_df_path = paths.results_dir / "df_for_service.parquet"
+    cf_cal_path = paths.results_dir / cf_calibrator_name
+    rg_cal_path = paths.results_dir / rg_calibrator_name
 
+    if cf_calibrator is not None:
+        with open(cf_cal_path, "wb") as f:
+            pickle.dump(cf_calibrator, f)
+    if rg_calibrator is not None:
+        with open(rg_cal_path, "wb") as f:
+            pickle.dump(rg_calibrator, f)
+
+    thr_scale = "calibrated" if cf_calibrator is not None else "raw"
     periods = bundle.periods
     meta_path = paths.results_dir / "metadata.json"
     meta: dict[str, Any] = {
@@ -1296,13 +1349,18 @@ def export_prod_service_artifacts(
         "rg_name": bundle.rg_name,
         "best_threshold": float(thresholds.prod),
         "val_threshold": float(thresholds.parity),
-        "threshold_scale": "raw",
+        "threshold_scale": thr_scale,
         "threshold_source": "example_final_dsm_tau_cal",
-        "calibration": None,
+        "calibration": {
+            "cf": str(cf_cal_path) if cf_calibrator is not None else None,
+            "rg": str(rg_cal_path) if rg_calibrator is not None else None,
+        },
         "artifacts": {
             "ensemble": str(ensemble_pkl),
-            "ensemble_note": "пишет AutoML update_models → копия "
+            "ensemble_note": "пишет AutoML update_models → "
             f"{ensemble_pickle_name}",
+            "cf_calibrator": str(cf_cal_path) if cf_calibrator is not None else None,
+            "rg_calibrator": str(rg_cal_path) if rg_calibrator is not None else None,
             "dq_bounds": None,
             "dq_clip_in_outboxml_configs": True,
             "data_quality_report": str(
@@ -1319,10 +1377,14 @@ def export_prod_service_artifacts(
         encoding="utf-8",
     )
 
-    print("=== metadata.json (shadow τ) ===")
+    print("=== metadata.json (second_ τ) ===")
     print(f"  {meta_path}")
-    print(f"  best_threshold (τ): {meta['best_threshold']:.2f}")
+    print(f"  best_threshold (τ, {thr_scale}): {meta['best_threshold']:.2f}")
     print(f"  ensemble: {ensemble_pkl}")
+    if cf_calibrator is not None:
+        print(f"  cf_calibrator: {cf_cal_path}")
+    if rg_calibrator is not None:
+        print(f"  rg_calibrator: {rg_cal_path}")
 
     return ProdExportResult(
         service_df_path=service_df_path if service_df_path.is_file() else None,

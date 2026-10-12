@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Querulus Integration — архитектура</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0f1419;
+      --bg-elev: #1a222c;
+      --bg-card: #222b36;
+      --line: #3a4654;
+      --text: #e8eef4;
+      --muted: #9aabbc;
+      --accent: #3db88a;
+      --accent-dim: #2a7a5c;
+      --main: #4a9fd8;
+      --second: #e0a04a;
+      --warn: #d97b5c;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+      --sans: "IBM Plex Sans", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background:
+        radial-gradient(ellipse 80% 50% at 10% -10%, #1a3a32 0%, transparent 55%),
+        radial-gradient(ellipse 60% 40% at 100% 0%, #1a2a3a 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      font-size: 15px;
+    }
+
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 2.5rem 1.5rem 4rem;
+    }
+
+    header {
+      margin-bottom: 2.5rem;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 1.5rem;
+    }
+    header .eyebrow {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin: 0 0 0.5rem;
+    }
+    h1 {
+      font-size: clamp(1.6rem, 3vw, 2.1rem);
+      font-weight: 600;
+      margin: 0 0 0.6rem;
+      letter-spacing: -0.02em;
+    }
+    header p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 42rem;
+    }
+
+    h2 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin: 2.25rem 0 1rem;
+      letter-spacing: -0.01em;
+    }
+    h2 .tag {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      font-weight: 500;
+      color: var(--muted);
+      margin-left: 0.5rem;
+      vertical-align: middle;
+    }
+
+    /* Request → dual path */
+    .flow {
+      display: grid;
+      gap: 0.75rem;
+    }
+    .node {
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0.9rem 1.1rem;
+    }
+    .node.entry {
+      border-color: var(--accent-dim);
+      background: linear-gradient(135deg, #162820 0%, var(--bg-elev) 70%);
+    }
+    .node .label {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.25rem;
+    }
+    .node .title {
+      font-weight: 600;
+      font-size: 1rem;
+    }
+    .node .meta {
+      color: var(--muted);
+      font-size: 0.88rem;
+      margin-top: 0.35rem;
+    }
+    .node code {
+      font-family: var(--mono);
+      font-size: 0.82em;
+      color: var(--accent);
+      background: rgba(61, 184, 138, 0.1);
+      padding: 0.1em 0.35em;
+      border-radius: 3px;
+    }
+
+    .arrow {
+      text-align: center;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      padding: 0.15rem 0;
+    }
+
+    .dual {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 780px) {
+      .dual { grid-template-columns: 1fr; }
+    }
+
+    .lane {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--bg-elev);
+    }
+    .lane-head {
+      padding: 0.75rem 1rem;
+      font-weight: 600;
+      font-size: 0.95rem;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .lane.main .lane-head {
+      background: rgba(74, 159, 216, 0.12);
+      color: #8ec5eb;
+    }
+    .lane.second .lane-head {
+      background: rgba(224, 160, 74, 0.12);
+      color: #efc07a;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .lane.main .dot { background: var(--main); }
+    .lane.second .dot { background: var(--second); }
+
+    .steps {
+      list-style: none;
+      margin: 0;
+      padding: 0.5rem 0;
+    }
+    .steps li {
+      display: grid;
+      grid-template-columns: 1.75rem 1fr;
+      gap: 0.5rem;
+      padding: 0.55rem 1rem;
+      border-bottom: 1px solid rgba(58, 70, 84, 0.5);
+      font-size: 0.9rem;
+    }
+    .steps li:last-child { border-bottom: none; }
+    .steps .n {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--muted);
+      padding-top: 0.15rem;
+    }
+    .steps strong { font-weight: 500; }
+    .steps .hint {
+      display: block;
+      color: var(--muted);
+      font-size: 0.8rem;
+      margin-top: 0.15rem;
+    }
+
+    .response {
+      margin-top: 0.75rem;
+      border-color: var(--accent-dim);
+    }
+
+    /* Package map */
+    .pkgs {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.85rem;
+    }
+    @media (max-width: 780px) {
+      .pkgs { grid-template-columns: 1fr; }
+    }
+    .pkg {
+      background: var(--bg-card);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 1rem;
+    }
+    .pkg h3 {
+      margin: 0 0 0.65rem;
+      font-size: 0.95rem;
+      font-family: var(--mono);
+      font-weight: 500;
+      color: var(--accent);
+    }
+    .pkg ul {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .pkg li {
+      font-size: 0.85rem;
+      padding: 0.35rem 0;
+      border-top: 1px solid rgba(58, 70, 84, 0.45);
+      color: var(--muted);
+    }
+    .pkg li:first-of-type { border-top: none; }
+    .pkg li b {
+      color: var(--text);
+      font-weight: 500;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+    }
+
+    /* Artifacts */
+    .artifacts {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.85rem;
+    }
+    @media (max-width: 780px) {
+      .artifacts { grid-template-columns: 1fr; }
+    }
+    .art {
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 1rem;
+    }
+    .art h3 {
+      margin: 0 0 0.5rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    .art ul {
+      margin: 0;
+      padding-left: 1.1rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    .art code { font-family: var(--mono); font-size: 0.8em; color: #b8c9d8; }
+
+    .note {
+      margin-top: 1.5rem;
+      padding: 0.85rem 1rem;
+      background: rgba(217, 123, 92, 0.08);
+      border-left: 3px solid var(--warn);
+      border-radius: 0 4px 4px 0;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    .note strong { color: #e8a890; font-weight: 500; }
+
+    footer {
+      margin-top: 3rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--line);
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    /* Mermaid-like SVG flow */
+    .diagram {
+      margin: 1rem 0 0.5rem;
+      overflow-x: auto;
+      padding: 0.5rem 0;
+    }
+    .diagram svg {
+      width: 100%;
+      max-width: 980px;
+      height: auto;
+      display: block;
+      margin: 0 auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <p class="eyebrow">Querulus · API 1.4.0</p>
+      <h1>Архитектура HTTP-сервиса скоринга</h1>
+      <p>
+        Один запрос <code style="font-family:var(--mono);color:var(--accent)">POST /api/predict</code>
+        гоняет две модели параллельно: боевой legacy в <strong>main_</strong>
+        и новый ансамбль 2.0.0 в <strong>second_</strong>. Ответ ОИСУУ всегда берётся из main_.
+      </p>
+    </header>
+
+    <h2>Поток запроса <span class="tag">runtime</span></h2>
+
+    <div class="diagram" aria-hidden="true">
+      <svg viewBox="0 0 960 220" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L6,3 L0,6 Z" fill="#9aabbc"/>
+          </marker>
+        </defs>
+        <rect x="20" y="80" width="140" height="52" rx="6" fill="#1a222c" stroke="#2a7a5c" stroke-width="1.5"/>
+        <text x="90" y="102" text-anchor="middle" fill="#e8eef4" font-family="IBM Plex Sans,sans-serif" font-size="13" font-weight="600">ОИСУУ</text>
+        <text x="90" y="118" text-anchor="middle" fill="#9aabbc" font-family="IBM Plex Mono,monospace" font-size="10">ServiceRequest</text>
+
+        <line x1="160" y1="106" x2="210" y2="106" stroke="#9aabbc" stroke-width="1.5" marker-end="url(#arr)"/>
+
+        <rect x="210" y="70" width="160" height="72" rx="6" fill="#222b36" stroke="#3a4654"/>
+        <text x="290" y="98" text-anchor="middle" fill="#e8eef4" font-family="IBM Plex Sans,sans-serif" font-size="13" font-weight="600">FastAPI</text>
+        <text x="290" y="116" text-anchor="middle" fill="#9aabbc" font-family="IBM Plex Mono,monospace" font-size="10">service/main.py</text>
+        <text x="290" y="130" text-anchor="middle" fill="#3db88a" font-family="IBM Plex Mono,monospace" font-size="9">/api/predict</text>
+
+        <line x1="370" y1="90" x2="430" y2="50" stroke="#4a9fd8" stroke-width="1.5" marker-end="url(#arr)"/>
+        <line x1="370" y1="122" x2="430" y2="170" stroke="#e0a04a" stroke-width="1.5" marker-end="url(#arr)"/>
+
+        <rect x="430" y="18" width="280" height="70" rx="6" fill="#1a2834" stroke="#4a9fd8"/>
+        <text x="445" y="40" fill="#8ec5eb" font-family="IBM Plex Sans,sans-serif" font-size="12" font-weight="600">main_ · legacy</text>
+        <text x="445" y="58" fill="#9aabbc" font-family="IBM Plex Mono,monospace" font-size="10">preprocess → CF+RG → IS_LAWYER</text>
+        <text x="445" y="74" fill="#6a8aa0" font-family="IBM Plex Mono,monospace" font-size="9">→ oisuu_responce + main_response</text>
+
+        <rect x="430" y="132" width="280" height="70" rx="6" fill="#2a2418" stroke="#e0a04a"/>
+        <text x="445" y="154" fill="#efc07a" font-family="IBM Plex Sans,sans-serif" font-size="12" font-weight="600">second_ · 2.0.0</text>
+        <text x="445" y="172" fill="#9aabbc" font-family="IBM Plex Mono,monospace" font-size="10">FE_* → predict → cal → τ → mask</text>
+        <text x="445" y="188" fill="#8a7a5a" font-family="IBM Plex Mono,monospace" font-size="9">→ second_response</text>
+
+        <line x1="710" y1="53" x2="770" y2="100" stroke="#4a9fd8" stroke-width="1.2" marker-end="url(#arr)"/>
+        <line x1="710" y1="167" x2="770" y2="120" stroke="#e0a04a" stroke-width="1.2" marker-end="url(#arr)"/>
+
+        <rect x="770" y="80" width="170" height="52" rx="6" fill="#162820" stroke="#2a7a5c" stroke-width="1.5"/>
+        <text x="855" y="102" text-anchor="middle" fill="#e8eef4" font-family="IBM Plex Sans,sans-serif" font-size="12" font-weight="600">JSON response</text>
+        <text x="855" y="118" text-anchor="middle" fill="#9aabbc" font-family="IBM Plex Mono,monospace" font-size="9">3 блока ответа</text>
+      </svg>
+    </div>
+
+    <div class="flow">
+      <div class="node entry">
+        <div class="label">Вход</div>
+        <div class="title">POST /api/predict</div>
+        <div class="meta">
+          Тело: <code>main_model</code>, <code>main_request</code>,
+          опционально <code>second_model</code> + <code>second_request</code>
+          (сырой вектор без FE_*).
+        </div>
+      </div>
+
+      <div class="arrow">▼ dual-track</div>
+
+      <div class="dual">
+        <div class="lane main">
+          <div class="lane-head"><span class="dot"></span> main_ — legacy ансамбль</div>
+          <ol class="steps">
+            <li>
+              <span class="n">01</span>
+              <div>
+                <strong>Загрузка pickle</strong>
+                <span class="hint">results/{main_model}.pickle → [CF, RG]</span>
+              </div>
+            </li>
+            <li>
+              <span class="n">02</span>
+              <div>
+                <strong>Предобработка</strong>
+                <span class="hint">"" → NaN, UPPER, EVENT_YEAR / APPLY_DELAY, валидация дат</span>
+              </div>
+            </li>
+            <li>
+              <span class="n">03</span>
+              <div>
+                <strong>prepare_dataset + predict</strong>
+                <span class="hint">фиксированные списки CLASSIFICATION / REGRESSION_FEATURES</span>
+              </div>
+            </li>
+            <li>
+              <span class="n">04</span>
+              <div>
+                <strong>Порог + маска IS_LAWYER</strong>
+                <span class="hint">THRESHOLD из вектора или 0.6; класс 1 или юрист → RG, иначе 0</span>
+              </div>
+            </li>
+            <li>
+              <span class="n">05</span>
+              <div>
+                <strong>Ответ ОИСУУ</strong>
+                <span class="hint">oisuu_responce + main_response (+ SHAP в CPMComment)</span>
+              </div>
+            </li>
+          </ol>
+        </div>
+
+        <div class="lane second">
+          <div class="lane-head"><span class="dot"></span> second_ — модель 2.0.0</div>
+          <ol class="steps">
+            <li>
+              <span class="n">01</span>
+              <div>
+                <strong>Загрузка артефактов</strong>
+                <span class="hint">UU_querulus_….pickle + metadata + cf/rg_calibrator</span>
+              </div>
+            </li>
+            <li>
+              <span class="n">02</span>
+              <div>
+                <strong>UPPER + даты + формы</strong>
+                <span class="hint">scoring/second.py · preprocess_second_vector</span>
+              </div>
+            </li>
+            <li>
+              <span class="n">03</span>
+              <div>
+                <strong>FE_* в сервисе</strong>
+                <span class="hint">CPI REAL_2022, SHARE_WORK tier, ratio/diff/days/power</span>
+              </div>
+            </li>
+            <li>
+              <span class="n">04</span>
+              <div>
+                <strong>predict → калибраторы</strong>
+                <span class="hint">CF proba cal, RG severity cal; clip из feature.clip в pickle</span>
+              </div>
+            </li>
+            <li>
+              <span class="n">05</span>
+              <div>
+                <strong>τ из meta + IS_LAWYER</strong>
+                <span class="hint">best_threshold на cal-шкале; та же маска, что у main_</span>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="arrow">▼</div>
+
+      <div class="node response">
+        <div class="label">Выход</div>
+        <div class="title">Три блока JSON</div>
+        <div class="meta">
+          <code>oisuu_responce</code> — контракт ОИСУУ (всегда от main_);
+          <code>main_response</code> — полный результат legacy;
+          <code>second_response</code> — результат 2.0.0 или <code>{}</code>, если second_* не переданы.
+        </div>
+      </div>
+    </div>
+
+    <h2>Пакеты кода <span class="tag">integration/</span></h2>
+    <div class="pkgs">
+      <div class="pkg">
+        <h3>service/</h3>
+        <ul>
+          <li><b>main.py</b> — FastAPI, health/predict, скоринг main_</li>
+          <li><b>masking.py</b> — общая маска IS_LAWYER</li>
+          <li><b>mldataworker_shim.py</b> — alias на outboxml локально</li>
+        </ul>
+      </div>
+      <div class="pkg">
+        <h3>features/</h3>
+        <ul>
+          <li><b>cpi.py</b> — дефляция в рубли 2022</li>
+          <li><b>derived.py</b> — FE_* из сырого second_request</li>
+        </ul>
+      </div>
+      <div class="pkg">
+        <h3>scoring/</h3>
+        <ul>
+          <li><b>second.py</b> — полный пайплайн second_</li>
+          <li><b>profiles.py</b> — пути к pickle / meta / калибраторам</li>
+        </ul>
+      </div>
+    </div>
+
+    <p style="color:var(--muted);font-size:0.88rem;margin:1rem 0 0;">
+      Корень: <code style="font-family:var(--mono);font-size:0.85em">main.py</code> (Docker entry),
+      <code style="font-family:var(--mono);font-size:0.85em">config.py</code>,
+      Dockerfile / compose / gitlab-ci / requirements.
+      Точка локального запуска: <code style="font-family:var(--mono);font-size:0.85em">python -m integration</code>.
+    </p>
+
+    <h2>Артефакты на диске <span class="tag">results/</span></h2>
+    <div class="artifacts">
+      <div class="art">
+        <h3>main_</h3>
+        <ul>
+          <li><code>{legacy_stem}.pickle</code> — [классификация, регрессия]</li>
+        </ul>
+      </div>
+      <div class="art">
+        <h3>second_</h3>
+        <ul>
+          <li><code>UU_querulus_2026_10_09_16_51_20.pickle</code></li>
+          <li><code>metadata.json</code> — <code>best_threshold</code>, <code>threshold_scale: calibrated</code></li>
+          <li><code>cf_calibrator.pickle</code>, <code>rg_calibrator.pickle</code></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="note">
+      <strong>Важно.</strong> В <code>second_request</code> нет готовых FE_* — их считает сервис.
+      Отдельный <code>dq_bounds.json</code> не используется: клип числовых фич уже в
+      <code>feature.clip</code> внутри model_config pickle (<code>prepare_dataset</code>).
+      Порог second_ переотбирается в <code>example_final</code> после калибровки CF/RG.
+    </div>
+
+    <h2>Тесты <span class="tag">tests/</span></h2>
+    <div class="pkgs" style="grid-template-columns: 1fr 1fr;">
+      <div class="pkg">
+        <h3>общие</h3>
+        <ul>
+          <li><b>artifacts.py</b> — единые пути; нет файла → fail</li>
+          <li><b>test_common_preprocess.py</b> — NaN, UPPER, даты, маска</li>
+          <li><b>test_parity.py</b> — CF/RG до 2 знаков, dual predict</li>
+        </ul>
+      </div>
+      <div class="pkg">
+        <h3>только second_</h3>
+        <ul>
+          <li><b>test_second_features.py</b> — CPI, FE_*, τ, калибраторы</li>
+          <li>Синтетика: <b>scripts/build_integration_test_artifacts.py</b></li>
+        </ul>
+      </div>
+    </div>
+
+    <footer>
+      examples/querulus/integration/architecture.html · dual-track, cutover не выполнен
+    </footer>
+  </div>
+</body>
+</html>

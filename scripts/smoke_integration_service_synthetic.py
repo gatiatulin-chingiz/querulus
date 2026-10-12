@@ -27,7 +27,7 @@ for p in (SRC, OUTBOXML_ROOT, PROJECT_ROOT, INTEGRATION):
         sys.path.insert(0, str(p))
 
 # Shim до импорта integration.main / shadow_v2
-from integration.mldataworker_shim import install_mldataworker_shim  # noqa: E402
+from integration.service.mldataworker_shim import install_mldataworker_shim  # noqa: E402
 
 install_mldataworker_shim()
 

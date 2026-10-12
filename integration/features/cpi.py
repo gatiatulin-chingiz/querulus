@@ -17,7 +17,7 @@ from loguru import logger
 
 INFLATION_BASE_YEAR: int = 2022
 
-_INTEGRATION_ROOT = Path(__file__).resolve().parent
+_INTEGRATION_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CPI_JSON_PATH: Path = _INTEGRATION_ROOT.parent / "configs" / "cpi_levels.json"
 
 MONETARY_COLUMNS_FOR_REAL: tuple[str, ...] = (

@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   querulus:
-    image: repo.vsk.ru:5018/rtdm/querulus:1.3.0
+    image: repo.vsk.ru:5018/rtdm/querulus:1.4.0
     deploy:
       placement:
         constraints: [node.labels.type == service]

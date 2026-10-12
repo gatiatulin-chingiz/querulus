@@ -1,26 +1,23 @@
-"""Профили legacy (main_) vs shadow v2.0.0 (second_).
-
-# CUTOVER: после shadow-периода перевести v2 в main_ и удалить legacy-константы фич.
-"""
+"""Пути к артефактам main_ / second_ (pickle, meta, калибраторы)."""
 from __future__ import annotations
 
 import json
 import os
+import pickle
 from pathlib import Path
 from typing import Any, Optional
 
 from loguru import logger
 
-import config
+try:
+    from integration import config
+except ImportError:
+    import config
 
-# CUTOVER: True пока 2.0.0 живёт только в second_
-SHADOW_NEW_AS_SECOND: bool = True
-
-# Плоский results/ (без querulus/2.0.0): pickle + metadata рядом.
-DEFAULT_SHADOW_SUBDIR = ""
-DEFAULT_SHADOW_STEM = "querulus_ansamble"
-DEFAULT_SHADOW_META = "metadata.json"
-DEFAULT_SHADOW_DQ = "dq_bounds.json"
+DEFAULT_SECOND_STEM = "UU_querulus_2026_10_09_16_51_20"
+DEFAULT_SECOND_META = "metadata.json"
+DEFAULT_CF_CALIBRATOR = "cf_calibrator.pickle"
+DEFAULT_RG_CALIBRATOR = "rg_calibrator.pickle"
 
 
 def _base() -> Path:
@@ -34,26 +31,24 @@ def prod_models_dir() -> Path:
     return (_base() / models_path).resolve()
 
 
-def shadow_subdir() -> str:
+def second_subdir() -> str:
     return (
         getattr(config, "shadow_models_subdir", None)
         or os.environ.get("SHADOW_MODELS_SUBDIR")
-        or DEFAULT_SHADOW_SUBDIR
+        or ""
     ).strip().replace("\\", "/")
 
 
-def shadow_models_dir() -> Path:
-    """Каталог артефактов 2.0.0: плоский ``results/`` (опционально subdir из env)."""
-    sub = shadow_subdir()
+def second_models_dir() -> Path:
+    sub = second_subdir()
     if not sub or sub in {".", "./"}:
         return prod_models_dir()
     return (prod_models_dir() / Path(sub)).resolve()
 
 
-def shadow_pickle_path(group_name: str) -> Path:
-    """``{stem}.pickle`` в shadow_models_dir; fallback на legacy ``querulus/2.0.0/``."""
+def second_pickle_path(group_name: str) -> Path:
     stem = group_name.strip()
-    primary = shadow_models_dir() / f"{stem}.pickle"
+    primary = second_models_dir() / f"{stem}.pickle"
     if primary.is_file():
         return primary
     legacy = prod_models_dir() / "querulus" / "2.0.0" / f"{stem}.pickle"
@@ -62,32 +57,35 @@ def shadow_pickle_path(group_name: str) -> Path:
     return primary
 
 
-def shadow_meta_path(group_name: str | None = None) -> Path:
-    """metadata.json рядом с pickle (τ = best_threshold)."""
-    name = getattr(config, "shadow_meta_filename", None) or DEFAULT_SHADOW_META
-    primary = shadow_models_dir() / name
+def second_meta_path(group_name: str | None = None) -> Path:
+    name = getattr(config, "shadow_meta_filename", None) or DEFAULT_SECOND_META
+    primary = second_models_dir() / name
     if primary.is_file():
         return primary
     legacy = prod_models_dir() / "querulus" / "2.0.0" / name
     if legacy.is_file():
         return legacy
     if group_name:
-        alt = shadow_models_dir() / f"querulus_meta_{group_name}.json"
+        alt = second_models_dir() / f"querulus_meta_{group_name}.json"
         if alt.is_file():
             return alt
     return primary
 
 
-def shadow_dq_bounds_path() -> Path:
-    name = getattr(config, "shadow_dq_bounds_filename", None) or DEFAULT_SHADOW_DQ
-    return shadow_models_dir() / name
+def second_cf_calibrator_path() -> Path:
+    name = getattr(config, "second_cf_calibrator_filename", None) or DEFAULT_CF_CALIBRATOR
+    return second_models_dir() / name
+
+
+def second_rg_calibrator_path() -> Path:
+    name = getattr(config, "second_rg_calibrator_filename", None) or DEFAULT_RG_CALIBRATOR
+    return second_models_dir() / name
 
 
 def threshold_from_meta(meta_path: Path | None = None) -> Optional[float]:
-    """best_threshold из metadata.json (τ-cal / prod из collect)."""
-    path = meta_path or shadow_meta_path()
+    path = meta_path or second_meta_path()
     if not path.is_file():
-        logger.warning("Shadow meta не найден: {}", path)
+        logger.warning("Second meta не найден: {}", path)
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -100,8 +98,18 @@ def threshold_from_meta(meta_path: Path | None = None) -> Optional[float]:
         return None
 
 
+def load_pickle(path: Path) -> Any:
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+def load_optional_pickle(path: Path) -> Any | None:
+    if not path.is_file():
+        return None
+    return load_pickle(path)
+
+
 def feature_names_from_model_result(model_result: dict[str, Any]) -> list[str]:
-    """Имена фич из model_config pickle (порядок как в конфиге)."""
     cfg = model_result.get("model_config") or {}
     if not isinstance(cfg, dict):
         cfg = {}
