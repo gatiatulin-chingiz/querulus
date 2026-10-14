@@ -20,6 +20,10 @@ from querulus.fin_effect.excel_explore import (
     ALLOWED_REFUND_FORM_NEEDLES,
     INCIDENT_COURT_COL,
     INCIDENT_FU_COL,
+    INCIDENT_PSR_COURT_COL,
+    INCIDENT_PSR_FU_COL,
+    INCIDENT_PSR_PRETENSION_COL,
+    INCIDENT_PSR_TOTAL_COL,
     VITRINA_TABLE_DEFAULT,
     _to_numeric,
     analytics_base_mask,
@@ -82,6 +86,15 @@ PSR_AMOUNT_CANDIDATES = {
     ),
     "court": ("Cумма выплаты по суду", "Сумма выплаты по суду", "Суммы_взыскано_по_иску"),
 }
+# Уже инцидентные суммы (одинаковы на всех строках) — при схлопе max, не sum.
+_INCIDENT_LEVEL_AMOUNT_COLS = frozenset(
+    {
+        INCIDENT_PSR_PRETENSION_COL,
+        INCIDENT_PSR_FU_COL,
+        INCIDENT_PSR_COURT_COL,
+        INCIDENT_PSR_TOTAL_COL,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -298,6 +311,10 @@ def _aggregate_row_group(
         if pd.api.types.is_bool_dtype(series):
             out[column] = bool(series.fillna(False).any())
             continue
+        if column in _INCIDENT_LEVEL_AMOUNT_COLS:
+            as_num = pd.to_numeric(series, errors="coerce")
+            out[column] = float(as_num.max()) if as_num.notna().any() else 0.0
+            continue
         if pd.api.types.is_numeric_dtype(series):
             out[column] = series.sum(min_count=1)
             continue
@@ -331,6 +348,21 @@ def dedupe_monitoring_by_loss(
     out = out.reset_index(drop=True)
     out["_n_rows_collapsed"] = 1
     return out, n_before - len(out)
+
+
+def _psr_sums_by_incident(
+    df: pd.DataFrame,
+    *,
+    incident_col: str,
+    psr_columns: dict[str, str],
+) -> dict[str, pd.Series]:
+    """Σ претензия / ФУ / суд по всем убыткам инцидента (до фильтра «первичный»)."""
+    keys = df[incident_col].astype("string")
+    out: dict[str, pd.Series] = {}
+    for key, column in psr_columns.items():
+        amounts = _to_numeric(df[column]).fillna(0.0).clip(lower=0.0)
+        out[key] = amounts.groupby(keys, dropna=False).sum()
+    return out
 
 
 def collapse_monitoring_to_incident(
@@ -818,6 +850,13 @@ def _prepare_monitoring_contract(
     work[call_date_col] = pd.to_datetime(work[call_date_col], errors="coerce")
     work[application_col] = pd.to_datetime(work[application_col], errors="coerce")
 
+    # Σ ПСР по ВСЕМ убыткам инцидента — до primary-фильтра (на первичных суммы = 0)
+    psr_by_incident = _psr_sums_by_incident(
+        work,
+        incident_col=incident_col,
+        psr_columns=psr_columns,
+    )
+
     # 2) базовые фильтры без Result (Null оставляем — размажется с соседей по инциденту)
     base = analytics_base_mask(work, filial_scope="pilot")
     work = work.loc[base].copy()
@@ -902,11 +941,20 @@ def _prepare_monitoring_contract(
         warnings.append(
             "Нет колонки вызова модели — в воронке «вызывали» = Result∈{0,1}."
         )
-    for key, column in psr_columns.items():
-        work[f"_psr_{key}"] = _to_numeric(work[column]).fillna(0.0).clip(lower=0.0)
+    # Факт ПСР — с полных сумм по инциденту (до primary), не с колонок primary-строки
+    for key, by_inc in psr_by_incident.items():
+        work[f"_psr_{key}"] = (
+            work[incident_col].astype("string").map(by_inc).fillna(0.0).astype(float)
+        )
     work["_observed_psr"] = work[
         ["_psr_pretension", "_psr_fu", "_psr_court"]
     ].sum(axis=1)
+    n_with_obs = int(work["_observed_psr"].gt(0).sum())
+    if n_with_obs:
+        warnings.append(
+            f"Фактический ПСР (претензия/ФУ/суд) > 0 у {n_with_obs} инцидентов; "
+            "входит в Yult и вычитается из прогнозного хвоста."
+        )
     # Доли путей: на «первичных» строках суммы ПСР обычно 0 (они на
     # претензионных/судебных убытках). Для shares — инцидентные флаги.
     pret_flag_col = resolve_column(work, "pretension")
@@ -947,7 +995,8 @@ def _prepare_monitoring_contract(
         n_old = int(work["_age_days"].ge(ULTIMATE_HORIZON_DAYS).sum())
         warnings.append(
             f"{n_old} строк имеют age_days >= {ULTIMATE_HORIZON_DAYS}: "
-            "для них midpoint NPV хвоста = 0 (Yult = paid + remaining)."
+            "для них midpoint NPV хвоста = 0 "
+            "(Yult = paid + observed_PSR + remaining)."
         )
 
     contract = {
@@ -1017,6 +1066,7 @@ def _add_outcomes(
         residual.loc[work["_agreement"]] = residual_share
         prefix = ""
 
+    # remaining — ещё не случившийся хвост; факт ПСР уже в расходе отдельно
     remaining = (
         residual * work["_expected_open_psr"] - work["_observed_psr"]
     ).clip(lower=0.0)
@@ -1026,7 +1076,11 @@ def _add_outcomes(
         midpoint_days = remaining_days / 2.0
         discount_factor = (1.0 + discount_rate) ** (midpoint_days / 365.0)
         column = f"Y{name}{prefix}"
-        work[column] = work["_paid_base"] + remaining / discount_factor
+        work[column] = (
+            work["_paid_base"]
+            + work["_observed_psr"]
+            + remaining / discount_factor
+        )
         work[f"_midpoint_days_{name}{prefix}"] = midpoint_days
     return work
 

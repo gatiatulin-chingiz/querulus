@@ -861,7 +861,7 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
         "Общая логика ряда",
         [
             "Срез week_end: инциденты с ДатаЗаявления ≤ week_end, t_calc = week_end",
-            "<b>Yult</b> = paid + NPV(хвост ПСР); paid = Σ СуммаПлатежа <b>из текущей витрины</b> "
+            "<b>Yult</b> = paid + факт ПСР + NPV(остаток хвоста); paid = Σ СуммаПлатежа <b>из текущей витрины</b> "
             "(не архив платежей на ту дату)",
             "<b>ITT(H)</b> = Σ<sub>f</sub> w<sub>f</sub>·(Ȳ<sub>H</sub>(control,f) − Ȳ<sub>H</sub>(model,f)), "
             "w<sub>f</sub> = N<sub>f</sub>/Σ N<sub>g</sub>",
@@ -1066,7 +1066,7 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
         "yult": _c(
             "Yult",
             "Yult инцидента на текущем срезе, ₽",
-            "paid + NPV(remaining ПСР)",
+            "paid + observed_PSR + NPV(remaining)",
         ),
         "paid_prev": _c(
             "paid prev",

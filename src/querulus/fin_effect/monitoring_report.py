@@ -25,7 +25,7 @@ from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_
 PLAN_FILENAME = "fin_effect_plan.html"
 REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
-FORMULA_VERSION = "ITT-U-2026-10-07-v19-funnel"
+FORMULA_VERSION = "ITT-U-2026-10-14-v20-observed-psr"
 
 
 def report_export_stamp(
@@ -808,12 +808,12 @@ def _business_schema() -> str:
     <li><b>Result</b>: если у части убытков инцидента Result пустой, а у одного
     −100 (или 0/1) — на весь инцидент берём это значение.</li>
     <li><b>paid</b> = сумма <code>СуммаПлатежа</code> по убыткам инцидента
-    (касса на дату отчёта). Observed ПСР вычитается из хвоста, не наращивает
-    paid.</li>
-    <li><b>observed_PSR</b> на инциденте = сумма выплат по претензии / ФУ /
-    суду по схлопнутым убыткам.</li>
-    <li><b>Yult</b> = paid + NPV(ожидаемый ещё несозревший хвост ПСР по
-    ретро-коэффициентам).</li>
+    (касса на дату отчёта; обычно primary).</li>
+    <li><b>observed_PSR</b> = Σ выплат по претензии / ФУ / суду по
+    <b>всем</b> убыткам инцидента (считается до фильтра «первичный»;
+    на primary-строке эти суммы часто 0). Входит в расход целиком.</li>
+    <li><b>Yult</b> = paid + observed_PSR + NPV(ещё несозревший хвост ПСР по
+    ретро; хвост = max(q×expected − observed_PSR, 0)).</li>
   </ul>
 
   <h3>Формула эффекта</h3>
@@ -847,18 +847,19 @@ def _business_schema() -> str:
     <div class="flow-step">
       <div class="num">Шаг 2</div>
       <h4>Что уже заплатили</h4>
-      <p><code>paid</code> = сумма <code>СуммаПлатежа</code> по убыткам инцидента
-      (база для Yult).</p>
+      <p><code>paid</code> = <code>СуммаПлатежа</code> первичных убытков.
+      Плюс уже выплаченный ПСР (претензия / ФУ / суд по всему инциденту).</p>
       </div>
     <div class="flow-step">
       <div class="num">Шаг 3</div>
       <h4>Что ещё может прийти</h4>
-      <p>Хвост ПСР по ретро (p_U, k_U, m_U, e_U). После соглашения — 7%.</p>
+      <p>Хвост = ретро (p_U, k_U, m_U, e_U) минус уже выплаченный ПСР.
+      После соглашения от ретро берётся 7%, не вместо факта.</p>
       </div>
     <div class="flow-step">
       <div class="num">Шаг 4</div>
       <h4>Исход Yult</h4>
-      <p><code>Yult</code> = касса + NPV lifetime-хвоста ПСР.</p>
+      <p><code>Yult</code> = касса + факт ПСР + NPV оставшегося хвоста.</p>
     </div>
     <div class="flow-step">
       <div class="num">Шаг 5</div>
@@ -936,8 +937,8 @@ def _plan_glossary() -> str:
       </tr>
       <tr>
         <th>ПСР</th>
-        <td>Постстраховые расходы / взыскания (претензии, ФУ, суд) — в хвосте Yult
-        и в ретро-коэффициентах.</td>
+        <td>Постстраховые расходы / взыскания (претензии, ФУ, суд): уже выплаченные
+        входят в Yult целиком, ещё не случившиеся — в хвосте по ретро.</td>
       </tr>
     </table>
     </div>
@@ -1137,6 +1138,7 @@ def _fx_y_branch() -> str:
                 <div class="eq">paid<sub>i</sub> = Σ СуммаПлатежа по убыткам
                 инцидента i</div>
                 <div class="eq">Yult<sub>i</sub> = paid<sub>i</sub> +
+                observed_PSR<sub>i</sub> +
                 remaining<sub>i</sub> / (1+r)<sup>midpoint<sub>i</sub>/365</sup></div>
               </div>
               <p class="fx-need">Чтобы посчитать Yult:</p>
@@ -1154,15 +1156,16 @@ def _fx_y_branch() -> str:
                     p<sub>U</sub> × (ultimate_base<sub>i</sub> + e<sub>U</sub>)</div>
                     <div class="eq">ultimate_base<sub>i</sub> =
                     OD<sub>i</sub>×k<sub>U</sub> если OD&gt;0, иначе m<sub>U</sub></div>
-                    <div class="eq">q<sub>i</sub> = 0.07 при соглашении, иначе 1</div>
+                    <div class="eq">q<sub>i</sub> = 0.07 при соглашении, иначе 1
+                    (режет только ещё не выплаченный хвост)</div>
                     <div class="eq">age<sub>i</sub> = t_calc − t0<sub>i</sub> (дни)</div>
                     <div class="eq">midpoint<sub>i</sub> =
                     max(1095 − age<sub>i</sub>, 0) / 2</div>
                   </div>
                   <div class="legend">
                     <ul>
-                      <li><code>observed_PSR</code> — претензия+ФУ+суд на инциденте
-                      (на первичных часто 0).</li>
+                      <li><code>observed_PSR</code> — Σ претензия+ФУ+суд по всем убыткам
+                      инцидента; входит в Yult и вычитается из хвоста.</li>
                       <li><code>r</code> — ставка дисконта (обычно 12%); деление —
                       обычный NPV, не «обратная ставка».</li>
                     </ul>
@@ -1511,8 +1514,8 @@ def build_plan_html(
       (примерно 50/50). Марийский и Архангельский в ITT не входят.</li>
       <li>Единица — один <b>инцидент</b> (после дедупа убытков и схлопывания;
       списанные по форме возмещения не схлопываем).</li>
-      <li><b>Yult</b> — paid (<code>СуммаПлатежа</code>) + NPV хвоста ПСР
-      по ретро пилотных филиалов.</li>
+      <li><b>Yult</b> — paid (<code>СуммаПлатежа</code>) + уже выплаченный ПСР
+      + NPV ещё не случившегося хвоста по ретро пилотных филиалов.</li>
       <li>Если заключено соглашение, экспертно оставляем 7% возможного ПСР.</li>
       <li>Главный результат — ITT (эффект назначения), включая non-compliance.
       Сценарий 100% исполнения — отдельно, не ITT.</li>
@@ -1536,8 +1539,8 @@ def build_plan_html(
   <div class="card">
     <ul>
       <li>Если 95% CI проходит через 0, экономия пока статистически не подтверждена.</li>
-      <li><code>Yult</code> сейчас — прогноз хвоста, а не полностью
-      дозревшие фактические расходы.</li>
+      <li><code>Yult</code> включает уже выплаченный ПСР; хвост сверх него
+      всё ещё прогноз по ретро, не дозревший факт.</li>
       <li>Годовой эффект сети — сценарий масштабирования, не измеренный факт.</li>
     </ul>
   </div>
@@ -1736,6 +1739,7 @@ def build_monitoring_html(
             "<b>remaining_days<sub>i</sub></b> = max(1095 − age<sub>i</sub>, 0)",
             "<b>midpoint_days<sub>i</sub></b> = remaining_days<sub>i</sub> / 2",
             "<b>Yult<sub>i</sub></b> = paid_to_date<sub>i</sub> + "
+            "observed_PSR<sub>i</sub> + "
             "remaining<sub>i</sub> / (1+r)<sup>midpoint_days<sub>i</sub>/365</sup>",
         ],
         f"OD = СуммаОсновногоДолгаЗаявлено; q=1 без соглашения и "
@@ -1763,9 +1767,9 @@ def build_monitoring_html(
   </div>
     <div class="formula">
       <b>Пример midpoint / NPV для Yult</b>
-      <div class="eq">age=184, remaining=80 000, paid=50 000, r=12%</div>
+      <div class="eq">age=184, remaining=80 000, paid=50 000, observed=20 000, r=12%</div>
       <div class="eq">remaining_days=181, midpoint=90.5, DF≈1.028 →
-      Yult ≈ 50 000 + 77 821 = 127 821</div>
+      Yult ≈ 50 000 + 20 000 + 77 821 = 147 821</div>
     </div>
     <h3>Итоги control / model</h3>
     {_table(
@@ -1793,7 +1797,7 @@ def build_monitoring_html(
         "Единица строки после дедупа/схлопывания — инцидент.",
       ],
       notes=[
-        "Yult = paid (Σ СуммаПлатежа) + NPV(remaining ПСР).",
+        "Yult = paid (Σ СуммаПлатежа) + observed_PSR + NPV(remaining).",
       ],
     )}
   </div>
@@ -2293,8 +2297,8 @@ def build_monitoring_html(
   <div class="card">
     <ul>
       <li><b>ITT</b> — эффект назначения в model-поток, включая фактический non-compliance.</li>
-      <li><b>Yult</b> — paid плюс модельный NPV остатка; это не полностью
-      дозревший фактический горизонт.</li>
+      <li><b>Yult</b> — paid + уже выплаченный ПСР + модельный NPV остатка;
+      хвост сверх факта — не дозревший горизонт.</li>
       <li>Терминальные priors не содержат отдельного 365-таргета вызревания.</li>
       <li>В мониторинге OD — <code>СуммаОсновногоДолгаЗаявлено</code>, а k_U
       калибруется на <code>RECOVEREDMAINDEBT_LAST_INST_SUM</code>.</li>
@@ -2649,13 +2653,13 @@ def build_conclusion_body_from_result(
 
     <h4>Сколько потенциально экономим (ручеек − модель)</h4>
     <p class="muted">ITT на инцидент = mean(ручеек) − mean(модель), со стратификацией.
-    <b>Yult</b> = paid + NPV lifetime-хвоста ПСР (соглашение → остаток 7%).
+    <b>Yult</b> = paid + факт ПСР + NPV остатка хвоста (соглашение режет только остаток до 7%).
     Плюс = экономия. {ci_note}.</p>
     <table class="kv">
       <tr>
         <th>ITT Yult / инцидент</th>
         <td><b>{format_money(e_y)}</b> ₽
-        <small>(касса + NPV хвоста за жизнь инцидента;
+        <small>(касса + факт ПСР + NPV остатка хвоста;
         95% CI: {format_money(lo_y)} … {format_money(hi_y)})</small></td>
       </tr>
     </table>
@@ -2738,7 +2742,7 @@ def build_conclusion_body_from_result(
   </div>
 
   <div class="card">
-    <h3>Финрез (Yult = касса + lifetime-хвост ПСР)</h3>
+    <h3>Финрез (Yult = касса + факт ПСР + остаток хвоста)</h3>
     <p class="muted">Два масштаба одного ITT на инцидент. Пункт 2 — экстраполяция
     числа инцидентов на год, не новый эксперимент.</p>
     <table class="kv">
@@ -2762,8 +2766,9 @@ def build_conclusion_body_from_result(
     <h3>Как читать</h3>
     <ul>
       <li><b>Ручеек</b> = Result=−100; <b>модель</b> = Result∈{{0,1}}.</li>
-      <li><b>Yult</b> — paid (касса) + NPV ещё не дозревшего lifetime-хвоста ПСР
-      (ретро p_U/k_U/m_U/e_U; при соглашении остаток 7%).</li>
+      <li><b>Yult</b> — paid (касса) + уже выплаченные претензия/ФУ/суд
+      + NPV ещё не дозревшего хвоста
+      (ретро p_U/k_U/m_U/e_U минус факт; при соглашении от ретро берётся 7%).</li>
       <li>Пункт финреза 2 — сценарий по объёму; обещать как факт нельзя,
       пока CI через 0.</li>
     </ul>

@@ -62,14 +62,14 @@ _SHEET_COLUMN_DOCS: dict[str, list[tuple[str, str, str]]] = {
         ),
         (
             "psr_pretension",
-            "Наблюдаемый ПСР претензий на строке, ₽",
-            "обычно 0 на первичных",
+            "ПСР претензий по всем убыткам инцидента, ₽",
+            "сумма до фильтра «первичный»",
         ),
-        ("psr_fu", "Наблюдаемый ПСР ФУ на строке, ₽", "обычно 0 на первичных"),
+        ("psr_fu", "ПСР ФУ по всем убыткам инцидента, ₽", "сумма до фильтра «первичный»"),
         (
             "psr_court",
-            "Наблюдаемый ПСР суда на строке, ₽",
-            "обычно 0 на первичных",
+            "ПСР суда по всем убыткам инцидента, ₽",
+            "сумма до фильтра «первичный»",
         ),
         (
             "observed_psr",
@@ -110,7 +110,7 @@ _SHEET_COLUMN_DOCS: dict[str, list[tuple[str, str, str]]] = {
         (
             "Yult",
             "Исход с NPV хвоста на lifetime-горизонте (ult), ₽",
-            "paid + remaining / (1+r)^(midpoint_days/365)",
+            "paid + observed_psr + remaining / (1+r)^(midpoint_days/365)",
         ),
         ("python_Yult", "Эталон Yult из Python", "сверка с колонкой Yult"),
     ],
@@ -311,7 +311,7 @@ def _write_inputs(ws, result: MonitoringEffectResult) -> dict[str, str]:
         ws[col].fill = fill
 
     how = {
-        "discount_rate": "Yult = paid + remaining / (1+r)^(midpoint/365)",
+        "discount_rate": "Yult = paid + observed_psr + remaining / (1+r)^(midpoint/365)",
         "residual_share": "q = residual_share при соглашении, иначе 1",
         "horizon_days": "remaining_days = max(horizon − age, 0)",
         "p_U": "expected_open = p_U × (ultimate_base + e_U)",
@@ -425,7 +425,7 @@ def _write_rows(ws, result: MonitoringEffectResult, inputs: dict[str, str]) -> i
         ws.cell(
             excel_row,
             18,
-            f"=E{excel_row}+P{excel_row}/POWER(1+inputs!{r},Q{excel_row}/365)",
+            f"=E{excel_row}+J{excel_row}+P{excel_row}/POWER(1+inputs!{r},Q{excel_row}/365)",
         )
         ws.cell(excel_row, 19, float(get["Yult"]))
         for col in (5, 6, 7, 8, 9, 16, 18, 19):
@@ -436,8 +436,8 @@ def _write_rows(ws, result: MonitoringEffectResult, inputs: dict[str, str]) -> i
         n + 3,
         2,
         "Одна строка = один инцидент после дедупа/схлопывания. "
-        "Yult = paid (СуммаПлатежа) + NPV(remaining). "
-        "Колонки psr_* вычитаются из хвоста remaining, а не прибавляются к paid. "
+        "Yult = paid (СуммаПлатежа) + observed_psr + NPV(remaining). "
+        "psr_* — факт по всему инциденту: входят в Yult и вычитаются из хвоста. "
         "python_Yult — эталон из Python для сверки. "
         "Полное описание колонок — лист columns; краткое — комментарий к заголовку.",
     )

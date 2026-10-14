@@ -144,6 +144,11 @@ PRIMARY_LOSS_STATUS_NEEDLES = ("первичн",)
 VITRINA_TABLE_DEFAULT = "[OISUU_report].[dbo].[ВитринаСутяжность]"
 INCIDENT_FU_COL = "ЕстьОбращениеКФУВИнциденте"
 INCIDENT_COURT_COL = "ЕстьОбращениеКСудуВИнциденте"
+# Σ выплат ПСР по всем убыткам инцидента (нужно до фильтра «первичный»)
+INCIDENT_PSR_PRETENSION_COL = "СуммаВыплатыПоПретензииВИнциденте"
+INCIDENT_PSR_FU_COL = "СуммаВыплатыПоФУВИнциденте"
+INCIDENT_PSR_COURT_COL = "СуммаВыплатыПоСудуВИнциденте"
+INCIDENT_PSR_TOTAL_COL = "СуммаПСРВИнциденте"
 
 _ID_HINTS = (
     "номер",
@@ -218,11 +223,12 @@ def load_vitrina_mssql(
             conn.close()
 
 def enrich_incident_path_flags(df: pd.DataFrame) -> pd.DataFrame:
-    """Агрегировать ФУ/суд на весь инцидент и проставить на каждую строку.
+    """Агрегировать ФУ/суд и суммы ПСР на весь инцидент; проставить на каждую строку.
 
-    ``ЕстьОбращениеКФУВИнциденте`` / ``ЕстьОбращениеКСудуВИнциденте`` =
-    max флага по убыткам инцидента. Нужно для аналитики долей на
-    «первичных» строках (на самой строке loss-флаг ФУ/суда обычно 0).
+    Флаги ``ЕстьОбращениеКФУВИнциденте`` / ``ЕстьОбращениеКСудуВИнциденте`` =
+    max по убыткам. Суммы претензия/ФУ/суд — Σ по всем убыткам инцидента
+    (на «первичных» строках сами суммы обычно 0, а факт выплат на других
+    убытках того же инцидента).
     """
     out = df.copy()
     inc_col = resolve_column(out, "incident")
@@ -232,6 +238,10 @@ def enrich_incident_path_flags(df: pd.DataFrame) -> pd.DataFrame:
     if inc_col is None:
         out[INCIDENT_FU_COL] = 0
         out[INCIDENT_COURT_COL] = 0
+        out[INCIDENT_PSR_PRETENSION_COL] = 0.0
+        out[INCIDENT_PSR_FU_COL] = 0.0
+        out[INCIDENT_PSR_COURT_COL] = 0.0
+        out[INCIDENT_PSR_TOTAL_COL] = 0.0
         return out
 
     keys = out[inc_col]
@@ -246,6 +256,48 @@ def enrich_incident_path_flags(df: pd.DataFrame) -> pd.DataFrame:
         out[INCIDENT_COURT_COL] = court01.groupby(keys).transform("max")
     else:
         out[INCIDENT_COURT_COL] = 0
+
+    def _first_amount_col(*names: str) -> str | None:
+        for name in names:
+            if name in out.columns:
+                return name
+        return None
+
+    pret_amt = _first_amount_col(
+        "Cумма выплаты по претензии",
+        "Сумма выплаты по претензии",
+        "TARGET_FREQ_PRET_AMOUNT",
+    )
+    fu_amt = _first_amount_col(
+        "Cумма выплат по ФУ",
+        "Сумма выплат по ФУ",
+        "Сумма_взыскано_по_ФУ",
+    )
+    court_amt = _first_amount_col(
+        "Cумма выплаты по суду",
+        "Сумма выплаты по суду",
+        "Суммы_взыскано_по_иску",
+    )
+
+    def _incident_sum(col: str | None) -> pd.Series:
+        if col is None:
+            return pd.Series(0.0, index=out.index)
+        return (
+            _to_numeric(out[col])
+            .fillna(0.0)
+            .clip(lower=0.0)
+            .groupby(keys)
+            .transform("sum")
+        )
+
+    out[INCIDENT_PSR_PRETENSION_COL] = _incident_sum(pret_amt)
+    out[INCIDENT_PSR_FU_COL] = _incident_sum(fu_amt)
+    out[INCIDENT_PSR_COURT_COL] = _incident_sum(court_amt)
+    out[INCIDENT_PSR_TOTAL_COL] = (
+        out[INCIDENT_PSR_PRETENSION_COL]
+        + out[INCIDENT_PSR_FU_COL]
+        + out[INCIDENT_PSR_COURT_COL]
+    )
 
     return out
 
