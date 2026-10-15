@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Querulus Integration — как запускать тесты</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0f1419;
+      --bg-elev: #1a222c;
+      --bg-card: #222b36;
+      --line: #3a4654;
+      --text: #e8eef4;
+      --muted: #9aabbc;
+      --accent: #3db88a;
+      --accent-dim: #2a7a5c;
+      --main: #4a9fd8;
+      --second: #e0a04a;
+      --warn: #d97b5c;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+      --sans: "IBM Plex Sans", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background:
+        radial-gradient(ellipse 80% 50% at 10% -10%, #1a3a32 0%, transparent 55%),
+        radial-gradient(ellipse 60% 40% at 100% 0%, #1a2a3a 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      font-size: 15px;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 2.5rem 1.5rem 4rem; }
+    header {
+      margin-bottom: 2rem;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 1.5rem;
+    }
+    header .eyebrow {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin: 0 0 0.5rem;
+    }
+    h1 {
+      font-size: clamp(1.6rem, 3vw, 2.1rem);
+      font-weight: 600;
+      margin: 0 0 0.6rem;
+      letter-spacing: -0.02em;
+    }
+    header p { margin: 0; color: var(--muted); max-width: 48rem; }
+    header a, a { color: var(--main); }
+    code {
+      font-family: var(--mono);
+      font-size: 0.85em;
+      color: var(--accent);
+      background: rgba(61, 184, 138, 0.1);
+      padding: 0.1em 0.35em;
+      border-radius: 3px;
+    }
+    h2 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin: 2.25rem 0 1rem;
+      letter-spacing: -0.01em;
+    }
+    h2 .tag {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      font-weight: 500;
+      color: var(--muted);
+      margin-left: 0.5rem;
+    }
+    h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin: 1.35rem 0 0.55rem;
+      color: #c5d4e0;
+    }
+    .toc {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin: 1rem 0 0;
+    }
+    .toc a {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      text-decoration: none;
+      padding: 0.35rem 0.65rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--bg-elev);
+      color: var(--muted);
+    }
+    .toc a:hover { color: var(--text); border-color: var(--accent-dim); }
+    .card {
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 1rem 1.15rem;
+      margin: 0.75rem 0;
+    }
+    .card.main-lane { border-color: rgba(74, 159, 216, 0.35); }
+    .card.second-lane { border-color: rgba(224, 160, 74, 0.35); }
+    .card.warn {
+      border-color: rgba(217, 123, 92, 0.45);
+      background: linear-gradient(135deg, #2a1c18 0%, var(--bg-elev) 65%);
+    }
+    ol.steps, ul.bullets {
+      margin: 0.4rem 0 0.8rem;
+      padding-left: 1.25rem;
+      color: var(--muted);
+    }
+    ol.steps li, ul.bullets li { margin: 0.35rem 0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      margin: 0.5rem 0 1rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.55rem 0.65rem;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    th {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .prewrap {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      line-height: 1.45;
+      background: #121820;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 1rem 1.1rem;
+      overflow-x: auto;
+      white-space: pre;
+      color: #d5e0ea;
+      margin: 0.5rem 0 1rem;
+    }
+    .prewrap .c { color: #6a7a8a; }
+    .note {
+      color: var(--muted);
+      font-size: 0.88rem;
+      margin: 0.4rem 0 1rem;
+    }
+    .dual {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 800px) { .dual { grid-template-columns: 1fr; } }
+    footer {
+      margin-top: 2.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--line);
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <p class="eyebrow">querulus / integration / tests</p>
+      <h1>Как запускать тесты</h1>
+      <p>
+        Unit/integration suite для dual-track сервиса: preprocess, FE/CPI second_,
+        parity preds до 2 знаков vs <code>df_for_service_*</code>.
+        Нет файла артефакта → <strong>fail</strong>, не skip.
+        <a href="architecture.html">архитектура</a> ·
+        <a href="contract.html">контракт API</a> ·
+        <a href="functions.html">карта функций</a>
+      </p>
+      <nav class="toc" aria-label="Оглавление">
+        <a href="#prereq">предусловия</a>
+        <a href="#artifacts">эталоны</a>
+        <a href="#prod">prod</a>
+        <a href="#synth">синтетика</a>
+        <a href="#modules">модули</a>
+        <a href="#env">env_template</a>
+      </nav>
+    </header>
+
+    <h2 id="prereq">Предусловия <span class="tag">venv</span></h2>
+    <div class="card">
+      <ol class="steps">
+        <li><code>outboxml</code> установлен через pip:
+          <div class="prewrap">pip install outboxml</div>
+          Shim <code>mldataworker</code> → <code>outboxml</code> из site-packages.
+        </li>
+        <li>Артефакты в каталоге results (см. ниже).</li>
+      </ol>
+    </div>
+
+    <h2 id="artifacts">Эталонные датафреймы <span class="tag">parity</span></h2>
+    <table>
+      <thead>
+        <tr><th>Файл</th><th>Слот</th><th>Содержимое</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>df_for_service_main.parquet</code></td>
+          <td>main_ (legacy)</td>
+          <td>вектор + <code>preds_cf</code> / <code>preds_rg</code></td>
+        </tr>
+        <tr>
+          <td><code>df_for_service_second.parquet</code></td>
+          <td>second_ (2.0.0)</td>
+          <td>вектор + <code>preds_cf</code> / <code>preds_rg</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="dual">
+      <div class="card main-lane">
+        <h3>preds_* = ответ сервиса</h3>
+        <ul class="bullets">
+          <li><code>preds_cf</code> → <code>classification_proba</code></li>
+          <li><code>preds_rg</code> → <code>regression_predictions</code> (после маски IS_LAWYER)</li>
+          <li>сверка до <strong>2 знаков</strong> после запятой</li>
+        </ul>
+      </div>
+      <div class="card second-lane">
+        <h3>second_ — калибраторы</h3>
+        <p class="note" style="margin:0">
+          В эталоне second_ preds должны быть <strong>после CF/RG калибраторов</strong>
+          (как <code>score_second</code>), иначе parity не сойдётся.
+        </p>
+      </div>
+    </div>
+
+    <p class="note">
+      Опционально колонка <code>split</code> ∈ {train, test}.
+      Лимит строк: <code>INTEGRATION_TEST_MAX_ROWS</code>.
+    </p>
+
+    <h2 id="prod">Prod (рекомендуется) <span class="tag">example_final</span></h2>
+    <div class="card">
+      <ol class="steps">
+        <li>Прогнать <code>notebooks/example_final.ipynb</code> до конца
+          (export + <code>save_df_for_service(..., slot="second", calibrators, threshold)</code>).</li>
+        <li>В <code>integration/results/</code> должны быть:
+          <ul class="bullets">
+            <li><code>UU_querulus_….pickle</code>, <code>metadata.json</code>,
+              <code>cf_calibrator.pickle</code>, <code>rg_calibrator.pickle</code></li>
+            <li><code>df_for_service_second.parquet</code></li>
+          </ul>
+        </li>
+        <li>Для main_ (legacy): <code>querulus_ansamble_legacy.pickle</code> +
+          <code>df_for_service_main.parquet</code> с preds того же пути, что <code>main_predict</code>.</li>
+      </ol>
+    </div>
+
+    <h3>Запуск (prod results)</h3>
+    <div class="prewrap">cd ~/…/querulus
+<span class="c"># по умолчанию INTEGRATION_TEST_RESULTS_DIR = integration/results</span>
+python -m unittest discover -s integration/tests -p "test_*.py" -v</div>
+
+    <h3>Только parity</h3>
+    <div class="prewrap">python -m unittest integration.tests.test_parity -v</div>
+
+    <h2 id="synth">Синтетика <span class="tag">smoke</span></h2>
+    <p class="note">Локальный прогон без prod-моделей. Пишет <code>integration/results/test_synth/</code>.</p>
+    <div class="prewrap">python scripts/build_integration_test_artifacts.py
+
+<span class="c"># Linux / macOS</span>
+INTEGRATION_TEST_RESULTS_DIR=integration/results/test_synth \
+  python -m unittest discover -s integration/tests -p "test_*.py" -v
+
+<span class="c"># PowerShell</span>
+$env:INTEGRATION_TEST_RESULTS_DIR = "integration/results/test_synth"
+python -m unittest discover -s integration/tests -p "test_*.py" -v</div>
+
+    <div class="card warn">
+      <strong>Из каталога <code>integration/</code></strong>
+      <div class="prewrap" style="margin-bottom:0">cd integration
+PYTHONPATH=.. python -m unittest discover -s tests -p "test_*.py" -v</div>
+    </div>
+
+    <h2 id="modules">Какие тесты за что</h2>
+    <table>
+      <thead>
+        <tr><th>Модуль</th><th>Назначение</th><th>Нужны артефакты</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>test_common_preprocess</code></td>
+          <td>NaN, UPPER, даты, IS_LAWYER-маска (main ∩ second)</td>
+          <td>нет (нужен outboxml)</td>
+        </tr>
+        <tr>
+          <td><code>test_second_features</code></td>
+          <td>CPI, FE_*, τ из meta, калибраторы</td>
+          <td>meta / cal — частично</td>
+        </tr>
+        <tr>
+          <td><code>test_parity</code></td>
+          <td>сервис vs <code>df_for_service_{main,second}</code> до 2 знаков; dual predict</td>
+          <td>да</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2 id="env">Переменные окружения</h2>
+    <div class="card">
+      <p class="note" style="margin-top:0">
+        Шаблон: <code>examples/querulus/env_template</code>
+        (скопировать в <code>.env</code> в корне querulus).
+        Отдельного <code>.env.example</code> нет — единый файл для пайплайна, сервиса и тестов.
+        Секция <strong>Integration tests</strong> — переменные <code>INTEGRATION_TEST_*</code>.
+      </p>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Переменная</th><th>Смысл</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>INTEGRATION_TEST_RESULTS_DIR</code></td>
+          <td>каталог pickle/df (default <code>integration/results</code>)</td>
+        </tr>
+        <tr>
+          <td><code>INTEGRATION_TEST_DF_MAIN</code> / <code>INTEGRATION_TEST_DF_SECOND</code></td>
+          <td>явные пути к <code>df_for_service_*.parquet</code></td>
+        </tr>
+        <tr>
+          <td><code>INTEGRATION_TEST_MAIN_STEM</code> / <code>INTEGRATION_TEST_SECOND_STEM</code></td>
+          <td>stem pickle без <code>.pickle</code></td>
+        </tr>
+        <tr>
+          <td><code>INTEGRATION_TEST_MAIN_PICKLE</code> / <code>_SECOND_PICKLE</code></td>
+          <td>явные пути к pickle (опционально)</td>
+        </tr>
+        <tr>
+          <td><code>INTEGRATION_TEST_METADATA</code> / <code>_CF_CAL</code> / <code>_RG_CAL</code></td>
+          <td>meta и калибраторы second_</td>
+        </tr>
+        <tr>
+          <td><code>INTEGRATION_TEST_MAX_ROWS</code></td>
+          <td>лимит строк на split (или на весь df)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <footer>
+      examples/querulus/integration/tests.html · заменяет tests/test_instruction.md
+    </footer>
+  </div>
+</body>
+</html>

@@ -2,6 +2,10 @@
 
 Все тесты читают пути отсюда. Нет файла → fail (не skip).
 Переопределение через env или правку дефолтов ниже.
+
+Эталон для parity сервиса:
+  ``df_for_service_main.parquet`` / ``df_for_service_second.parquet``
+  с колонками ``preds_cf``, ``preds_rg`` (ожидаемый ответ сервиса до 2 знаков).
 """
 from __future__ import annotations
 
@@ -11,7 +15,6 @@ from pathlib import Path
 
 _INTEGRATION_ROOT = Path(__file__).resolve().parents[1]
 _RESULTS = _INTEGRATION_ROOT / "results"
-_FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 @dataclass(frozen=True)
@@ -25,13 +28,13 @@ class TestArtifacts:
     metadata: Path
     cf_calibrator: Path
     rg_calibrator: Path
-    df_main: Path
-    df_second: Path
+    df_for_service_main: Path
+    df_for_service_second: Path
     main_stem: str
     second_stem: str
     preds_cf_col: str = "preds_cf"
     preds_rg_col: str = "preds_rg"
-    split_col: str = "split"  # train | test
+    split_col: str = "split"  # опционально: train | test
 
 
 #new
@@ -42,7 +45,8 @@ def _env_path(name: str, default: Path) -> Path:
 
 #new
 def load_artifacts() -> TestArtifacts:
-    results = _env_path("INTEGRATION_TEST_RESULTS_DIR", _RESULTS / "test_synth")
+    # По умолчанию — prod results/; синтетика: INTEGRATION_TEST_RESULTS_DIR=.../test_synth
+    results = _env_path("INTEGRATION_TEST_RESULTS_DIR", _RESULTS)
     main_stem = os.environ.get("INTEGRATION_TEST_MAIN_STEM", "querulus_ansamble_legacy")
     second_stem = os.environ.get(
         "INTEGRATION_TEST_SECOND_STEM", "UU_querulus_2026_10_09_16_51_20"
@@ -62,8 +66,14 @@ def load_artifacts() -> TestArtifacts:
         rg_calibrator=_env_path(
             "INTEGRATION_TEST_RG_CAL", results / "rg_calibrator.pickle"
         ),
-        df_main=_env_path("INTEGRATION_TEST_DF_MAIN", results / "df_main.parquet"),
-        df_second=_env_path("INTEGRATION_TEST_DF_SECOND", results / "df_second.parquet"),
+        df_for_service_main=_env_path(
+            "INTEGRATION_TEST_DF_MAIN",
+            results / "df_for_service_main.parquet",
+        ),
+        df_for_service_second=_env_path(
+            "INTEGRATION_TEST_DF_SECOND",
+            results / "df_for_service_second.parquet",
+        ),
         main_stem=main_stem,
         second_stem=second_stem,
     )
@@ -74,9 +84,19 @@ def require_file(path: Path, label: str) -> Path:
     if not path.is_file():
         raise FileNotFoundError(
             f"Нет артефакта {label}: {path}. "
-            f"Сгенерируйте: python scripts/build_integration_test_artifacts.py"
+            f"Положите parquet/pickle в results/ или задайте INTEGRATION_TEST_* . "
+            f"Синтетика: python scripts/build_integration_test_artifacts.py"
         )
     return path
+
+
+#new
+def max_rows_limit() -> int | None:
+    """Опциональный лимит строк для parity (INTEGRATION_TEST_MAX_ROWS)."""
+    raw = os.environ.get("INTEGRATION_TEST_MAX_ROWS", "").strip()
+    if not raw:
+        return None
+    return max(1, int(raw))
 
 
 ART = load_artifacts()

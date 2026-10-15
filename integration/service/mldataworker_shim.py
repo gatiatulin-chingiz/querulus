@@ -1,4 +1,4 @@
-"""Локальный shim: mldataworker → outboxml (корпоративный пакет в venv нет)."""
+"""Локальный shim: mldataworker → outboxml (в контуре outboxml ставится через pip)."""
 from __future__ import annotations
 
 import sys
@@ -10,9 +10,17 @@ from pathlib import Path
 def install_mldataworker_shim() -> None:
     if "mldataworker" in sys.modules:
         return
-    from outboxml.core import data_prepare as _dp
-    from outboxml.core import pydantic_models as _pm
-    from outboxml.core import utils as _utils
+    try:
+        from outboxml.core import data_prepare as _dp
+        from outboxml.core import pydantic_models as _pm
+        from outboxml.core import utils as _utils
+    except ModuleNotFoundError as exc:
+        if getattr(exc, "name", "") != "outboxml" and "outboxml" not in str(exc):
+            raise
+        raise ModuleNotFoundError(
+            "Нужен пакет outboxml для mldataworker shim. "
+            "В контуре: pip install outboxml (или корпоративный wheel)."
+        ) from exc
 
     root = types.ModuleType("mldataworker")
     core = types.ModuleType("mldataworker.core")

@@ -1,8 +1,11 @@
-"""Parity: CF predict_proba и RG predictions vs эталон (train+test) до 2 знаков."""
+"""Parity: preds сервиса vs ``df_for_service_{main,second}`` до 2 знаков.
+
+Эталон в parquet: колонки ``preds_cf`` / ``preds_rg`` — ожидаемые
+``classification_proba`` и ``regression_predictions`` ответа сервиса
+(для second_ — уже после калибраторов и маски IS_LAWYER).
+"""
 from __future__ import annotations
 
-import json
-import os
 import sys
 import unittest
 from pathlib import Path
@@ -10,14 +13,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Shim до импорта service scoring
 _INTEGRATION = Path(__file__).resolve().parents[1]
 _QUERULUS = _INTEGRATION.parent
-_SRC = _QUERULUS / "src"
-_OUTBOXML = _QUERULUS.parent.parent
-for p in (_SRC, _OUTBOXML, _QUERULUS, _INTEGRATION):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
+if str(_QUERULUS) not in sys.path:
+    sys.path.insert(0, str(_QUERULUS))
 
 from integration.service.mldataworker_shim import install_mldataworker_shim
 
@@ -26,7 +25,11 @@ install_mldataworker_shim()
 import integration.config as config  # noqa: E402
 from integration.scoring.second import score_second  # noqa: E402
 from integration.service.main import main_predict  # noqa: E402
-from integration.tests.artifacts import ART, require_file  # noqa: E402
+from integration.tests.artifacts import (  # noqa: E402
+    ART,
+    max_rows_limit,
+    require_file,
+)
 
 
 #new
@@ -37,7 +40,6 @@ def _patch_models_dir() -> None:
     config.second_cf_calibrator_filename = ART.cf_calibrator.name
     config.second_rg_calibrator_filename = ART.rg_calibrator.name
     config.shadow_meta_filename = ART.metadata.name
-    # Docker/flat layout may also import top-level ``config``
     if "config" in sys.modules and sys.modules["config"] is not config:
         top = sys.modules["config"]
         top.prod_models_path = config.prod_models_path
@@ -51,9 +53,8 @@ def _patch_models_dir() -> None:
 #new
 def _row_to_request(row: pd.Series) -> list[dict]:
     d = row.to_dict()
-    for k in ("preds_cf", "preds_rg", "split"):
+    for k in (ART.preds_cf_col, ART.preds_rg_col, ART.split_col):
         d.pop(k, None)
-    # JSON-friendly
     clean = {}
     for k, v in d.items():
         if pd.isna(v):
@@ -70,68 +71,97 @@ def _row_to_request(row: pd.Series) -> list[dict]:
 
 
 #new
+def _iter_rows(df: pd.DataFrame):
+    """Все строки; если есть split — по train/test; лимит INTEGRATION_TEST_MAX_ROWS."""
+    limit = max_rows_limit()
+    if ART.split_col in df.columns:
+        for split in ("train", "test"):
+            part = df[df[ART.split_col] == split]
+            if part.empty:
+                continue
+            if limit is not None:
+                part = part.head(limit)
+            for idx, row in part.iterrows():
+                yield split, idx, row
+    else:
+        part = df if limit is None else df.head(limit)
+        for idx, row in part.iterrows():
+            yield "all", idx, row
+
+
+#new
+def _assert_preds(test: unittest.TestCase, cf: float, rg: float, row: pd.Series, tag: str):
+    test.assertEqual(
+        round(cf, 2),
+        round(float(row[ART.preds_cf_col]), 2),
+        msg=f"{tag} CF mismatch",
+    )
+    test.assertEqual(
+        round(rg, 2),
+        round(float(row[ART.preds_rg_col]), 2),
+        msg=f"{tag} RG mismatch",
+    )
+
+
+#new
 class TestParityMain(unittest.TestCase):
+    """main_predict vs df_for_service_main."""
+
     @classmethod
     def setUpClass(cls):
         require_file(ART.main_pickle, "main_pickle")
-        require_file(ART.df_main, "df_main")
+        require_file(ART.df_for_service_main, "df_for_service_main")
         _patch_models_dir()
 
-    def test_main_train_test_two_decimals(self):
-        df = pd.read_parquet(ART.df_main)
-        self.assertIn("split", df.columns)
-        for split in ("train", "test"):
-            part = df[df["split"] == split]
-            self.assertGreater(len(part), 0, f"empty {split}")
-            for _, row in part.iterrows():
-                out = main_predict(ART.main_stem, _row_to_request(row))
-                res = out["main_response"]["result"]
-                cf = float(res["classification_proba"][0])
-                rg = float(res["regression_predictions"][0])
-                self.assertEqual(
-                    round(cf, 2),
-                    round(float(row["preds_cf"]), 2),
-                    msg=f"main CF mismatch split={split}",
-                )
-                self.assertEqual(
-                    round(rg, 2),
-                    round(float(row["preds_rg"]), 2),
-                    msg=f"main RG mismatch split={split}",
-                )
+    def test_service_matches_df_for_service_main(self):
+        df = pd.read_parquet(ART.df_for_service_main)
+        self.assertIn(ART.preds_cf_col, df.columns)
+        self.assertIn(ART.preds_rg_col, df.columns)
+        n = 0
+        for split, idx, row in _iter_rows(df):
+            out = main_predict(ART.main_stem, _row_to_request(row))
+            res = out["main_response"]["result"]
+            _assert_preds(
+                self,
+                float(res["classification_proba"][0]),
+                float(res["regression_predictions"][0]),
+                row,
+                f"main split={split} idx={idx}",
+            )
+            n += 1
+        self.assertGreater(n, 0, "df_for_service_main пуст или отфильтрован")
 
 
 #new
 class TestParitySecond(unittest.TestCase):
+    """score_second vs df_for_service_second."""
+
     @classmethod
     def setUpClass(cls):
         require_file(ART.second_pickle, "second_pickle")
-        require_file(ART.df_second, "df_second")
+        require_file(ART.df_for_service_second, "df_for_service_second")
         require_file(ART.cf_calibrator, "cf_calibrator")
         require_file(ART.rg_calibrator, "rg_calibrator")
         require_file(ART.metadata, "metadata")
         _patch_models_dir()
 
-    def test_second_train_test_two_decimals(self):
-        df = pd.read_parquet(ART.df_second)
-        self.assertIn("split", df.columns)
-        for split in ("train", "test"):
-            part = df[df["split"] == split]
-            self.assertGreater(len(part), 0, f"empty {split}")
-            for _, row in part.iterrows():
-                out = score_second(ART.second_stem, _row_to_request(row))
-                res = out["result"]
-                cf = float(res["classification_proba"][0])
-                rg = float(res["regression_predictions"][0])
-                self.assertEqual(
-                    round(cf, 2),
-                    round(float(row["preds_cf"]), 2),
-                    msg=f"second CF mismatch split={split}",
-                )
-                self.assertEqual(
-                    round(rg, 2),
-                    round(float(row["preds_rg"]), 2),
-                    msg=f"second RG mismatch split={split}",
-                )
+    def test_service_matches_df_for_service_second(self):
+        df = pd.read_parquet(ART.df_for_service_second)
+        self.assertIn(ART.preds_cf_col, df.columns)
+        self.assertIn(ART.preds_rg_col, df.columns)
+        n = 0
+        for split, idx, row in _iter_rows(df):
+            out = score_second(ART.second_stem, _row_to_request(row))
+            res = out["result"]
+            _assert_preds(
+                self,
+                float(res["classification_proba"][0]),
+                float(res["regression_predictions"][0]),
+                row,
+                f"second split={split} idx={idx}",
+            )
+            n += 1
+        self.assertGreater(n, 0, "df_for_service_second пуст или отфильтрован")
 
 
 #new
@@ -140,13 +170,13 @@ class TestDualPredict(unittest.TestCase):
     def setUpClass(cls):
         require_file(ART.main_pickle, "main_pickle")
         require_file(ART.second_pickle, "second_pickle")
-        require_file(ART.df_main, "df_main")
-        require_file(ART.df_second, "df_second")
+        require_file(ART.df_for_service_main, "df_for_service_main")
+        require_file(ART.df_for_service_second, "df_for_service_second")
         _patch_models_dir()
 
     def test_both_slots_filled(self):
-        main_df = pd.read_parquet(ART.df_main)
-        second_df = pd.read_parquet(ART.df_second)
+        main_df = pd.read_parquet(ART.df_for_service_main)
+        second_df = pd.read_parquet(ART.df_for_service_second)
         main_row = main_df.iloc[0]
         second_row = second_df.iloc[0]
         out = main_predict(

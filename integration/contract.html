@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Querulus Integration — контракт API 1.4.0</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0f1419;
+      --bg-elev: #1a222c;
+      --bg-card: #222b36;
+      --line: #3a4654;
+      --text: #e8eef4;
+      --muted: #9aabbc;
+      --accent: #3db88a;
+      --accent-dim: #2a7a5c;
+      --main: #4a9fd8;
+      --second: #e0a04a;
+      --warn: #d97b5c;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+      --sans: "IBM Plex Sans", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background:
+        radial-gradient(ellipse 80% 50% at 10% -10%, #1a3a32 0%, transparent 55%),
+        radial-gradient(ellipse 60% 40% at 100% 0%, #1a2a3a 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      font-size: 15px;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 2.5rem 1.5rem 4rem; }
+    header {
+      margin-bottom: 2rem;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 1.5rem;
+    }
+    header .eyebrow {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin: 0 0 0.5rem;
+    }
+    h1 {
+      font-size: clamp(1.6rem, 3vw, 2.1rem);
+      font-weight: 600;
+      margin: 0 0 0.6rem;
+      letter-spacing: -0.02em;
+    }
+    header p { margin: 0; color: var(--muted); max-width: 48rem; }
+    header a, a { color: var(--main); }
+    code {
+      font-family: var(--mono);
+      font-size: 0.85em;
+      color: var(--accent);
+      background: rgba(61, 184, 138, 0.1);
+      padding: 0.1em 0.35em;
+      border-radius: 3px;
+    }
+    h2 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin: 2.25rem 0 1rem;
+      letter-spacing: -0.01em;
+    }
+    h2 .tag {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      font-weight: 500;
+      color: var(--muted);
+      margin-left: 0.5rem;
+    }
+    h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin: 1.5rem 0 0.6rem;
+      color: #c5d4e0;
+    }
+    .toc {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin: 1rem 0 0;
+    }
+    .toc a {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      text-decoration: none;
+      padding: 0.35rem 0.65rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--bg-elev);
+      color: var(--muted);
+    }
+    .toc a:hover { color: var(--text); border-color: var(--accent-dim); }
+    .card {
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 1rem 1.15rem;
+      margin: 0.75rem 0;
+    }
+    .card.main-lane { border-color: rgba(74, 159, 216, 0.35); }
+    .card.second-lane { border-color: rgba(224, 160, 74, 0.35); }
+    .card.oisuu { border-color: rgba(61, 184, 138, 0.4); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      margin: 0.5rem 0 1rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.55rem 0.65rem;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    th {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      font-weight: 500;
+    }
+    td code { white-space: nowrap; }
+    .prewrap {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      line-height: 1.45;
+      background: #121820;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 1rem 1.1rem;
+      overflow-x: auto;
+      white-space: pre;
+      color: #d5e0ea;
+      margin: 0.5rem 0 1rem;
+    }
+    .prewrap .k { color: #7eb8e8; }
+    .prewrap .s { color: #8fd4b0; }
+    .prewrap .n { color: #e0b06a; }
+    .prewrap .c { color: #6a7a8a; }
+    .note {
+      color: var(--muted);
+      font-size: 0.88rem;
+      margin: 0.4rem 0 1rem;
+    }
+    .pill {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 3px;
+      margin-right: 0.25rem;
+    }
+    .pill.get { background: rgba(61,184,138,0.15); color: var(--accent); }
+    .pill.post { background: rgba(74,159,216,0.18); color: var(--main); }
+    .pill.err { background: rgba(217,123,92,0.18); color: var(--warn); }
+    .dual {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 800px) { .dual { grid-template-columns: 1fr; } }
+    footer {
+      margin-top: 2.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--line);
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <p class="eyebrow">Querulus · API 1.4.0</p>
+      <h1>Контракт HTTP API</h1>
+      <p>
+        Запрос и полный ответ <code>POST /api/predict</code> (dual-track).
+        Боевой блок для ОИСУУ — <code>oisuu_responce</code> всегда от <strong>main_</strong> (legacy).
+        <code>second_response</code> — shadow 2.0.0 (FE_* + калибраторы + τ).
+        <a href="architecture.html">архитектура</a> ·
+        <a href="functions.html">карта функций</a> ·
+        <a href="tests.html">тесты</a>
+      </p>
+      <nav class="toc" aria-label="Оглавление">
+        <a href="#endpoints">endpoints</a>
+        <a href="#request">request</a>
+        <a href="#response">response</a>
+        <a href="#example-full">полный пример</a>
+        <a href="#example-main-only">только main_</a>
+        <a href="#errors">ошибки</a>
+        <a href="#mask">маска</a>
+      </nav>
+    </header>
+
+    <h2 id="endpoints">Эндпоинты <span class="tag">HTTP</span></h2>
+    <table>
+      <thead>
+        <tr><th>Метод</th><th>Путь</th><th>Ответ</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="pill get">GET</span></td>
+          <td><code>/api/health</code></td>
+          <td><code>{"health": true, "version": "1.4.0"}</code> (+ опционально <code>git_commit</code>)</td>
+        </tr>
+        <tr>
+          <td><span class="pill post">POST</span></td>
+          <td><code>/api/predict</code></td>
+          <td>JSON: <code>oisuu_responce</code> + <code>main_response</code> + <code>second_response</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2 id="request">Запрос <span class="tag">POST /api/predict</span></h2>
+    <p class="note">Тело — схема <code>ServiceRequest</code> (mldataworker). Вектор — список из одного объекта (одна заявка).</p>
+    <table>
+      <thead>
+        <tr><th>Поле</th><th>Тип</th><th>Обязательно</th><th>Смысл</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>main_model</code></td>
+          <td>string</td>
+          <td>да</td>
+          <td>stem файла <code>&lt;stem&gt;.pickle</code> legacy-ансамбля (clf+rg)</td>
+        </tr>
+        <tr>
+          <td><code>main_request</code></td>
+          <td>object[]</td>
+          <td>да</td>
+          <td>единичный вектор признаков для main_</td>
+        </tr>
+        <tr>
+          <td><code>second_model</code></td>
+          <td>string | null</td>
+          <td>нет</td>
+          <td>stem pickle 2.0.0; без него <code>second_response = {}</code></td>
+        </tr>
+        <tr>
+          <td><code>second_request</code></td>
+          <td>object[] | null</td>
+          <td>нет</td>
+          <td>вектор для second_; FE_* сервис считает сам</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="dual">
+      <div class="card main-lane">
+        <h3>main_ — ключевые признаки</h3>
+        <p class="note">После preprocess должны быть колонки clf/rg (порядок важен для mldataworker).</p>
+        <p><strong>Classification:</strong><br>
+          <code>FILIAL</code>, <code>EVENT_CREATED_BY_GIBDD_FLAG</code>,
+          <code>VICTIM_MAX_WEIGHT</code>, <code>RECIEVE_METHOD</code>,
+          <code>APPLICANT_FORM</code>, <code>APPLICANT_AGE</code>,
+          <code>VICTIM_VEHICLE_CATEGORY</code>, <code>GUILTY_CAPACITY_ENGINE</code>,
+          <code>VICTIM_VEHICLE_AGE</code>, <code>EVENT_YEAR</code>
+        </p>
+        <p><strong>Regression:</strong><br>
+          <code>AMOUNT_REPAIR</code>, <code>LOSS_UNIT_ZONE</code>,
+          <code>VICTIM_VEHICLE_COUNTRY</code>, <code>APPLY_DELAY</code>
+        </p>
+        <p class="note"><code>THRESHOLD</code> во входе (опционально) → порог CF; иначе default <code>0.6</code>.
+          <code>IS_LAWYER</code> влияет на маску итога.</p>
+      </div>
+      <div class="card second-lane">
+        <h3>second_ — отличия</h3>
+        <ul class="note" style="margin:0;padding-left:1.1rem">
+          <li>Список фич берётся из <code>model_config</code> pickle 2.0.0</li>
+          <li>В запросе <strong>нет</strong> готовых FE_* — их строит сервис (CPI REAL_2022, SHARE_WORK tier, …)</li>
+          <li>CF/RG калибраторы + τ из <code>metadata.json</code> (cal-шкала)</li>
+          <li>Clip — из <code>feature.clip</code> в pickle, не отдельный dq_bounds</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2 id="response">Ответ <span class="tag">200 OK</span></h2>
+    <div class="prewrap">{
+  <span class="k">"oisuu_responce"</span>: { … },   <span class="c">// боевой блок ОИСУУ ← всегда main_</span>
+  <span class="k">"main_response"</span>:  { … },   <span class="c">// полный результат legacy</span>
+  <span class="k">"second_response"</span>: { … }    <span class="c">// 2.0.0 или {}</span>
+}</div>
+
+    <div class="card oisuu">
+      <h3>oisuu_responce</h3>
+      <table>
+        <thead><tr><th>Поле</th><th>Тип</th><th>Смысл</th></tr></thead>
+        <tbody>
+          <tr><td><code>version</code></td><td><code>"1.4.0"</code></td><td>версия API</td></tr>
+          <tr><td><code>threshold</code></td><td>float (2 знака)</td><td>порог классификации main_</td></tr>
+          <tr><td><code>CPMComment</code></td><td>string</td><td>SHAP top-фичи clf + reg</td></tr>
+          <tr><td><code>classification_proba</code></td><td>number[]</td><td>P(класс=1), 2 знака</td></tr>
+          <tr><td><code>classification_predictions</code></td><td>number[]</td><td>0 / 1 по порогу</td></tr>
+          <tr><td><code>regression_predictions</code></td><td>number[]</td><td>маскированная регрессия</td></tr>
+          <tr><td><code>predictions</code></td><td>string</td><td>тот же итог как JSON-строка (контракт ОИСУУ)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card main-lane">
+      <h3>main_response</h3>
+      <div class="prewrap">{
+  <span class="k">"usage_model"</span>: <span class="s">"&lt;main_model&gt;"</span>,
+  <span class="k">"result"</span>: {
+    <span class="k">"classification_proba"</span>: […],
+    <span class="k">"classification_predictions"</span>: […],
+    <span class="k">"regression_predictions"</span>: […],
+    <span class="k">"prediction"</span>: […]          <span class="c">// список, не JSON-строка</span>
+  },
+  <span class="k">"df"</span>: {
+    <span class="k">"input"</span>:  [ { …preprocess… } ],
+    <span class="k">"output"</span>: [ { …матрицы clf+reg… } ]
+  }
+}</div>
+    </div>
+
+    <div class="card second-lane">
+      <h3>second_response</h3>
+      <p class="note">Та же форма, что <code>main_response</code>, плюс <code>result.threshold</code> (τ 2.0.0).</p>
+      <div class="prewrap">{
+  <span class="k">"usage_model"</span>: <span class="s">"&lt;second_model&gt;"</span>,
+  <span class="k">"result"</span>: {
+    <span class="k">"classification_proba"</span>: […],
+    <span class="k">"classification_predictions"</span>: […],
+    <span class="k">"regression_predictions"</span>: […],
+    <span class="k">"prediction"</span>: […],
+    <span class="k">"threshold"</span>: <span class="n">0.42</span>          <span class="c">// только second_</span>
+  },
+  <span class="k">"df"</span>: { <span class="k">"input"</span>: […], <span class="k">"output"</span>: […] }
+}</div>
+    </div>
+
+    <h2 id="mask">Маска итога <span class="tag">IS_LAWYER</span></h2>
+    <div class="card">
+      <ul class="note" style="margin:0;padding-left:1.1rem">
+        <li>По умолчанию: итог = регрессия, если класс = 1, иначе <code>0</code></li>
+        <li>Если <code>IS_LAWYER == 1</code>: всегда значение регрессии (даже при классе 0)</li>
+        <li>Одинаковая логика для main_ и second_</li>
+      </ul>
+    </div>
+
+    <h2 id="example-full">Полный пример <span class="tag">dual-track</span></h2>
+    <p class="note">Числа в ответе — иллюстративные. SHAP/df сокращены для читаемости.</p>
+
+    <h3>Request</h3>
+    <div class="prewrap">POST /api/predict
+Content-Type: application/json
+
+{
+  <span class="k">"main_model"</span>: <span class="s">"querulus_ansamble_legacy"</span>,
+  <span class="k">"main_request"</span>: [
+    {
+      <span class="k">"EVENT_DATE"</span>: <span class="s">"2024-06-01T10:00:00"</span>,
+      <span class="k">"PAYMENT_ORDER_DATE_TIME"</span>: <span class="s">"2024-06-10T00:00:00"</span>,
+      <span class="k">"APPLICANT_FORM"</span>: <span class="s">"выгодоприобретатель"</span>,
+      <span class="k">"FILIAL"</span>: <span class="s">"москва"</span>,
+      <span class="k">"IS_LAWYER"</span>: <span class="n">0</span>,
+      <span class="k">"THRESHOLD"</span>: <span class="n">0.55</span>,
+      <span class="k">"VALUE_BEFORE_WITH"</span>: <span class="n">100000</span>,
+      <span class="k">"VALUE_BEFORE_WITHOUT"</span>: <span class="n">120000</span>,
+      <span class="k">"WORKS"</span>: <span class="n">40000</span>,
+      <span class="k">"AMOUNT_REPAIR"</span>: <span class="n">120000</span>,
+      <span class="k">"VICTIM_MAX_WEIGHT"</span>: <span class="n">1500</span>,
+      <span class="k">"VICTIM_CAPACITY_ENGINE"</span>: <span class="n">100</span>,
+      <span class="k">"VICTIM_OBJECT_YEAR"</span>: <span class="n">2018</span>,
+      <span class="k">"LOSS_DATE_TIME"</span>: <span class="s">"2024-06-05T00:00:00"</span>,
+      <span class="k">"POLICYHOLDER_CONTRACT_END_DATE"</span>: <span class="s">"2024-12-01T00:00:00"</span>,
+      <span class="k">"EVENT_CREATED_BY_GIBDD_FLAG"</span>: <span class="n">1</span>,
+      <span class="k">"RECIEVE_METHOD"</span>: <span class="s">"почта"</span>,
+      <span class="k">"FL_PHOTO_VIDEO"</span>: <span class="n">0</span>,
+      <span class="k">"PAYMENT_RECIPIENT_TYPE"</span>: <span class="s">"иное"</span>,
+      <span class="k">"VICTIM_TS_REGION"</span>: <span class="s">"москва"</span>,
+      <span class="k">"LOSS_UNIT_TYPE"</span>: <span class="s">"филиал"</span>,
+      <span class="k">"VICTIM_VEHICLE_CATEGORY"</span>: <span class="s">"эконом"</span>,
+      <span class="k">"VIC_TS_COUNTRY"</span>: <span class="s">"россия"</span>,
+      <span class="k">"APPLICANT_AGE"</span>: <span class="n">40</span>,
+      <span class="k">"VICTIM_AGE"</span>: <span class="n">40</span>,
+      <span class="k">"NOT_NOTIFICATION"</span>: <span class="n">0</span>,
+      <span class="k">"IS_TOTAL"</span>: <span class="n">0</span>,
+      <span class="k">"REGION"</span>: <span class="s">"москва"</span>,
+      <span class="k">"GUILTY_MAX_WEIGHT"</span>: <span class="n">1500</span>,
+      <span class="k">"VICTIM_VEHICLE_COUNTRY"</span>: <span class="s">"россия"</span>,
+      <span class="k">"VICTIM_VEHICLE_AGE"</span>: <span class="n">5</span>,
+      <span class="k">"LOSS_UNIT_ZONE"</span>: <span class="s">"зона"</span>,
+      <span class="k">"GUILTY_CAPACITY_ENGINE"</span>: <span class="n">100</span>
+    }
+  ],
+  <span class="k">"second_model"</span>: <span class="s">"UU_querulus_2026_10_09_16_51_20"</span>,
+  <span class="k">"second_request"</span>: [
+    {
+      <span class="k">"EVENT_DATE"</span>: <span class="s">"2024-06-01T10:00:00"</span>,
+      <span class="k">"PAYMENT_ORDER_DATE_TIME"</span>: <span class="s">"2024-06-10T00:00:00"</span>,
+      <span class="k">"APPLICANT_FORM"</span>: <span class="s">"выгодоприобретатель"</span>,
+      <span class="k">"FILIAL"</span>: <span class="s">"москва"</span>,
+      <span class="k">"IS_LAWYER"</span>: <span class="n">0</span>,
+      <span class="k">"VALUE_BEFORE_WITH"</span>: <span class="n">100000</span>,
+      <span class="k">"VALUE_BEFORE_WITHOUT"</span>: <span class="n">120000</span>,
+      <span class="k">"WORKS"</span>: <span class="n">40000</span>,
+      <span class="k">"AMOUNT_REPAIR"</span>: <span class="n">120000</span>,
+      <span class="k">"VICTIM_MAX_WEIGHT"</span>: <span class="n">1500</span>,
+      <span class="k">"VICTIM_CAPACITY_ENGINE"</span>: <span class="n">100</span>,
+      <span class="k">"VICTIM_OBJECT_YEAR"</span>: <span class="n">2018</span>,
+      <span class="k">"LOSS_DATE_TIME"</span>: <span class="s">"2024-06-05T00:00:00"</span>,
+      <span class="k">"POLICYHOLDER_CONTRACT_END_DATE"</span>: <span class="s">"2024-12-01T00:00:00"</span>,
+      <span class="k">"EVENT_CREATED_BY_GIBDD_FLAG"</span>: <span class="n">1</span>,
+      <span class="k">"RECIEVE_METHOD"</span>: <span class="s">"почта"</span>,
+      <span class="k">"FL_PHOTO_VIDEO"</span>: <span class="n">0</span>,
+      <span class="k">"PAYMENT_RECIPIENT_TYPE"</span>: <span class="s">"иное"</span>,
+      <span class="k">"VICTIM_TS_REGION"</span>: <span class="s">"москва"</span>,
+      <span class="k">"LOSS_UNIT_TYPE"</span>: <span class="s">"филиал"</span>,
+      <span class="k">"VICTIM_VEHICLE_CATEGORY"</span>: <span class="s">"эконом"</span>,
+      <span class="k">"VIC_TS_COUNTRY"</span>: <span class="s">"россия"</span>,
+      <span class="k">"APPLICANT_AGE"</span>: <span class="n">40</span>,
+      <span class="k">"VICTIM_AGE"</span>: <span class="n">40</span>,
+      <span class="k">"NOT_NOTIFICATION"</span>: <span class="n">0</span>,
+      <span class="k">"IS_TOTAL"</span>: <span class="n">0</span>,
+      <span class="k">"REGION"</span>: <span class="s">"москва"</span>,
+      <span class="k">"GUILTY_MAX_WEIGHT"</span>: <span class="n">1500</span>,
+      <span class="k">"VICTIM_VEHICLE_COUNTRY"</span>: <span class="s">"россия"</span>,
+      <span class="k">"VICTIM_VEHICLE_AGE"</span>: <span class="n">5</span>,
+      <span class="k">"LOSS_UNIT_ZONE"</span>: <span class="s">"зона"</span>,
+      <span class="k">"GUILTY_CAPACITY_ENGINE"</span>: <span class="n">100</span>
+    }
+  ]
+}</div>
+
+    <h3>Response 200</h3>
+    <div class="prewrap">{
+  <span class="k">"oisuu_responce"</span>: {
+    <span class="k">"version"</span>: <span class="s">"1.4.0"</span>,
+    <span class="k">"threshold"</span>: <span class="n">0.55</span>,
+    <span class="k">"CPMComment"</span>: <span class="s">"shap_clf: FILIAL=0.12, APPLICANT_AGE=0.08 | shap_reg: AMOUNT_REPAIR=0.31"</span>,
+    <span class="k">"classification_proba"</span>: [<span class="n">0.72</span>],
+    <span class="k">"classification_predictions"</span>: [<span class="n">1.0</span>],
+    <span class="k">"regression_predictions"</span>: [<span class="n">85432.1</span>],
+    <span class="k">"predictions"</span>: <span class="s">"[85432.1]"</span>
+  },
+  <span class="k">"main_response"</span>: {
+    <span class="k">"usage_model"</span>: <span class="s">"querulus_ansamble_legacy"</span>,
+    <span class="k">"result"</span>: {
+      <span class="k">"classification_proba"</span>: [<span class="n">0.72</span>],
+      <span class="k">"classification_predictions"</span>: [<span class="n">1.0</span>],
+      <span class="k">"regression_predictions"</span>: [<span class="n">85432.1</span>],
+      <span class="k">"prediction"</span>: [<span class="n">85432.1</span>]
+    },
+    <span class="k">"df"</span>: {
+      <span class="k">"input"</span>: [
+        {
+          <span class="k">"EVENT_DATE"</span>: <span class="s">"2024-06-01T10:00:00"</span>,
+          <span class="k">"FILIAL"</span>: <span class="s">"МОСКВА"</span>,
+          <span class="k">"APPLICANT_FORM"</span>: <span class="s">"ВЫГОДОПРИОБРЕТАТЕЛЬ"</span>,
+          <span class="k">"IS_LAWYER"</span>: <span class="n">0</span>,
+          <span class="k">"AMOUNT_REPAIR"</span>: <span class="n">120000</span>,
+          <span class="k">"APPLY_DELAY"</span>: <span class="n">9</span>,
+          <span class="c">"…остальные колонки после enrich…"</span>
+        }
+      ],
+      <span class="k">"output"</span>: [
+        {
+          <span class="k">"FILIAL"</span>: <span class="s">"МОСКВА"</span>,
+          <span class="k">"AMOUNT_REPAIR"</span>: <span class="n">120000</span>,
+          <span class="c">"…матрицы после prepare_dataset (clf+reg)…"</span>
+        }
+      ]
+    }
+  },
+  <span class="k">"second_response"</span>: {
+    <span class="k">"usage_model"</span>: <span class="s">"UU_querulus_2026_10_09_16_51_20"</span>,
+    <span class="k">"result"</span>: {
+      <span class="k">"classification_proba"</span>: [<span class="n">0.61</span>],
+      <span class="k">"classification_predictions"</span>: [<span class="n">1.0</span>],
+      <span class="k">"regression_predictions"</span>: [<span class="n">91200.45</span>],
+      <span class="k">"prediction"</span>: [<span class="n">91200.45</span>],
+      <span class="k">"threshold"</span>: <span class="n">0.48</span>
+    },
+    <span class="k">"df"</span>: {
+      <span class="k">"input"</span>: [
+        {
+          <span class="k">"FE_SHARE_WORK_TIER"</span>: <span class="s">"mid"</span>,
+          <span class="k">"FE_VALUE_BEFORE_WITHOUT_REAL_2022"</span>: <span class="n">105312.0</span>,
+          <span class="c">"…FE_* и прочие колонки после second preprocess…"</span>
+        }
+      ],
+      <span class="k">"output"</span>: [
+        {
+          <span class="c">"…матрицы 2.0.0 после prepare_dataset…"</span>
+        }
+      ]
+    }
+  }
+}</div>
+
+    <h2 id="example-main-only">Пример только main_ <span class="tag">без shadow</span></h2>
+    <h3>Request</h3>
+    <div class="prewrap">{
+  <span class="k">"main_model"</span>: <span class="s">"querulus_ansamble_legacy"</span>,
+  <span class="k">"main_request"</span>: [ { <span class="c">/* тот же вектор */</span> } ],
+  <span class="k">"second_model"</span>: <span class="n">null</span>,
+  <span class="k">"second_request"</span>: <span class="n">null</span>
+}</div>
+    <h3>Response (фрагмент)</h3>
+    <div class="prewrap">{
+  <span class="k">"oisuu_responce"</span>: { <span class="c">/* как выше */</span> },
+  <span class="k">"main_response"</span>:  { <span class="c">/* как выше */</span> },
+  <span class="k">"second_response"</span>: {}
+}</div>
+
+    <h2 id="errors">Ошибки <span class="tag">HTTP 500</span></h2>
+    <div class="card">
+      <p class="note" style="margin-top:0">Любое исключение в <code>main_predict</code> (вектор, pickle, second_) →</p>
+      <div class="prewrap"><span class="pill err">500</span>
+{
+  <span class="k">"detail"</span>: {
+    <span class="k">"error"</span>: <span class="s">"текст исключения"</span>,
+    <span class="k">"traceback"</span>: [ <span class="s">"line1"</span>, <span class="s">"line2"</span>, <span class="c">…</span> ]
+  }
+}</div>
+    </div>
+
+    <h2>Health</h2>
+    <div class="prewrap">GET /api/health
+
+{
+  <span class="k">"health"</span>: <span class="n">true</span>,
+  <span class="k">"version"</span>: <span class="s">"1.4.0"</span>,
+  <span class="k">"git_commit"</span>: <span class="s">"abc1234"</span>   <span class="c">// только если задан SERVICE_GIT_COMMIT</span>
+}</div>
+
+    <footer>
+      examples/querulus/integration/contract.html · API 1.4.0 · dual-track, cutover не выполнен
+    </footer>
+  </div>
+</body>
+</html>

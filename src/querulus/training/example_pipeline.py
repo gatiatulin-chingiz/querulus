@@ -1256,25 +1256,79 @@ def save_df_for_service(
     models: ExampleDsmBundle,
     bundle: ExampleDatasetBundle,
     paths: ExamplePaths,
+    *,
+    slot: str = "second",
+    cf_calibrator: Any | None = None,
+    rg_calibrator: Any | None = None,
+    threshold: float | None = None,
+    also_legacy_alias: bool = True,
 ) -> Path:
-    """``df_for_service.parquet``: датасет + ``preds_cf`` / ``preds_rg`` (для vector_checker)."""
+    """Датасет + ``preds_cf`` / ``preds_rg`` для parity с сервисом.
+
+    Файлы:
+      - ``df_for_service_second.parquet`` (slot=second, модель 2.0.0)
+      - ``df_for_service_main.parquet`` (slot=main, legacy)
+      - опционально копия ``df_for_service.parquet`` (alias second, vector_checker)
+
+    Если переданы калибраторы / ``threshold`` — preds как у сервиса second_
+    (cal CF proba, cal RG + маска IS_LAWYER при наличии threshold).
+    """
     if models.dsm_cf_prod is None or models.dsm_rg_prod is None:
         raise ValueError("Нужны dsm_cf_prod / dsm_rg_prod")
+    if slot not in {"main", "second"}:
+        raise ValueError("slot должен быть 'main' или 'second'")
 
     paths.results_dir.mkdir(parents=True, exist_ok=True)
     df_service = bundle.df.copy()
-    df_service["preds_cf"] = predict_cf(models.dsm_cf_prod, bundle.cf_name, bundle.df)
-    df_service["preds_rg"] = predict_rg(models.dsm_rg_prod, bundle.rg_name, bundle.df)
-    service_df_path = paths.results_dir / "df_for_service.parquet"
+    preds_cf = predict_cf(models.dsm_cf_prod, bundle.cf_name, bundle.df).astype(float)
+    preds_rg = predict_rg(models.dsm_rg_prod, bundle.rg_name, bundle.df).astype(float)
+
+    if cf_calibrator is not None and hasattr(cf_calibrator, "predict"):
+        preds_cf = pd.Series(
+            np.asarray(cf_calibrator.predict(preds_cf.to_numpy(dtype=float)), dtype=float),
+            index=preds_cf.index,
+        )
+    if rg_calibrator is not None and hasattr(rg_calibrator, "predict"):
+        raw = np.asarray(rg_calibrator.predict(preds_rg.to_numpy(dtype=float)), dtype=float)
+        preds_rg = pd.Series(np.maximum(0.0, raw), index=preds_rg.index)
+
+    if threshold is not None:
+        labels = (preds_cf >= float(threshold)).astype(float)
+        if "IS_LAWYER" in df_service.columns:
+            is_lawyer = (
+                pd.to_numeric(df_service["IS_LAWYER"], errors="coerce").fillna(0).eq(1)
+            )
+        else:
+            is_lawyer = pd.Series(False, index=df_service.index)
+        keep = labels.eq(1.0) | is_lawyer
+        preds_rg = preds_rg.where(keep, 0.0)
+
+    df_service["preds_cf"] = preds_cf
+    df_service["preds_rg"] = preds_rg
+
+    out_name = (
+        "df_for_service_main.parquet"
+        if slot == "main"
+        else "df_for_service_second.parquet"
+    )
+    service_df_path = paths.results_dir / out_name
     df_service.to_parquet(service_df_path, index=True)
-    print("=== df_for_service ===")
+    if also_legacy_alias and slot == "second":
+        alias = paths.results_dir / "df_for_service.parquet"
+        df_service.to_parquet(alias, index=True)
+
+    print(f"=== {out_name} (slot={slot}) ===")
     print(f"  {service_df_path}")
     print(f"  shape: {df_service.shape[0]:,} × {df_service.shape[1]}")
     print(f"  preds_cf NA: {df_service['preds_cf'].isna().mean():.1%}")
     print(f"  preds_rg NA: {df_service['preds_rg'].isna().mean():.1%}")
+    if cf_calibrator is not None or rg_calibrator is not None:
+        print(f"  calibrators: cf={cf_calibrator is not None} rg={rg_calibrator is not None}")
+    if threshold is not None:
+        print(f"  threshold (mask): {float(threshold):.4f}")
 
     prod_path = bundle.built.get("prod_path")
-    if prod_path:
+    if prod_path and slot == "second":
         try:
             export_model_features_for_vector_checker(
                 paths,
@@ -1313,7 +1367,7 @@ def export_prod_service_artifacts(
 
     paths.results_dir.mkdir(parents=True, exist_ok=True)
     ensemble_pkl = paths.results_dir / ensemble_pickle_name
-    service_df_path = paths.results_dir / "df_for_service.parquet"
+    service_df_path = paths.results_dir / "df_for_service_second.parquet"
     cf_cal_path = paths.results_dir / cf_calibrator_name
     rg_cal_path = paths.results_dir / rg_calibrator_name
 

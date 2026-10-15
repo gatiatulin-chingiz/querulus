@@ -5,7 +5,8 @@
   - UU_querulus_2026_10_09_16_51_20.pickle
   - cf_calibrator.pickle, rg_calibrator.pickle
   - metadata.json
-  - df_main.parquet, df_second.parquet (split=train|test, preds_cf, preds_rg)
+  - df_for_service_main.parquet, df_for_service_second.parquet
+    (split=train|test, preds_cf/preds_rg = эталон ответа сервиса)
 
 Запуск из корня querulus:
 
@@ -22,12 +23,12 @@ from pathlib import Path
 warnings.filterwarnings("ignore")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC = PROJECT_ROOT / "src"
-OUTBOXML_ROOT = PROJECT_ROOT.parent.parent
 INTEGRATION = PROJECT_ROOT / "integration"
-for p in (SRC, OUTBOXML_ROOT, PROJECT_ROOT, INTEGRATION):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+_SRC = PROJECT_ROOT / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
 from integration.service.mldataworker_shim import install_mldataworker_shim  # noqa: E402
 
@@ -448,8 +449,12 @@ def main() -> None:
             }
         )
 
-    pd.DataFrame(main_rows).to_parquet(OUT_DIR / "df_main.parquet", index=False)
-    pd.DataFrame(second_rows).to_parquet(OUT_DIR / "df_second.parquet", index=False)
+    pd.DataFrame(main_rows).to_parquet(
+        OUT_DIR / "df_for_service_main.parquet", index=False
+    )
+    pd.DataFrame(second_rows).to_parquet(
+        OUT_DIR / "df_for_service_second.parquet", index=False
+    )
     print("OK ->", OUT_DIR)
 
 

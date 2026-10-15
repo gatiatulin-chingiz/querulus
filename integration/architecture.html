@@ -320,7 +320,9 @@
         Один запрос <code style="font-family:var(--mono);color:var(--accent)">POST /api/predict</code>
         гоняет две модели параллельно: боевой legacy в <strong>main_</strong>
         и новый ансамбль 2.0.0 в <strong>second_</strong>. Ответ ОИСУУ всегда берётся из main_.
-        Карта вызовов функций: <a href="functions.html" style="color:var(--main)">functions.html</a>.
+        Карта вызовов: <a href="functions.html" style="color:var(--main)">functions.html</a>.
+        Контракт: <a href="contract.html" style="color:var(--main)">contract.html</a>.
+        Тесты: <a href="tests.html" style="color:var(--main)">tests.html</a>.
       </p>
     </header>
 
@@ -535,13 +537,17 @@
     </div>
 
     <h2>Тесты <span class="tag">tests/</span></h2>
+    <p style="color:var(--muted);margin:0 0 1rem">
+      Как запускать: <a href="tests.html" style="color:var(--main)">tests.html</a>
+      (parity vs <code style="font-family:var(--mono);color:var(--accent)">df_for_service_*</code>).
+    </p>
     <div class="pkgs" style="grid-template-columns: 1fr 1fr;">
       <div class="pkg">
         <h3>общие</h3>
         <ul>
           <li><b>artifacts.py</b> — единые пути; нет файла → fail</li>
           <li><b>test_common_preprocess.py</b> — NaN, UPPER, даты, маска</li>
-          <li><b>test_parity.py</b> — CF/RG до 2 знаков, dual predict</li>
+          <li><b>test_parity.py</b> — сервис vs df_for_service_* до 2 знаков</li>
         </ul>
       </div>
       <div class="pkg">

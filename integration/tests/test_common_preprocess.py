@@ -7,11 +7,8 @@ from pathlib import Path
 
 _INTEGRATION = Path(__file__).resolve().parents[1]
 _QUERULUS = _INTEGRATION.parent
-_SRC = _QUERULUS / "src"
-_OUTBOXML = _QUERULUS.parent.parent
-for p in (_SRC, _OUTBOXML, _QUERULUS, _INTEGRATION):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
+if str(_QUERULUS) not in sys.path:
+    sys.path.insert(0, str(_QUERULUS))
 
 from integration.service.mldataworker_shim import install_mldataworker_shim
 
