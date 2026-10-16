@@ -1367,6 +1367,35 @@ def save_df_for_service(
     return service_df_path
 
 
+def _cf_calibrator_for_service(calibrator: Any) -> Any:
+    """Объект для pickle сервиса: sklearn CCCV, без обёрток querulus."""
+    inner = getattr(calibrator, "_calibrated_model", None)
+    if inner is not None:
+        return inner
+    return calibrator
+
+
+def _rg_calibrator_for_service(calibrator: Any) -> Any:
+    """Объект для pickle сервиса: sklearn IsotonicRegression / estimator с predict.
+
+    ``SeverityCalibrator`` из querulus в образ не кладём — только ``_iso`` (isotonic).
+    """
+    method = getattr(calibrator, "method", None)
+    iso = getattr(calibrator, "_iso", None)
+    if method == "isotonic" and iso is not None:
+        return iso
+    mod = getattr(type(calibrator), "__module__", "") or ""
+    if mod.startswith("sklearn") and hasattr(calibrator, "predict"):
+        return calibrator
+    if hasattr(calibrator, "predict") and not hasattr(calibrator, "_iso"):
+        # уже «голый» estimator (повторный export)
+        return calibrator
+    raise ValueError(
+        "RG calibrator для сервиса: нужен SeverityCalibrator(method='isotonic') "
+        f"или sklearn estimator с predict; получено {type(calibrator)!r} method={method!r}"
+    )
+
+
 def export_prod_service_artifacts(
     models: ExampleDsmBundle,
     bundle: ExampleDatasetBundle,
@@ -1381,6 +1410,7 @@ def export_prod_service_artifacts(
 ) -> ProdExportResult:
     """``metadata.json`` + калибраторы для second_ (``best_threshold`` = τ на cal-шкале).
 
+    CF/RG в pickle — sklearn-объекты (CCCV / IsotonicRegression), без модуля querulus.
     Модели пишет ``update_models`` в ``fit_automl_bundle``.
     Parquet — отдельно через ``save_df_for_service``.
     """
@@ -1397,10 +1427,10 @@ def export_prod_service_artifacts(
 
     if cf_calibrator is not None:
         with open(cf_cal_path, "wb") as f:
-            pickle.dump(cf_calibrator, f)
+            pickle.dump(_cf_calibrator_for_service(cf_calibrator), f)
     if rg_calibrator is not None:
         with open(rg_cal_path, "wb") as f:
-            pickle.dump(rg_calibrator, f)
+            pickle.dump(_rg_calibrator_for_service(rg_calibrator), f)
 
     thr_scale = "calibrated" if cf_calibrator is not None else "raw"
     periods = bundle.periods
