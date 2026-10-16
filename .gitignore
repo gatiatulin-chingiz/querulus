@@ -53,7 +53,9 @@ catboost_info/
 mlruns/
 **/mlruns/**
 *.tfevents
-results/
+# Содержимое results игнорируем; .gitkeep оставляем — Docker COPY results/ в CI.
+**/results/**
+!**/results/.gitkeep
 **/prod_models/
 
 # Локальные дампы / черновики / текстовые заметки
