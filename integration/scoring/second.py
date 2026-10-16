@@ -171,6 +171,16 @@ def _raw_classification_scores(model: Any, t: pd.DataFrame) -> List[float]:
 
 
 #new
+def _without_pandas_category(matrix: pd.DataFrame) -> pd.DataFrame:
+    """Снять dtype category: CatBoost ругается, если category-колонка не в cat_features."""
+    out = matrix.copy()
+    for col in out.columns:
+        if isinstance(out[col].dtype, pd.CategoricalDtype):
+            out[col] = out[col].astype(object)
+    return out
+
+
+#new
 def _is_isotonic_1d(calibrator: Any) -> bool:
     """True для 1D isotonic (raw score → cal); False для CCCV / CatBoost-обёрток."""
     name = type(calibrator).__name__
@@ -217,6 +227,7 @@ def apply_cf_calibrator(
                     f"(нужны как при fit): {missing[:12]}"
                 )
             matrix = matrix.loc[:, list(names)]
+        matrix = _without_pandas_category(matrix)
         proba = calibrator.predict_proba(matrix)
         return [float(row[1]) for row in np.asarray(proba)]
 
