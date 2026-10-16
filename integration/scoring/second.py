@@ -171,23 +171,61 @@ def _raw_classification_scores(model: Any, t: pd.DataFrame) -> List[float]:
 
 
 #new
+def _is_isotonic_1d(calibrator: Any) -> bool:
+    """True для 1D isotonic (raw score → cal); False для CCCV / CatBoost-обёрток."""
+    name = type(calibrator).__name__
+    if name == "IsotonicRegression":
+        return True
+    # CCCV и прочие классификаторы: есть predict_proba(X)
+    if hasattr(calibrator, "predict_proba") and hasattr(calibrator, "calibrated_classifiers_"):
+        return False
+    if hasattr(calibrator, "predict_proba") and name.startswith("Calibrated"):
+        return False
+    # чистый isotonic: predict есть, predict_proba нет
+    return hasattr(calibrator, "predict") and not hasattr(calibrator, "predict_proba")
+
+
+#new
 def apply_cf_calibrator(
     calibrator: Any | None,
     raw_scores: List[float],
     prepared_matrix: pd.DataFrame,
 ) -> List[float]:
-    """Откалибровать CF proba. Поддержка CCCV / Isotonic / predict_proba(X)."""
+    """Откалибровать CF proba.
+
+    - IsotonicRegression: ``predict(raw_scores)`` (1D).
+    - CalibratedClassifierCV / аналог: ``predict_proba(prepared_matrix)`` (фичи модели).
+      Нельзя передавать raw scores в ``predict`` — CCCV прокинет их в CatBoost как X.
+    """
     if calibrator is None:
         return list(raw_scores)
-    if hasattr(calibrator, "predict_proba"):
-        try:
-            proba = calibrator.predict_proba(prepared_matrix)
-            return [float(row[1]) for row in np.asarray(proba)]
-        except Exception:
-            logger.exception("CF calibrator.predict_proba failed — fallback isotonic/raw")
-    if hasattr(calibrator, "predict"):
-        arr = np.asarray(calibrator.predict(np.asarray(raw_scores, dtype=float)), dtype=float)
+
+    if _is_isotonic_1d(calibrator):
+        arr = np.asarray(
+            calibrator.predict(np.asarray(raw_scores, dtype=float)), dtype=float
+        )
         return [float(x) for x in arr.ravel()]
+
+    if hasattr(calibrator, "predict_proba"):
+        matrix = prepared_matrix
+        names = getattr(calibrator, "feature_names_in_", None)
+        if names is not None:
+            missing = [c for c in names if c not in matrix.columns]
+            if missing:
+                raise ValueError(
+                    "CF calibrator: в prepared_matrix нет колонок "
+                    f"(нужны как при fit): {missing[:12]}"
+                )
+            matrix = matrix.loc[:, list(names)]
+        proba = calibrator.predict_proba(matrix)
+        return [float(row[1]) for row in np.asarray(proba)]
+
+    if hasattr(calibrator, "predict"):
+        arr = np.asarray(
+            calibrator.predict(np.asarray(raw_scores, dtype=float)), dtype=float
+        )
+        return [float(x) for x in arr.ravel()]
+
     logger.warning("CF calibrator без predict/predict_proba — raw scores")
     return list(raw_scores)
 

@@ -1283,11 +1283,33 @@ def save_df_for_service(
     preds_cf = predict_cf(models.dsm_cf_prod, bundle.cf_name, bundle.df).astype(float)
     preds_rg = predict_rg(models.dsm_rg_prod, bundle.rg_name, bundle.df).astype(float)
 
-    if cf_calibrator is not None and hasattr(cf_calibrator, "predict"):
-        preds_cf = pd.Series(
-            np.asarray(cf_calibrator.predict(preds_cf.to_numpy(dtype=float)), dtype=float),
-            index=preds_cf.index,
-        )
+    if cf_calibrator is not None:
+        # CCCV: predict_proba(X); Isotonic: predict(raw proba)
+        if hasattr(cf_calibrator, "predict_proba"):
+            from querulus.training.outboxml_metrics import prepare_dsm_features
+
+            x_cf = prepare_dsm_features(
+                models.dsm_cf_prod,
+                bundle.cf_name,
+                bundle.df,
+                ignore_row_filter=True,
+            )
+            cal_idx = x_cf.index.intersection(preds_cf.index)
+            names = getattr(cf_calibrator, "feature_names_in_", None)
+            x_use = x_cf.loc[cal_idx]
+            if names is not None:
+                x_use = x_use.loc[:, list(names)]
+            preds_cf = pd.Series(
+                np.asarray(cf_calibrator.predict_proba(x_use)[:, 1], dtype=float),
+                index=cal_idx,
+            )
+        elif hasattr(cf_calibrator, "predict"):
+            preds_cf = pd.Series(
+                np.asarray(
+                    cf_calibrator.predict(preds_cf.to_numpy(dtype=float)), dtype=float
+                ),
+                index=preds_cf.index,
+            )
     if rg_calibrator is not None and hasattr(rg_calibrator, "predict"):
         raw = np.asarray(rg_calibrator.predict(preds_rg.to_numpy(dtype=float)), dtype=float)
         preds_rg = pd.Series(np.maximum(0.0, raw), index=preds_rg.index)
