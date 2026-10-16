@@ -47,7 +47,9 @@
       "GUILTY_MAX_WEIGHT": 2110,
       "VICTIM_OBJECT_REG_NUM": "А708РВ122",
       "GUILTY_CAPACITY_ENGINE": 1.3,
-      "VICTIM_VEHICLE_COUNTRY": "РОССИЯ"
+      "VICTIM_VEHICLE_COUNTRY": "РОССИЯ",
+      "VICTIM_TS_REGION": "Алтайский",
+      "VIC_TS_COUNTRY": "РОССИЯ"
     }
   ],
   "second_model": "UU_querulus_2026_10_09_16_51_20",
@@ -98,7 +100,9 @@
       "GUILTY_MAX_WEIGHT": 2110,
       "VICTIM_OBJECT_REG_NUM": "А708РВ122",
       "GUILTY_CAPACITY_ENGINE": 1.3,
-      "VICTIM_VEHICLE_COUNTRY": "РОССИЯ"
+      "VICTIM_VEHICLE_COUNTRY": "РОССИЯ",
+      "VICTIM_TS_REGION": "Алтайский",
+      "VIC_TS_COUNTRY": "РОССИЯ"
     }
   ]
 }
