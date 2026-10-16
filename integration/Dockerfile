@@ -21,7 +21,6 @@ USER model_user
 
 # 6. Копируем модели и исходный код (пакеты service/features/scoring + root entry)
 COPY --chown=model_user:model_user results/ /home/model_user/model/results/
-COPY --chown=model_user:model_user configs/ /home/model_user/model/configs/
 COPY --chown=model_user:model_user config.py /home/model_user/model/config.py
 COPY --chown=model_user:model_user main.py /home/model_user/model/main.py
 COPY --chown=model_user:model_user service/ /home/model_user/model/service/

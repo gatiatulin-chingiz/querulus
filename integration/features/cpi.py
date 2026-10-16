@@ -1,6 +1,6 @@
 """CPI / дефляция для shadow-модели 2.0.0 (без импорта querulus.src).
 
-Таблица — ``integration/configs/cpi_levels.json`` (копия обучения, в образе Docker).
+Таблица — ``features/cpi_levels.json`` (копия обучения; уезжает в образ с ``COPY features/``).
 Год инцидента вне таблицы → LOCF с warning «обновите JSON».
 """
 from __future__ import annotations
@@ -17,8 +17,7 @@ from loguru import logger
 
 INFLATION_BASE_YEAR: int = 2022
 
-_INTEGRATION_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CPI_JSON_PATH: Path = _INTEGRATION_ROOT / "configs" / "cpi_levels.json"
+DEFAULT_CPI_JSON_PATH: Path = Path(__file__).resolve().parent / "cpi_levels.json"
 
 MONETARY_COLUMNS_FOR_REAL: tuple[str, ...] = (
     "VALUE_BEFORE_WITH",
@@ -94,7 +93,7 @@ def resolve_cpi_year(
     if y > max_y:
         msg = (
             f"CPI-таблица устарела: год инцидента {y} > max={max_y}. "
-            f"LOCF year={max_y}. Обновите integration/configs/cpi_levels.json."
+            f"LOCF year={max_y}. Обновите integration/features/cpi_levels.json."
         )
         logger.warning(msg)
         warnings.warn(msg, UserWarning, stacklevel=2)
