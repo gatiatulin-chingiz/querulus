@@ -72,29 +72,38 @@ def _count_bin(count: pd.Series) -> pd.Series:
     result = result.mask(values >= 3, "3+")
     return result
 
+def _cut_to_object(cut: pd.Series) -> pd.Series:
+    """``pd.cut`` → object: иначе outboxml ``fillna`` падает на Categorical."""
+    return cut.astype(object).where(cut.notna(), np.nan)
+
+
 def _amount_bins(amount: pd.Series, edges: tuple[float, ...]) -> pd.Series:
-    """Трёхуровневые бакеты суммы (ordered: ``<low``, ``low-high``, ``>high``)."""
+    """Трёхуровневые бакеты суммы (``<low``, ``low-high``, ``>high``) как object."""
     values = pd.to_numeric(amount, errors="coerce")
     low, high = edges
     labels = [f"<{int(low)}", f"{int(low)}-{int(high)}", f">{int(high)}"]
-    return pd.cut(
-        values,
-        bins=[-np.inf, low, high, np.inf],
-        labels=labels,
-        right=False,
-        ordered=True,
+    return _cut_to_object(
+        pd.cut(
+            values,
+            bins=[-np.inf, low, high, np.inf],
+            labels=labels,
+            right=False,
+            ordered=True,
+        )
     )
 
 def _tier_from_bins(value: pd.Series, edges: tuple[float, ...], labels: tuple[str, ...]) -> pd.Series:
-    """Универсальные tier-бакеты (ordered по порядку ``labels``)."""
+    """Универсальные tier-бакеты (по порядку ``labels``) как object."""
     values = pd.to_numeric(value, errors="coerce")
     low, high = edges
-    return pd.cut(
-        values,
-        bins=[-np.inf, low, high, np.inf],
-        labels=list(labels),
-        right=False,
-        ordered=True,
+    return _cut_to_object(
+        pd.cut(
+            values,
+            bins=[-np.inf, low, high, np.inf],
+            labels=list(labels),
+            right=False,
+            ordered=True,
+        )
     )
 
 def _season(month: pd.Series) -> pd.Series:

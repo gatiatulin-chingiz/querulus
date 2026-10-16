@@ -76,6 +76,20 @@ def _should_try_binary(upper: str) -> bool:
     )
 
 
+def cast_pandas_categoricals_to_object(df: pd.DataFrame) -> pd.DataFrame:
+    """Categorical → object (NaN сохраняются).
+
+    ``pd.cut``-фичи (``FE_SHARE_WORK_TIER``, amount bins) иначе ломают
+    outboxml ``fillna``: ``Cannot setitem on a Categorical with a new category``.
+    Мутирует ``df`` на месте.
+    """
+    for col in list(df.columns):
+        if isinstance(df[col].dtype, pd.CategoricalDtype):
+            raw = df[col]
+            df[col] = raw.astype(object).where(raw.notna(), pd.NA)
+    return df
+
+
 def cast_integer_like_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Возраст/год/счётчики и бинарные флаги → Int64.
 

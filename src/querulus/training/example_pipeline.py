@@ -13,6 +13,7 @@ import pandas as pd
 from querulus.dataset.hadoop import load_df_final
 from querulus.dataset.schema import DEFAULT_DATASET_SCHEMA
 from querulus.features.derived import VICTIM_OBJECT_AGE_MONTHS_COL
+from querulus.features.integer_casts import cast_pandas_categoricals_to_object
 from querulus.fin_effect import (
     DEFAULT_BOOTSTRAP_FOLDS,
     DEFAULT_BOOTSTRAP_SEED,
@@ -240,7 +241,8 @@ def load_example_dataset(
         df_raw.to_parquet(paths.local_parquet_path, index=False)
 
     # Итоговый df из collect (features уже в parquet/Hive). FE здесь не собираем.
-    df = df_raw
+    # Categorical из pd.cut (parquet) → object, иначе outboxml fillna падает.
+    df = cast_pandas_categoricals_to_object(df_raw)
     if VICTIM_OBJECT_AGE_MONTHS_COL not in df.columns:
         raise ValueError(
             f"В датасете нет {VICTIM_OBJECT_AGE_MONTHS_COL}. "

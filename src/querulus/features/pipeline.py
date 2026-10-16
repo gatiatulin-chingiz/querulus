@@ -12,7 +12,10 @@ from querulus.features.cleanup import cleanup_merge_columns
 from querulus.features.config import FeatureConfig, load_feature_config
 from querulus.features.derived import add_derived_features, ensure_victim_object_age_months
 from querulus.features.data_quality import apply_dataset_data_quality
-from querulus.features.integer_casts import cast_integer_like_columns
+from querulus.features.integer_casts import (
+    cast_integer_like_columns,
+    cast_pandas_categoricals_to_object,
+)
 from querulus.features.incident_pretensions import add_incident_pretension_features
 from querulus.features.load.person import load_pretensions_base
 from querulus.features.person.pipeline import run_person_features
@@ -77,6 +80,7 @@ def run_features(
     pret_base = None
     if include_fe_features:
         df = add_derived_features(df, feature_config)
+        df = cast_pandas_categoricals_to_object(df)
         gc.collect()
 
         pret_base = load_pretensions_base(

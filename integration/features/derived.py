@@ -55,13 +55,15 @@ def _tier_from_bins(
 ) -> pd.Series:
     values = pd.to_numeric(value, errors="coerce")
     low, high = edges
-    return pd.cut(
+    cut = pd.cut(
         values,
         bins=[-np.inf, low, high, np.inf],
         labels=list(labels),
         right=False,
         ordered=True,
     )
+    # object: иначе outboxml fillna падает на Categorical (new category).
+    return cut.astype(object).where(cut.notna(), np.nan)
 
 
 #new
