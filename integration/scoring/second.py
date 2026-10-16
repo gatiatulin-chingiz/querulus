@@ -171,12 +171,23 @@ def _raw_classification_scores(model: Any, t: pd.DataFrame) -> List[float]:
 
 
 #new
-def _without_pandas_category(matrix: pd.DataFrame) -> pd.DataFrame:
-    """Снять dtype category: CatBoost ругается, если category-колонка не в cat_features."""
+def _align_dtypes_for_catboost(matrix: pd.DataFrame) -> pd.DataFrame:
+    """Dtype под CatBoost внутри CCCV.
+
+    - category со строками → object (иначе «category not in cat_features»);
+    - category/integer → float (модель ждёт Float, напр. VICTIM_OBJECT_AGE_MONTHS).
+    """
     out = matrix.copy()
     for col in out.columns:
-        if isinstance(out[col].dtype, pd.CategoricalDtype):
-            out[col] = out[col].astype(object)
+        s = out[col]
+        if isinstance(s.dtype, pd.CategoricalDtype):
+            as_num = pd.to_numeric(s, errors="coerce")
+            if s.notna().any() and as_num.notna().sum() == s.notna().sum():
+                out[col] = as_num.astype(float)
+            else:
+                out[col] = s.astype(object)
+        elif pd.api.types.is_integer_dtype(s.dtype):
+            out[col] = s.astype(float)
     return out
 
 
@@ -227,7 +238,7 @@ def apply_cf_calibrator(
                     f"(нужны как при fit): {missing[:12]}"
                 )
             matrix = matrix.loc[:, list(names)]
-        matrix = _without_pandas_category(matrix)
+        matrix = _align_dtypes_for_catboost(matrix)
         proba = calibrator.predict_proba(matrix)
         return [float(row[1]) for row in np.asarray(proba)]
 
