@@ -171,15 +171,101 @@ def _raw_classification_scores(model: Any, t: pd.DataFrame) -> List[float]:
 
 
 #new
-def _align_dtypes_for_catboost(matrix: pd.DataFrame) -> pd.DataFrame:
-    """Dtype под CatBoost внутри CCCV.
+def _catboost_from_calibrator(calibrator: Any) -> Any | None:
+    """Достать CatBoost-estimator из CCCV / обёртки."""
+    candidates: list[Any] = []
+    for attr in ("estimator_", "estimator"):
+        est = getattr(calibrator, attr, None)
+        if est is not None:
+            candidates.append(est)
+    for cc in getattr(calibrator, "calibrated_classifiers_", None) or []:
+        inner = getattr(cc, "estimator", None)
+        if inner is not None:
+            candidates.append(inner)
+    candidates.append(calibrator)
 
-    - category со строками → object (иначе «category not in cat_features»);
-    - category/integer → float (модель ждёт Float, напр. VICTIM_OBJECT_AGE_MONTHS).
+    def _is_cb(obj: Any) -> bool:
+        mod = getattr(obj, "__module__", "") or ""
+        name = type(obj).__name__
+        return mod.startswith("catboost") or name.startswith("CatBoost")
+
+    for obj in candidates:
+        if _is_cb(obj):
+            return obj
+    for obj in candidates:
+        if callable(
+            getattr(obj, "get_cat_feature_indices", None)
+            or getattr(obj, "_get_cat_feature_indices", None)
+        ):
+            return obj
+    return None
+
+
+#new
+def _cat_feature_names(estimator: Any, columns: list[str]) -> list[str]:
+    """Имена cat-колонок по схеме обученной CatBoost-модели."""
+    feature_names = list(getattr(estimator, "feature_names_", None) or [])
+    if not feature_names:
+        getter_names = getattr(estimator, "get_feature_names", None)
+        if callable(getter_names):
+            try:
+                feature_names = list(getter_names() or [])
+            except Exception:
+                feature_names = []
+    if not feature_names:
+        feature_names = columns
+    getter = getattr(estimator, "get_cat_feature_indices", None) or getattr(
+        estimator, "_get_cat_feature_indices", None
+    )
+    if not callable(getter):
+        return []
+    try:
+        indices = list(getter() or [])
+    except Exception:
+        return []
+    names: list[str] = []
+    for idx in indices:
+        if isinstance(idx, (int, np.integer)) and 0 <= int(idx) < len(feature_names):
+            name = feature_names[int(idx)]
+            if name in columns:
+                names.append(name)
+    return names
+
+
+#new
+def _stringify_cat_series(series: pd.Series) -> pd.Series:
+    """CatBoost cat_features: integer или string, не float (0.0 → \"0\")."""
+    numeric = pd.to_numeric(series, errors="coerce")
+    finite = numeric.dropna()
+    if not finite.empty and bool((finite == finite.round()).all()):
+        as_int = numeric.round().astype("Int64")
+        return as_int.astype(str).replace({"<NA>": "nan", "None": "nan"})
+    return series.astype(str).replace({"<NA>": "nan", "None": "nan", "nan": "nan"})
+
+
+#new
+def _align_dtypes_for_catboost(
+    matrix: pd.DataFrame,
+    calibrator: Any | None = None,
+) -> pd.DataFrame:
+    """Dtype под CatBoost внутри CCCV (как outboxml_metrics).
+
+    - cat_features модели → string;
+    - остальные integer/category → float (Float в модели, напр. AGE_MONTHS);
+    - string-category вне cat_features → object.
     """
     out = matrix.copy()
+    cat_set: set[str] = set()
+    if calibrator is not None:
+        est = _catboost_from_calibrator(calibrator)
+        if est is not None:
+            cat_set = set(_cat_feature_names(est, list(out.columns)))
+
     for col in out.columns:
         s = out[col]
+        if col in cat_set:
+            out[col] = _stringify_cat_series(s)
+            continue
         if isinstance(s.dtype, pd.CategoricalDtype):
             as_num = pd.to_numeric(s, errors="coerce")
             if s.notna().any() and as_num.notna().sum() == s.notna().sum():
@@ -238,7 +324,7 @@ def apply_cf_calibrator(
                     f"(нужны как при fit): {missing[:12]}"
                 )
             matrix = matrix.loc[:, list(names)]
-        matrix = _align_dtypes_for_catboost(matrix)
+        matrix = _align_dtypes_for_catboost(matrix, calibrator)
         proba = calibrator.predict_proba(matrix)
         return [float(row[1]) for row in np.asarray(proba)]
 
