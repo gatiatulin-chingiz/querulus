@@ -189,6 +189,13 @@ def _catboost_from_calibrator(calibrator: Any) -> Any | None:
         name = type(obj).__name__
         return mod.startswith("catboost") or name.startswith("CatBoost")
 
+    fitted = [
+        obj
+        for obj in candidates
+        if _is_cb(obj) and (getattr(obj, "feature_names_", None) or [])
+    ]
+    if fitted:
+        return fitted[0]
     for obj in candidates:
         if _is_cb(obj):
             return obj
@@ -278,6 +285,48 @@ def _align_dtypes_for_catboost(
 
 
 #new
+def _cf_predict_column_order(
+    calibrator: Any,
+    matrix: pd.DataFrame,
+) -> list[str] | None:
+    """Порядок колонок как при обучении CatBoost.
+
+    Индексы ``cat_features`` позиционные. ``feature_names_in_`` у CCCV — порядок
+    кадра на fit (часто numerical, потом categorical) и не совпадает с моделью:
+    в cat-слот попадает чужая числовая фича.
+    """
+    est = _catboost_from_calibrator(calibrator)
+    names: list[str] = []
+    if est is not None:
+        names = list(getattr(est, "feature_names_", None) or [])
+        if not names:
+            getter = getattr(est, "get_feature_names", None)
+            if callable(getter):
+                try:
+                    names = [str(n) for n in (getter() or [])]
+                except Exception:
+                    names = []
+    if not names:
+        fallback = getattr(calibrator, "feature_names_in_", None)
+        names = [str(n) for n in fallback] if fallback is not None else []
+    if not names:
+        return None
+    missing = [c for c in names if c not in matrix.columns]
+    if missing:
+        raise ValueError(
+            "CF calibrator: в prepared_matrix нет колонок "
+            f"(нужны как при обучении): {missing[:12]}"
+        )
+    sklearn_order = getattr(calibrator, "feature_names_in_", None)
+    if sklearn_order is not None and list(sklearn_order) != list(names):
+        logger.warning(
+            "CF calibrator: порядок feature_names_in_ != CatBoost feature_names_ — "
+            "отдаём порядок модели"
+        )
+    return list(names)
+
+
+#new
 def _is_isotonic_1d(calibrator: Any) -> bool:
     """True для 1D isotonic (raw score → cal); False для CCCV / CatBoost-обёрток."""
     name = type(calibrator).__name__
@@ -315,15 +364,9 @@ def apply_cf_calibrator(
 
     if hasattr(calibrator, "predict_proba"):
         matrix = prepared_matrix
-        names = getattr(calibrator, "feature_names_in_", None)
-        if names is not None:
-            missing = [c for c in names if c not in matrix.columns]
-            if missing:
-                raise ValueError(
-                    "CF calibrator: в prepared_matrix нет колонок "
-                    f"(нужны как при fit): {missing[:12]}"
-                )
-            matrix = matrix.loc[:, list(names)]
+        order = _cf_predict_column_order(calibrator, matrix)
+        if order is not None:
+            matrix = matrix.loc[:, order]
         matrix = _align_dtypes_for_catboost(matrix, calibrator)
         proba = calibrator.predict_proba(matrix)
         return [float(row[1]) for row in np.asarray(proba)]
