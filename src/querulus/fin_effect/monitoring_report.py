@@ -1666,50 +1666,50 @@ def _agreement_instruments_section(result: MonitoringEffectResult) -> str:
     )
     filial_html = ""
     if by_filial is not None and not getattr(by_filial, "empty", True):
-        filial_html = f"""
-    <h3>По филиалам (control / model)</h3>
-    {_table(
-      by_filial,
-      columns={{
-        "filial": _c("filial", "Филиал"),
-        "segment": _c("segment", "control / model"),
-        "instrument": _c("класс", "Класс рычага"),
-        "n": _c("n", "Число соглашений класса"),
-        "n_agreements_segment": _c(
-            "n согл. сегм.",
-            "Всего соглашений в филиале×сегменте",
-        ),
-        "share_of_agreements_pct": _c(
-            "% согл.",
-            "Доля класса среди соглашений филиала×сегмента, %",
-        ),
-        "sum_model_payout": _c("Σ Иные затраты", "₽"),
-        "sum_emr_overpay": _c("Σ ПереплатаЕМР+", "₽"),
-        "sum_director_limit": _c("Σ Согл.СуммаКВ", "₽"),
-      }},
-      rows=[
-        "Одна строка на филиал × segment × класс.",
-      ],
-    )}
-"""
-    return f"""
-  <h2 class="mark-new">4c. Соглашения × рычаги доплаты</h2>
-  <div class="card mark-new">
-    <p><b>model_rec</b> = <code>РезультатПроверки = 1</code>.
-    <b>rules</b> = <code>ЕМР+20 = 1</code> или
-    <code>Выплата из лимитов директоров филиалов = 1</code>.
-    Четыре взаимоисключающих класса среди соглашений; деньги — Σ по классам
-    (Иные затраты / ПереплатаЕМР+ / СогласованнаяСуммаКВ).</p>
-    <h3>Доли классов</h3>
-    {shares_html}
-    <h3>Деньги по классам</h3>
-    <p class="muted">Иные затраты — факт доплаты по каналу модели;
-    ПереплатаЕМР+ и СогласованнаяСуммаКВ — суммы правил. Рекомендация —
-    для справки (не критерий класса).</p>
-    {money_html}
-    {filial_html}
-  </div>
-"""
+        filial_table = _table(
+            by_filial,
+            columns={
+                "filial": _c("filial", "Филиал"),
+                "segment": _c("segment", "control / model"),
+                "instrument": _c("класс", "Класс рычага"),
+                "n": _c("n", "Число соглашений класса"),
+                "n_agreements_segment": _c(
+                    "n согл. сегм.",
+                    "Всего соглашений в филиале×сегменте",
+                ),
+                "share_of_agreements_pct": _c(
+                    "% согл.",
+                    "Доля класса среди соглашений филиала×сегмента, %",
+                ),
+                "sum_model_payout": _c("Σ Иные затраты", "₽"),
+                "sum_emr_overpay": _c("Σ ПереплатаЕМР+", "₽"),
+                "sum_director_limit": _c("Σ Согл.СуммаКВ", "₽"),
+            },
+            rows=[
+                "Одна строка на филиал × segment × класс.",
+            ],
+        )
+        filial_html = (
+            "<h3>По филиалам (control / model)</h3>\n" + filial_table
+        )
+    return (
+        '<h2 class="mark-new">4c. Соглашения × рычаги доплаты</h2>\n'
+        '<div class="card mark-new">\n'
+        "<p><b>model_rec</b> = <code>РезультатПроверки = 1</code>.\n"
+        "<b>rules</b> = <code>ЕМР+20 = 1</code> или\n"
+        "<code>Выплата из лимитов директоров филиалов = 1</code>.\n"
+        "Четыре взаимоисключающих класса среди соглашений; деньги — Σ по классам\n"
+        "(Иные затраты / ПереплатаЕМР+ / СогласованнаяСуммаКВ).</p>\n"
+        "<h3>Доли классов</h3>\n"
+        f"{shares_html}\n"
+        "<h3>Деньги по классам</h3>\n"
+        "<p class=\"muted\">Иные затраты — факт доплаты по каналу модели;\n"
+        "ПереплатаЕМР+ и СогласованнаяСуммаКВ — суммы правил. Рекомендация —\n"
+        "для справки (не критерий класса).</p>\n"
+        f"{money_html}\n"
+        f"{filial_html}\n"
+        "</div>\n"
+    )
 
 
 def _agreement_funnel_section(result: MonitoringEffectResult) -> str:

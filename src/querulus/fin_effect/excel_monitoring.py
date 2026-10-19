@@ -1571,10 +1571,6 @@ def _agreement_instrument_tables(
                     "share_of_agreements_pct": (
                         float(100.0 * n / base_n) if base_n else np.nan
                     ),
-                    "n_model_rec": int(part.loc[mask, "_model_rec"].sum())
-                    if n
-                    else 0,
-                    "n_rules": int(part.loc[mask, "_rules"].sum()) if n else 0,
                     "n_with_model_payout": int(
                         part.loc[mask, "_model_payout_amount"].gt(0).sum()
                     )
