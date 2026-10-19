@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Как считается финансовый эффект модели</title>
+  <style>
+    :root {
+      --bg: #f5f3ee;
+      --surface: #fff;
+      --ink: #1d2526;
+      --muted: #5f696a;
+      --line: #d9d4c9;
+      --accent: #075f66;
+      --soft: #e7f3f4;
+      --control: #8a4b2a;
+      --model: #075f66;
+      --save: #2f6b3a;
+      --loss: #8a2d21;
+      --warn: #9b7100;
+      --warn-bg: #fff8e6;
+      --loss-bg: #fdecea;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse 80% 50% at 10% -10%, #dceeee 0%, transparent 55%),
+        radial-gradient(ellipse 60% 40% at 100% 0%, #efe8dc 0%, transparent 50%),
+        var(--bg);
+      font: 16px/1.5 "Segoe UI", Arial, sans-serif;
+    }
+    .page { max-width: 980px; margin: auto; padding: 1.4rem 1.1rem 3rem; }
+    h1 {
+      color: var(--accent);
+      margin: 0 0 .35rem;
+      font-size: clamp(1.45rem, 3.5vw, 1.9rem);
+      letter-spacing: -.02em;
+    }
+    h2 {
+      color: var(--accent);
+      margin: 0 0 .45rem;
+      font-size: 1.15rem;
+    }
+    h3 { margin: .2rem 0 .35rem; font-size: 1rem; }
+    p, li { margin: .35rem 0; }
+    .sub { color: var(--muted); font-size: .95rem; max-width: 42rem; }
+    .nav {
+      display: flex; flex-wrap: wrap; gap: .45rem;
+      margin: .9rem 0 1.1rem;
+    }
+    .nav a {
+      text-decoration: none; color: var(--accent);
+      border: 1px solid #b7d4d7; background: var(--soft);
+      border-radius: 999px; padding: .28rem .75rem; font-size: .86rem;
+    }
+    .hero {
+      background: linear-gradient(135deg, #e7f3f4 0%, #fff 55%, #f7f1e8 100%);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1.15rem 1.25rem 1.25rem;
+      margin-bottom: 1.2rem;
+      animation: rise .55s ease both;
+    }
+    .hero .one-line {
+      font-size: clamp(1.15rem, 2.6vw, 1.4rem);
+      font-weight: 650;
+      line-height: 1.35;
+      margin: .4rem 0 .55rem;
+      max-width: 36rem;
+    }
+    .verdicts { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: .7rem; }
+    .verdict {
+      display: inline-flex; align-items: center; gap: .4rem;
+      border-radius: 8px; padding: .35rem .7rem;
+      font-size: .9rem; font-weight: 600;
+      border: 1px solid;
+    }
+    .verdict.plus {
+      background: #e8f5ea; color: var(--save); border-color: #2f6b3a55;
+    }
+    .verdict.minus {
+      background: var(--loss-bg); color: var(--loss); border-color: #8a2d2155;
+    }
+
+    .pipeline { margin: 1.4rem 0 2rem; }
+    .step {
+      position: relative;
+      display: grid;
+      grid-template-columns: 3.2rem 1fr;
+      gap: .85rem;
+      padding: 0 0 1.35rem;
+      animation: rise .55s ease both;
+    }
+    .step:nth-child(1) { animation-delay: .05s; }
+    .step:nth-child(2) { animation-delay: .12s; }
+    .step:nth-child(3) { animation-delay: .19s; }
+    .step:nth-child(4) { animation-delay: .26s; }
+    .step:nth-child(5) { animation-delay: .33s; }
+    .step:nth-child(6) { animation-delay: .4s; }
+    .step:nth-child(7) { animation-delay: .47s; }
+    .step:nth-child(8) { animation-delay: .54s; }
+    .step:not(:last-child)::before {
+      content: "";
+      position: absolute;
+      left: 1.45rem; top: 3.1rem; bottom: 0;
+      width: 2px;
+      background: linear-gradient(180deg, #075f66aa, #d9d4c9);
+    }
+    .step-num {
+      width: 2.9rem; height: 2.9rem;
+      border-radius: 50%;
+      background: var(--accent); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 1.05rem;
+      box-shadow: 0 0 0 4px #e7f3f4;
+      z-index: 1;
+    }
+    .step-body {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: .9rem 1rem;
+    }
+    .step-body .lead {
+      margin: 0 0 .45rem;
+      font-size: 1.02rem;
+      font-weight: 600;
+    }
+    .step-body .why {
+      color: var(--muted);
+      font-size: .9rem;
+      margin: 0 0 .55rem;
+    }
+
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: .65rem;
+      align-items: stretch;
+      margin: .55rem 0 .2rem;
+    }
+    @media (max-width: 640px) {
+      .compare { grid-template-columns: 1fr; }
+      .compare .mid { transform: rotate(90deg); margin: .2rem 0; }
+    }
+    .box {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: .7rem .8rem;
+      background: #fbfbf9;
+    }
+    .box.control { border-top: 4px solid var(--control); }
+    .box.model { border-top: 4px solid var(--model); }
+    .box h4 { margin: 0 0 .25rem; font-size: .95rem; }
+    .box p { margin: 0; color: var(--muted); font-size: .88rem; }
+    .mid {
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 1.4rem; color: var(--save);
+    }
+
+    .cost-bars { display: grid; gap: .45rem; margin: .6rem 0 .2rem; }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 9.5rem 1fr auto;
+      gap: .5rem; align-items: center;
+      font-size: .86rem;
+    }
+    @media (max-width: 560px) {
+      .bar-row { grid-template-columns: 1fr; gap: .2rem; }
+    }
+    .bar-track {
+      height: 1.35rem;
+      background: #efece5;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 5px;
+      display: flex; align-items: center;
+      padding-left: .45rem;
+      color: #fff; font-size: .72rem; font-weight: 600;
+      white-space: nowrap;
+      animation: grow .8s ease both;
+    }
+    .bar-fill.paid { width: 42%; background: #3d6e74; animation-delay: .2s; }
+    .bar-fill.psr { width: 28%; background: #8a4b2a; animation-delay: .35s; }
+    .bar-fill.tail { width: 18%; background: #9b7100; animation-delay: .5s; }
+    .bar-label { color: var(--muted); font-size: .8rem; }
+
+    .coef-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: .45rem;
+      margin: .55rem 0 .2rem;
+    }
+    .coef {
+      background: #fbfbf9;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: .55rem .65rem;
+      font-size: .86rem;
+    }
+    .coef b {
+      display: block;
+      color: var(--accent);
+      font-family: Consolas, "Courier New", monospace;
+      margin-bottom: .15rem;
+    }
+    .coef span { color: var(--muted); }
+
+    .where {
+      margin-top: .45rem;
+      font-size: .88rem;
+      color: var(--ink);
+    }
+    .where b {
+      display: block;
+      margin-bottom: .2rem;
+      color: var(--muted);
+      font-weight: 600;
+      font-size: .82rem;
+      letter-spacing: .02em;
+    }
+    .where ul {
+      margin: .15rem 0 0 1.05rem;
+      padding: 0;
+    }
+    .where li {
+      margin: .2rem 0;
+      color: var(--muted);
+    }
+    .where code {
+      display: inline;
+      background: #efede7;
+      padding: .05rem .28rem;
+      font-size: .82rem;
+    }
+
+    .sources {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: .55rem;
+      margin-top: .5rem;
+    }
+    .source {
+      background: #fbfbf9;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: .7rem .8rem;
+      border-top: 3px solid var(--accent);
+    }
+    .source b { display: block; margin-bottom: .3rem; }
+    .source code {
+      display: block;
+      background: #efede7;
+      padding: .2rem .4rem;
+      border-radius: 4px;
+      font-size: .78rem;
+      margin: .25rem 0 .4rem;
+      word-break: break-all;
+    }
+    .source ul { margin: .2rem 0 .1rem 1.1rem; padding: 0; color: var(--muted); font-size: .86rem; }
+
+    .math {
+      background: var(--soft);
+      border: 1px solid #c7dfe1;
+      border-left: 4px solid var(--accent);
+      border-radius: 0 8px 8px 0;
+      padding: .55rem .75rem;
+      margin: .55rem 0 0;
+      font-size: .9rem;
+    }
+    .math code {
+      background: #efede7;
+      padding: .05rem .3rem;
+      border-radius: 3px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: .84rem;
+    }
+
+    details.more {
+      margin-top: .55rem;
+      border-top: 1px dashed var(--line);
+      padding-top: .45rem;
+    }
+    details.more summary {
+      cursor: pointer;
+      color: var(--accent);
+      font-size: .88rem;
+      font-weight: 600;
+      list-style: none;
+    }
+    details.more summary::-webkit-details-marker { display: none; }
+    details.more summary::before { content: "▸ "; }
+    details.more[open] summary::before { content: "▾ "; }
+    details.more .inner {
+      margin-top: .4rem;
+      color: var(--muted);
+      font-size: .86rem;
+    }
+
+    .scale-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: .55rem;
+      margin-top: .5rem;
+    }
+    .scale {
+      background: #fbfbf9;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: .65rem .75rem;
+      border-top: 3px solid var(--accent);
+    }
+    .scale.scenario { border-top-color: var(--warn); }
+    .scale b { display: block; margin-bottom: .2rem; }
+    .scale span { color: var(--muted); font-size: .84rem; }
+
+    .scenario-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: .45rem;
+      margin: .55rem 0 0;
+    }
+    .scenario-chip {
+      background: #fbfbf9;
+      border: 1px solid var(--line);
+      border-top: 3px solid var(--accent);
+      border-radius: 8px;
+      padding: .55rem .65rem;
+      font-size: .88rem;
+    }
+    .scenario-chip.wide { border-top-color: var(--warn); }
+    .scenario-chip b {
+      display: block;
+      color: var(--accent);
+      margin-bottom: .15rem;
+      font-size: .82rem;
+    }
+    .source .coef-mini {
+      margin: .45rem 0 0;
+      padding: 0;
+      list-style: none;
+    }
+    .source .coef-mini li {
+      margin: .35rem 0;
+      padding: .4rem .5rem;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      color: var(--ink);
+      font-size: .84rem;
+    }
+    .source .coef-mini code {
+      display: inline;
+      background: #efede7;
+      padding: .05rem .3rem;
+      margin: 0 .15rem 0 0;
+      font-size: .8rem;
+    }
+
+    .warn-box {
+      background: var(--warn-bg);
+      border: 1px solid #e5c66e;
+      border-left: 4px solid var(--warn);
+      border-radius: 0 8px 8px 0;
+      padding: .7rem .85rem;
+      margin: .5rem 0 0;
+      font-size: .9rem;
+    }
+
+    .glossary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: .5rem;
+      margin-top: .5rem;
+    }
+    .g-item {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: .6rem .7rem;
+    }
+    .g-item b { color: var(--accent); display: block; margin-bottom: .15rem; }
+    .g-item span { color: var(--muted); font-size: .86rem; }
+
+    footer {
+      margin-top: 2rem;
+      color: var(--muted);
+      font-size: .82rem;
+      border-top: 1px solid var(--line);
+      padding-top: .8rem;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: none; }
+    }
+    @keyframes grow {
+      from { width: 0; }
+    }
+</style>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <p class="sub" style="margin:0"></p>
+      <p class="one-line">
+        МЕТОДОЛОГИЯ РАСЧЕТА ФИНАНСОВОГО ЭФФЕКТА ОТ МОДЕЛИ СУТЯЖНИЧЕСТВА
+      </p>
+      <p class="sub">
+        Сравниваем два случайных потока (модель/ручеек) и считаем экономию в рублях на кейс, после чего экстраполируем на год по нескольким сценариям:
+      </p>
+      <div class="scenario-list">
+        <div class="scenario-chip">
+          <b>1 · 50% / 50%</b>
+          текущие филиалы пилота
+        </div>
+        <div class="scenario-chip">
+          <b>2 · 100%</b>
+          текущие филиалы пилота
+        </div>
+        <div class="scenario-chip wide">
+          <b>3 · 50% / 50%</b>
+          все филиалы (сеть)
+        </div>
+        <div class="scenario-chip wide">
+          <b>4 · 100%</b>
+          все филиалы (сеть)
+        </div>
+      </div>
+    </header>
+
+    <nav class="nav">
+      <a href="#sources">Источники</a>
+      <a href="#pipeline">Пайплайн</a>
+      <a href="#scale">Деньги</a>
+      <a href="#limits">Оговорки</a>
+      <a href="#glossary">Словарь</a>
+      <a href="fin_effect_report.html">Отчёт</a>
+      <a href="fin_effect_conclusion.html">Заключение</a>
+      <a href="fin_effect_coverage_matrix.html">Матрица покрытия</a>
+    </nav>
+
+    <section id="sources" class="step-body" style="margin-bottom:1.2rem; animation: rise .55s ease both;">
+      <h2>Откуда берутся данные</h2>
+      <div class="sources">
+        <div class="source">
+          <b>1. Текущий пилот (мониторинг)</b>
+          <code>[OISUU_report].[dbo].[ВитринаСутяжность]</code>
+          <ul>
+            <li>РезультатПроверки (−100 / 0 / 1) - ручеек или модель</li>
+            <li>СуммаПлатежа - первичная выплата</li>
+            <li>Выплаты по претензии / ФУ / суду - факт ПСР</li>
+            <li>Соглашение, доплата по модели, филиал, даты</li>
+          </ul>
+        </div>
+        <div class="source">
+          <b>2. Ретро (зрелая история)</b>
+          <code>querulus_train_dataset.parquet</code>
+          <ul>
+            <li>TARGET_FREQ_AMOUNT - сумма ПСР (претензия / ФУ / суд)</li>
+            <li>OD - основной долг по делу</li>
+            <li>Филиал (пилот / не пилот) - объём дел и тяжесть ПСР</li>
+            <li>Месяц убытка - сезонность убытков</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="pipeline" class="pipeline">
+
+      <article class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <p class="lead">Берём только подходящие инциденты</p>
+          <ul>
+            <li>Пилотные филиалы без Архангельска и Марийска.</li>
+            <li>Форма возмещения: денежная / ремонт / соглашение.</li>
+            <li>Объект — автотранспорт.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <p class="lead">Делим на два потока: ручеек и модель</p>
+          <div class="compare">
+            <div class="box control">
+              <h4>Ручеек (control)</h4>
+              <p>Ответ модели = −100.<br>
+              Обычный процесс без рекомендаций модели.</p>
+            </div>
+            <div class="mid">vs</div>
+            <div class="box model">
+              <h4>Модель (model)</h4>
+              <p>Ответ = 0 или 1.<br>
+              Назначили в модель — даже если рекомендацию не исполнили.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <p class="lead">Считаем полный расход на каждый инцидент (Yult)</p>
+          <p class="why">
+            Не только первичная выплата, но и уже случившийся ПСР,
+            и то, что ещё может прийти по претензии / ФУ / суду.
+          </p>
+          <div class="math">
+            <code>Yult = первичная выплата + факт ПСР + NPV(хвост ПСР)</code>
+            <div class="where">
+              <b>где</b>
+              <ul>
+                <li><b>первичная выплата</b> — сумма платежа по убытку;</li>
+                <li><b>факт ПСР</b> — уже выплаченное по претензии / ФУ / суду;</li>
+                <li><b>хвост</b> — ещё не выплаченный ожидаемый ПСР (формула ниже);</li>
+                <li><b>NPV</b> — приведение хвоста к сегодняшним деньгам (дисконт).</li>
+              </ul>
+            </div>
+            Если есть <b>соглашение</b> — от прогнозного хвоста берём только
+            <b>7%</b> (факт ПСР входит целиком).
+          </div>
+
+          <div class="math" style="margin-top:.65rem">
+            <code>ожидание ≈ p<sub>U</sub> × (OD × k<sub>U</sub> + e<sub>U</sub>)</code><br>
+            <code>хвост = max(q × ожидание − факт ПСР, 0)</code>
+            <div class="where">
+              <b>где</b>
+              <ul>
+                <li><code>p<sub>U</sub></code> — доля ретро-дел с ПСР &gt; 0
+                  (как часто случаются претензия / ФУ / суд);</li>
+                <li><code>OD</code> — основной долг по инциденту;</li>
+                <li><code>k<sub>U</sub></code> — Σ ПСР / Σ OD в ретро
+                  (во сколько раз ПСР относится к долгу);</li>
+                <li><code>e<sub>U</sub></code> — ожидаемые оргвзносы ФУ/суда
+                  на один случай с ПСР;</li>
+                <li><code>q</code> — доля «ещё открытого» хвоста
+                  (при соглашении обычно 7%);</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <p class="lead">Сравниваем средние внутри каждого филиала</p>
+          <p class="why">
+            Сначала честное сравнение «ручеек vs модель» в одном филиале,
+            потом складываем филиалы с весами по числу дел.
+          </p>
+          <div class="math">
+            <b>ITT (intention-to-treat)</b> — главный метрика.<br><br>
+            Она позволяет оценить насколько разнится средний расход на инцидент в выборках model и control.
+            <div style="margin-top:.55rem">
+              <code>эффект_f = средний Yult(ручеек) − средний Yult(модель)</code><br>
+              <code>ITT = сумма (вес_f × эффект_f)</code>
+              <div class="where">
+                <b>где</b>
+                <ul>
+                  <li><code>эффект_f</code> — экономия на инцидент в филиале f;</li>
+                  <li><code>Yult</code> — полный расход на инцидент (шаг 3);</li>
+                  <li><code>вес_f</code> — доля инцидентов филиала f во всей выборке;</li>
+                  <li><code>ITT</code> — итог по пилоту: взвешенная сумма эффектов филиалов.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          <div class="verdicts" style="margin-top:.75rem">
+            <span class="verdict plus">Плюс = модель дешевле ручейка = экономия</span>
+            <span class="verdict minus">Минус = модель дороже ручейка = убыток</span>
+          </div>
+          <p class="why" style="margin-top:.55rem">
+            Так сохраняется дизайн рандомизации: не смешиваем «тяжёлые» и
+            «лёгкие» филиалы в одну кучу до сравнения.
+          </p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="step-num">5</div>
+        <div class="step-body">
+          <p class="lead">Bootstrap (проверяем, насколько цифра устойчива)</p>
+          <p class="why">
+            Bootstrap — многократный пересчёт ITT на случайных выборках
+            «с возвращением».
+          </p>
+          <ul>
+            <li><b>Шаг A.</b> Из ретро заново набираем строки <em>с возвращением</em>
+              и пересчитываем p<sub>U</sub>, k<sub>U</sub>, m<sub>U</sub>, e<sub>U</sub>.
+              <br><span style="color:var(--muted)">Пример: в ретро 10&nbsp;000 дел —
+              набираем снова 10&nbsp;000: часть дел попадёт дважды, часть ни разу;
+              по этой «новой» выборке коэффициенты чуть другие.</span></li>
+            <li><b>Шаг B.</b> Из текущей витрины заново набираем инциденты
+              целиком (кластер = инцидент) и пересчитываем Yult и ITT.
+              <br><span style="color:var(--muted)">Пример: в пилоте 800 инцидентов —
+              набираем снова 800 с повторами; в одном филиале «случайно» стало
+              больше model, в другом — больше ручейка; ITT чуть съехал.</span></li>
+            <li>Так делаем сотни раз - получаем распределение возможных ITT.</li>
+          </ul>
+          <div class="math">
+            <b>На выходе пункта 5:</b><br>
+            • точечный ITT (как в шаге 4);<br>
+            • <b>95% CI</b> — 2.5% и 97.5% квантили bootstrap-распределения
+            (в каком диапазоне обычно лежит эффект);<br>
+            • если CI <b>проходит через 0</b> — экономия (или убыток)
+            статистически не подтверждена.
+          </div>
+        </div>
+      </article>
+
+      <article class="step" id="scale">
+        <div class="step-num">6</div>
+        <div class="step-body">
+          <p class="lead">Переводим экономию на инцидент в деньги</p>
+          <p class="why">
+            Одна и та же экономия на кейс × разный объём и доля потока в модель.
+            Сценарии ниже — экстраполяция на год (кроме того, что на периоде
+            работы модели сначала есть факт ITT × N_obs).
+          </p>
+          <div class="scale-grid">
+            <div class="scale">
+              <b>1. 50% / 50% · текущие филиалы</b>
+              <span>ITT × годовой поток инцидентов на пилотных филиалах, с поправкой на сезонность.</span>
+            </div>
+            <div class="scale">
+              <b>2. 100% · текущие филиалы</b>
+              <span>Тот же пилот и тот же ITT на кейс, но в модель идут все инциденты пилота (не половина).</span>
+            </div>
+            <div class="scale scenario">
+              <b>3. 50% / 50% · все филиалы</b>
+              <span>Сценарий 1, растянутый на всю сеть: «если ту же схему 50/50
+              включить не только в пилоте, а во всех филиалах».</span>
+            </div>
+            <div class="scale scenario">
+              <b>4. 100% · все филиалы</b>
+              <span>Сценарий 2, растянутый на всю сеть: «если во всех филиалах
+              все подходящие инциденты идут в модель».</span>
+            </div>
+          </div>
+          <div class="math" style="margin-top:.75rem">
+            <code>год_сеть = год_пилот × (1 + volume<sub>NP</sub> × risk<sub>NP</sub>)</code>
+            <div class="where">
+              <b>где</b>
+              <ul>
+                <li><code>год_пилот</code> — деньги сценария 1 или 2 (только пилот);</li>
+                <li><code>volume<sub>NP</sub></code> — во сколько раз больше дел
+                  вне пилота, чем в пилоте (по числу убытков в ретро);</li>
+                <li><code>risk<sub>NP</sub></code> — во сколько раз тяжелее средний ПСР
+                  вне пилота, чем в пилоте;</li>
+                <li><code>1 + …</code> — сам пилот (единица) плюс добавка остальной сети.</li>
+              </ul>
+            </div>
+            Сценарий 3 = сценарий 1 × множитель сети;
+            сценарий 4 = сценарий 2 × множитель сети.
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section id="limits" class="step-body" style="margin-bottom:1.4rem; animation: rise .55s ease both .5s;">
+      <h2>Что нельзя обещать без оговорок</h2>
+      <div class="warn-box">
+        <ul style="margin:.1rem 0 .1rem 1.1rem">
+          <li>Если 95% CI через 0 — про «гарантированную экономию» говорить рано.</li>
+          <li>Хвост ПСР сверх уже выплаченного — всё ещё прогноз по ретро, не дозревший факт.</li>
+          <li>Год на сеть и «весь поток в модель» — сценарии масштабирования.</li>
+          <li>ITT включает случаи, где рекомендацию не исполнили — это намеренно.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="glossary">
+      <h2>Словарь простым языком</h2>
+      <div class="glossary">
+        <div class="g-item">
+          <b>Инцидент</b>
+          <span>Одно дело клиента; может включать несколько убытков.</span>
+        </div>
+        <div class="g-item">
+          <b>Ручеек / control</b>
+          <span>Поток без работы модели (Result = −100).</span>
+        </div>
+        <div class="g-item">
+          <b>Модель / model</b>
+          <span>Поток с назначением в модель (Result = 0 или 1).</span>
+        </div>
+        <div class="g-item">
+          <b>Yult</b>
+          <span>Полный расход: первичная выплата + факт ПСР + дисконтированный хвост.</span>
+        </div>
+        <div class="g-item">
+          <b>ПСР</b>
+          <span>Постстраховые расходы: претензия, финансовый уполномоченный, суд.</span>
+        </div>
+        <div class="g-item">
+          <b>ITT</b>
+          <span>Эффект назначения в модель (intention-to-treat), ₽ на инцидент.</span>
+        </div>
+        <div class="g-item">
+          <b>P / NP</b>
+          <span>Pilot / nonpilot — пилот и остальная сеть для масштаба.</span>
+        </div>
+        <div class="g-item">
+          <b>Сезонность убытков</b>
+          <span>Доли месяцев по числу инцидентов на ретро данных.</span>
+        </div>
+        <div class="g-item">
+          <b>Стратификация</b>
+          <span>Сначала сравниваем внутри филиала, потом взвешенно складываем.</span>
+        </div>
+        <div class="g-item">
+          <b>95% CI</b>
+          <span>Диапазон устойчивости эффекта при повторных пересчётах.</span>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

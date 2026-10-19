@@ -109,6 +109,16 @@ p { margin:.35rem 0; }
 }
 .formula b { color:var(--accent); }
 .eq { font:1.02rem/1.65 Cambria, "Times New Roman", serif; white-space:nowrap; }
+.eq-hint {
+  color:var(--muted); font-size:.82rem; line-height:1.4;
+  margin:.05rem 0 .55rem .1rem; white-space:normal;
+}
+.formula .symbols {
+  margin:.45rem 0 0; padding:.4rem 0 0; border-top:1px solid #d4e6e7;
+  color:var(--muted); font-size:.82rem; line-height:1.4;
+}
+.formula .symbols ul { margin:.2rem 0 .1rem 1.1rem; }
+.formula .symbols li { margin:.1rem 0; }
 .note { color:var(--muted); border-top:1px solid #d4e6e7; margin-top:.35rem; padding-top:.35rem; }
 .warning {
   background:var(--warn); border:1px solid #e5c66e; border-left:4px solid #9b7100;
@@ -163,6 +173,25 @@ li { margin:.18rem 0; }
 .legend ul { margin:.15rem 0 .15rem 1.1rem; }
 .legend li { margin:.12rem 0; color:var(--muted); }
 .legend code { font-size:.82rem; }
+.scenario-stack { display:grid; gap:.75rem; margin:.55rem 0; }
+.scenario-card {
+  background:#fbfbf9; border:1px solid var(--line); border-radius:9px;
+  padding:.7rem .85rem; border-top:3px solid var(--accent);
+}
+.scenario-card.alt { border-top-color:#9b7100; }
+.scenario-card h4 { margin:0 0 .35rem; color:#244f53; font-size:.98rem; }
+.scenario-card .why { color:var(--muted); font-size:.86rem; margin:0 0 .5rem; }
+.scenario-card table.kv { margin:.2rem 0; }
+.scenario-card .diff-note {
+  background:#fff8e6; border:1px solid #e5c66e; border-left:3px solid #9b7100;
+  border-radius:0 6px 6px 0; padding:.45rem .6rem; margin:.45rem 0 0; font-size:.86rem;
+}
+mark.mark-new,
+.mark-new {
+  background: #fff3bf;
+  box-shadow: inset 0 0 0 2px #e6b800;
+  border-radius: 4px;
+}
 .fx-tree { margin:.4rem 0; }
 .fx-node {
   border:1px solid var(--line); border-radius:8px; background:#fff;
@@ -737,10 +766,38 @@ def _table(
     return html
 
 
-def _formula(title: str, equations: list[str], note: str = "") -> str:
-    body = "".join(f'<div class="eq">{equation}</div>' for equation in equations)
+def _formula(
+    title: str,
+    equations: list[str | tuple[str, str]],
+    note: str = "",
+    *,
+    symbols: list[tuple[str, str]] | None = None,
+) -> str:
+    """Блок формулы: уравнения + подсказка под каждым + опциональный словарь символов."""
+    parts: list[str] = []
+    for item in equations:
+        if isinstance(item, tuple):
+            equation, hint = item
+            parts.append(f'<div class="eq">{equation}</div>')
+            if hint:
+                parts.append(f'<div class="eq-hint">{hint}</div>')
+        else:
+            parts.append(f'<div class="eq">{item}</div>')
+    body = "".join(parts)
+    symbols_html = ""
+    if symbols:
+        items = "".join(
+            f"<li><b>{symbol}</b> — {meaning}</li>"
+            for symbol, meaning in symbols
+        )
+        symbols_html = (
+            f'<div class="symbols"><b>Обозначения</b><ul>{items}</ul></div>'
+        )
     note_html = f'<div class="note">{note}</div>' if note else ""
-    return f'<div class="formula"><b>{title}</b>{body}{note_html}</div>'
+    return (
+        f'<div class="formula"><b>{title}</b>{body}'
+        f"{symbols_html}{note_html}</div>"
+    )
 
 
 def _warnings(items: list[str]) -> str:
@@ -1279,6 +1336,226 @@ def _fx_network_multiplier_branch() -> str:
 """
 
 
+def _annual_scenarios_section(result: MonitoringEffectResult) -> str:
+    """Сценарии годового эффекта — отдельные таблицы друг под другом."""
+    annual = getattr(result, "annual_summary", None)
+    if annual is None or getattr(annual, "empty", True):
+        return "<p class='muted'>Нет данных для годовых сценариев.</p>"
+    row = annual.loc[annual["horizon"].astype(str).eq("ult")]
+    if row.empty:
+        row = annual.iloc[[0]]
+    r = row.iloc[0]
+
+    def g(key: str) -> Any:
+        return r[key] if key in r.index else np.nan
+
+    itt = float(g("effect_per_case"))
+    itt100 = float(g("effect_100_compliance"))
+    n_year = float(g("N_pilot_eligible_year"))
+    net_mult = float(g("network_multiplier"))
+    net = float(g("annual_network_full"))
+    net100 = float(g("annual_network_full_compliance"))
+    delta_case = itt100 - itt
+    delta_year = net100 - net
+
+    why_lower = ""
+    if np.isfinite(delta_case) and delta_case < 0:
+        why_lower = (
+            f"<div class='diff-note'><b>Почему «год сеть 100%» ниже «год сеть»:</b> "
+            f"масштаб один и тот же (N_year × множитель сети), меняется только "
+            f"эффект на кейс. ITT_100 = {format_money(itt100)} ₽ vs ITT = "
+            f"{format_money(itt)} ₽ (Δ {format_money(delta_case)} ₽/кейс). "
+            f"В сценарии 100% исполнения «доначисляем» рекомендованные доплаты "
+            f"и жёстче режем хвост ПСР — если доплаты дороже выигрыша по хвосту, "
+            f"годовой эффект падает "
+            f"(Δ года сети {format_money(delta_year)} ₽).</div>"
+        )
+    elif np.isfinite(delta_case) and delta_case > 0:
+        why_lower = (
+            f"<div class='diff-note'><b>Почему «год сеть 100%» выше «год сеть»:</b> "
+            f"ITT_100 ({format_money(itt100)} ₽) больше ITT ({format_money(itt)} ₽). "
+            f"Принудительное исполнение рекомендации здесь улучшает эффект на кейс; "
+            f"объём (N_year × сеть) тот же.</div>"
+        )
+
+    shared = pd.DataFrame(
+        [
+            {
+                "metric": "exposure (сезонность убытков)",
+                "value": g("seasonal_exposure"),
+                "note": "доля типичного года, уже увиденная; по числу дел, не по ПСР",
+            },
+            {
+                "metric": "N_year (eligible пилота)",
+                "value": g("N_pilot_eligible_year"),
+                "note": "N_obs / exposure",
+            },
+            {
+                "metric": "N_model при текущей доле",
+                "value": g("N_pilot_model_year_current"),
+                "note": "доля model × N_year",
+            },
+            {
+                "metric": "vol_NP",
+                "value": g("volume_ratio_nonpilot"),
+                "note": "поток дел nonpilot / pilot (ретро)",
+            },
+            {
+                "metric": "risk_NP",
+                "value": g("risk_ratio_nonpilot"),
+                "note": "средний ПСР nonpilot / pilot (ретро)",
+            },
+            {
+                "metric": "множитель сети",
+                "value": g("network_multiplier"),
+                "note": "1 + vol_NP × risk_NP",
+            },
+        ]
+    )
+
+    s_period = pd.DataFrame(
+        [
+            {
+                "metric": "ITT на инцидент",
+                "value": g("effect_per_case"),
+                "note": "факт назначения (as-is)",
+            },
+            {
+                "metric": "Эффект на период работы модели",
+                "value": g("annual_window"),
+                "note": "ITT × N_obs окна",
+            },
+            {
+                "metric": "CI периода ↓ / ↑",
+                "value": (
+                    f"{format_money(g('annual_window_ci_low'))} … "
+                    f"{format_money(g('annual_window_ci_high'))}"
+                ),
+                "note": "линейный перенос CI с /инцидент",
+            },
+        ]
+    )
+
+    s_pilot = pd.DataFrame(
+        [
+            {
+                "metric": "ITT на инцидент",
+                "value": g("effect_per_case"),
+                "note": "тот же ITT as-is",
+            },
+            {
+                "metric": "Год пилот, текущая доля model",
+                "value": g("annual_pilot_current"),
+                "note": "ITT × N_model_cur",
+            },
+            {
+                "metric": "Год пилот, весь поток в модель",
+                "value": g("annual_pilot_full"),
+                "note": "ITT × N_year",
+            },
+            {
+                "metric": "CI года пилота ↓ / ↑",
+                "value": (
+                    f"{format_money(g('annual_pilot_full_ci_low'))} … "
+                    f"{format_money(g('annual_pilot_full_ci_high'))}"
+                ),
+                "note": "для сценария «весь поток»",
+            },
+        ]
+    )
+
+    s_net = pd.DataFrame(
+        [
+            {
+                "metric": "ITT на инцидент",
+                "value": g("effect_per_case"),
+                "note": "as-is",
+            },
+            {
+                "metric": "Год сеть (весь поток в модель)",
+                "value": g("annual_network_full"),
+                "note": "ITT × N_year × множитель сети",
+            },
+            {
+                "metric": "CI года сети ↓ / ↑",
+                "value": (
+                    f"{format_money(g('annual_network_full_ci_low'))} … "
+                    f"{format_money(g('annual_network_full_ci_high'))}"
+                ),
+                "note": "тот же масштаб к CI",
+            },
+        ]
+    )
+
+    s_net100 = pd.DataFrame(
+        [
+            {
+                "metric": "ITT_100 на инцидент",
+                "value": g("effect_100_compliance"),
+                "note": "сценарий 100% исполнения рекомендации",
+            },
+            {
+                "metric": "Год сеть 100% compliance",
+                "value": g("annual_network_full_compliance"),
+                "note": "ITT_100 × N_year × множитель сети",
+            },
+            {
+                "metric": "Δ к «год сеть» (as-is)",
+                "value": delta_year if np.isfinite(delta_year) else np.nan,
+                "note": "только из-за разницы ITT_100 vs ITT; объём тот же",
+            },
+        ]
+    )
+
+    def _kv_table(frame: pd.DataFrame) -> str:
+        return _table(
+            frame,
+            columns={
+                "metric": "Метрика",
+                "value": "Значение",
+                "note": "Как читать",
+            },
+        )
+
+    return f"""
+    <h3>Сценарии годового эффекта</h3>
+    <p class="muted">Каждый блок — один сценарий. Сравнивайте ключевые строки
+    друг под другом. <b>NP</b> = nonpilot (остальная сеть), <b>P</b> = pilot.</p>
+    <div class="scenario-stack">
+      <div class="scenario-card">
+        <h4>0. Общие множители объёма</h4>
+        <p class="why">Одинаковы для сценариев ниже (кроме периода работы модели,
+        где берётся N_obs окна, а не N_year).</p>
+        {_kv_table(shared)}
+      </div>
+      <div class="scenario-card">
+        <h4>1. Период работы модели (факт на выгрузке)</h4>
+        <p class="why">ITT as-is × число инцидентов в текущем окне пилота.</p>
+        {_kv_table(s_period)}
+      </div>
+      <div class="scenario-card">
+        <h4>2. Год на пилотных филиалах</h4>
+        <p class="why">Тот же ITT as-is × годовой поток eligible
+        (с поправкой на сезонность убытков).</p>
+        {_kv_table(s_pilot)}
+      </div>
+      <div class="scenario-card">
+        <h4>3. Год на всю сеть (as-is ITT)</h4>
+        <p class="why">Год пилота «весь поток» × множитель сети
+        (vol_NP × risk_NP). Сценарий масштаба, не рандомизация на nonpilot.</p>
+        {_kv_table(s_net)}
+      </div>
+      <div class="scenario-card alt">
+        <h4>4. Год на всю сеть при 100% исполнения</h4>
+        <p class="why">Тот же объём, что в п.3, но эффект на кейс = ITT_100
+        (механически «доначислили» рекомендации). Не ITT.</p>
+        {_kv_table(s_net100)}
+        {why_lower}
+      </div>
+    </div>
+    """
+
+
 def _contract_table(result: MonitoringEffectResult) -> pd.DataFrame:
     meaning = {
         "unit": "Единица ITT — инцидент после дедупа убытков и схлопывания",
@@ -1316,6 +1593,123 @@ def _contract_table(result: MonitoringEffectResult) -> pd.DataFrame:
             for key, value in result.contract.items()
         ]
     )
+
+
+def _agreement_instruments_section(result: MonitoringEffectResult) -> str:
+    """Соглашения × рычаги доплаты (модель / правила) — доли и деньги."""
+    shares = getattr(result, "agreement_instruments", None)
+    money = getattr(result, "agreement_instruments_money", None)
+    by_filial = getattr(result, "agreement_instruments_by_filial", None)
+    if shares is None or getattr(shares, "empty", True):
+        return """
+  <h2 class="mark-new">4c. Соглашения × рычаги доплаты</h2>
+  <div class="card mark-new">
+    <p class="muted">Нет данных: нет соглашений в ITT-выборке или не найдены
+    колонки ЕМР+20 / лимит директоров в витрине.</p>
+  </div>
+"""
+    shares_html = _table(
+        shares,
+        columns={
+            "segment": _c(
+                "segment",
+                "all — все соглашения; control / model — внутри потока",
+            ),
+            "instrument": _c(
+                "класс",
+                "модель / модель+правила / правила / без инструментов",
+            ),
+            "n": _c("n", "Число соглашений класса"),
+            "share_of_agreements_pct": _c(
+                "% согл.",
+                "Доля класса среди соглашений сегмента, %",
+            ),
+            "n_with_model_payout": _c(
+                "n с Иные затраты>0",
+                "Сколько соглашений класса с фактической доплатой (Иные затраты)",
+            ),
+        },
+        rows=[
+            "модель — РезультатПроверки=1, без ЕМР+ и без лимита директора",
+            "модель + правила — Результат=1 и (ЕМР+20 или лимит директора)",
+            "правила — не Результат=1, но ЕМР+20 и/или лимит директора",
+            "без инструментов — ни рекомендации модели, ни правил",
+        ],
+        notes=[
+            "База — только инциденты с соглашением. Описательная таблица, не ITT.",
+            "Флаги ЕМР+/лимита на инциденте = max по убыткам; суммы = sum.",
+        ],
+    )
+    money_html = _table(
+        money if money is not None else pd.DataFrame(),
+        columns={
+            "segment": _c("segment", "all / control / model"),
+            "instrument": _c("класс", "Класс рычага"),
+            "n": _c("n", "Число соглашений"),
+            "sum_recommended": _c("Σ рек.", "Сумма рекомендованной доплаты, ₽"),
+            "sum_model_payout": _c(
+                "Σ Иные затраты",
+                "Фактическая доплата по каналу модели, ₽",
+            ),
+            "sum_emr_overpay": _c(
+                "Σ ПереплатаЕМР+",
+                "ПереплатаЕМР+(безКВ), ₽",
+            ),
+            "sum_director_limit": _c(
+                "Σ Согл.СуммаКВ",
+                "СогласованнаяСуммаКВ (лимит директора), ₽",
+            ),
+        },
+        rows=[
+            "Деньги по классам среди соглашений (не все инциденты).",
+        ],
+    )
+    filial_html = ""
+    if by_filial is not None and not getattr(by_filial, "empty", True):
+        filial_html = f"""
+    <h3>По филиалам (control / model)</h3>
+    {_table(
+      by_filial,
+      columns={{
+        "filial": _c("filial", "Филиал"),
+        "segment": _c("segment", "control / model"),
+        "instrument": _c("класс", "Класс рычага"),
+        "n": _c("n", "Число соглашений класса"),
+        "n_agreements_segment": _c(
+            "n согл. сегм.",
+            "Всего соглашений в филиале×сегменте",
+        ),
+        "share_of_agreements_pct": _c(
+            "% согл.",
+            "Доля класса среди соглашений филиала×сегмента, %",
+        ),
+        "sum_model_payout": _c("Σ Иные затраты", "₽"),
+        "sum_emr_overpay": _c("Σ ПереплатаЕМР+", "₽"),
+        "sum_director_limit": _c("Σ Согл.СуммаКВ", "₽"),
+      }},
+      rows=[
+        "Одна строка на филиал × segment × класс.",
+      ],
+    )}
+"""
+    return f"""
+  <h2 class="mark-new">4c. Соглашения × рычаги доплаты</h2>
+  <div class="card mark-new">
+    <p><b>model_rec</b> = <code>РезультатПроверки = 1</code>.
+    <b>rules</b> = <code>ЕМР+20 = 1</code> или
+    <code>Выплата из лимитов директоров филиалов = 1</code>.
+    Четыре взаимоисключающих класса среди соглашений; деньги — Σ по классам
+    (Иные затраты / ПереплатаЕМР+ / СогласованнаяСуммаКВ).</p>
+    <h3>Доли классов</h3>
+    {shares_html}
+    <h3>Деньги по классам</h3>
+    <p class="muted">Иные затраты — факт доплаты по каналу модели;
+    ПереплатаЕМР+ и СогласованнаяСуммаКВ — суммы правил. Рекомендация —
+    для справки (не критерий класса).</p>
+    {money_html}
+    {filial_html}
+  </div>
+"""
 
 
 def _agreement_funnel_section(result: MonitoringEffectResult) -> str:
@@ -1597,12 +1991,33 @@ def build_monitoring_html(
     {_formula(
         "Ключевой ITT estimand",
         [
-            "<b>effect(H)</b> = Σ<sub>f</sub> w<sub>f</sub> × "
-            "[mean(Y<sub>H</sub>|control,f) − mean(Y<sub>H</sub>|model,f)]",
-            "w<sub>f</sub> = N<sub>eligible,f</sub> / Σ<sub>f</sub>N<sub>eligible,f</sub>",
+            (
+                "<b>effect(H)</b> = Σ<sub>f</sub> w<sub>f</sub> × "
+                "[mean(Y<sub>H</sub>|control,f) − mean(Y<sub>H</sub>|model,f)]",
+                "Средняя экономия на одном инциденте: по каждому филиалу f берём "
+                "разность средних расходов ручейка и модели, затем складываем "
+                "с весами филиалов. Плюс = ручеек дороже модели = экономия.",
+            ),
+            (
+                "w<sub>f</sub> = N<sub>eligible,f</sub> / Σ<sub>f</sub>N<sub>eligible,f</sub>",
+                "Вес филиала — доля его eligible-инцидентов (control + model) "
+                "во всей ITT-выборке. Крупный филиал влияет на итог сильнее.",
+            ),
         ],
-        "Положительное значение означает меньшие ожидаемые расходы в model. "
-        "Филиал — страта исходной рандомизации.",
+        "Филиал — страта исходной рандомизации: сравниваем model и control "
+        "внутри филиала, а не глобальными средними.",
+        symbols=[
+            ("H", "горизонт исхода; в отчёте H = ult → исход Yult"),
+            ("Y<sub>H</sub>", "расход на инцидент на горизонте H "
+             "(для ult — Yult = касса + факт ПСР + NPV остатка хвоста)"),
+            ("f", "филиал (страта)"),
+            ("control", "ручеек: Result = −100"),
+            ("model", "поток модели: Result ∈ {0, 1}"),
+            ("mean(Y<sub>H</sub>|·,f)", "средний расход в группе внутри филиала f"),
+            ("N<sub>eligible,f</sub>", "число eligible-инцидентов филиала f"),
+            ("w<sub>f</sub>", "вес филиала в итоговой сумме"),
+            ("effect(H)", "стратифицированный ITT, ₽ на инцидент"),
+        ],
     )}
     {_warnings(result.warnings)}
   </div>
@@ -1679,19 +2094,44 @@ def build_monitoring_html(
 
   {_agreement_funnel_section(result)}
 
+  {_agreement_instruments_section(result)}
+
   <h2>5. Терминальные ретро-коэффициенты</h2>
   <div class="card">
     {_formula(
         "Коэффициенты из финального incident-level df",
         [
-            "<b>p<sub>U,g</sub></b> = count(TARGET_FREQ_AMOUNT &gt; 0) / count(rows)",
-            "<b>k<sub>U,g</sub></b> = Σ TARGET_FREQ_AMOUNT / Σ RECOVEREDMAINDEBT_LAST_INST_SUM "
-            "на положительных строках с OD &gt; 0",
-            "<b>m<sub>U,g</sub></b> = mean(TARGET_FREQ_AMOUNT | TARGET_FREQ_AMOUNT &gt; 0)",
-            "<b>e<sub>U,g</sub></b> = p(FU|PSR)×100 000 + p(court|PSR)×15 000",
+            (
+                "<b>p<sub>U,g</sub></b> = count(TARGET_FREQ_AMOUNT &gt; 0) / count(rows)",
+                "Доля ретро-строк группы g, где вообще был ПСР "
+                "(претензия / ФУ / суд по сумме &gt; 0).",
+            ),
+            (
+                "<b>k<sub>U,g</sub></b> = Σ TARGET_FREQ_AMOUNT / Σ RECOVEREDMAINDEBT_LAST_INST_SUM "
+                "на положительных строках с OD &gt; 0",
+                "Во сколько раз сумма ПСР относится к основному долгу "
+                "на строках, где ПСР уже был и OD известен.",
+            ),
+            (
+                "<b>m<sub>U,g</sub></b> = mean(TARGET_FREQ_AMOUNT | TARGET_FREQ_AMOUNT &gt; 0)",
+                "Средний размер положительного ПСР, ₽ — запасной вариант, "
+                "если у инцидента нет OD.",
+            ),
+            (
+                "<b>e<sub>U,g</sub></b> = p(FU|PSR)×100 000 + p(court|PSR)×15 000",
+                "Ожидаемые оргвзносы ФУ/суда на один случай с ПСР "
+                "(вероятности из ретро × фиксированные тарифы).",
+            ),
         ],
-        "U = ultimate/терминальный итог. g ∈ {pilot, nonpilot}. "
-        "Основной расчёт использует pilot.",
+        "Основной расчёт использует pilot; nonpilot — для сетевого масштаба.",
+        symbols=[
+            ("U", "ultimate / терминальный итог на горизонте жизни убытка"),
+            ("g", "группа ретро: pilot или nonpilot"),
+            ("TARGET_FREQ_AMOUNT", "сумма ПСР в ретро-данных"),
+            ("RECOVEREDMAINDEBT_LAST_INST_SUM", "OD в ретро (для калибровки k_U)"),
+            ("p(FU|PSR)", "доля случаев с обращением к ФУ среди строк с ПСР&gt;0"),
+            ("p(court|PSR)", "доля судов среди строк с ПСР&gt;0"),
+        ],
     )}
     {_table(
       result.priors.table(),
@@ -1727,24 +2167,65 @@ def build_monitoring_html(
     {_formula(
         "Построение исхода каждого убытка i",
         [
-            "<b>paid_to_date<sub>i</sub></b> = numeric(СуммаПлатежа<sub>i</sub>, missing=0)",
-            "<b>base<sub>i</sub></b> = k<sub>U,pilot</sub>×OD<sub>i</sub>, если OD&gt;0; "
-            "иначе m<sub>U,pilot</sub>",
-            "<b>expected_open_PSR<sub>i</sub></b> = p<sub>U,pilot</sub>×"
-            "(base<sub>i</sub> + e<sub>U,pilot</sub>)",
-            "<b>observed_PSR<sub>i</sub></b> = претензия<sub>i</sub> + "
-            "ФУ<sub>i</sub> + суд<sub>i</sub>",
-            "<b>remaining<sub>i</sub></b> = max(q<sub>i</sub>×expected_open_PSR<sub>i</sub> "
-            "− observed_PSR<sub>i</sub>, 0)",
-            "<b>remaining_days<sub>i</sub></b> = max(1095 − age<sub>i</sub>, 0)",
-            "<b>midpoint_days<sub>i</sub></b> = remaining_days<sub>i</sub> / 2",
-            "<b>Yult<sub>i</sub></b> = paid_to_date<sub>i</sub> + "
-            "observed_PSR<sub>i</sub> + "
-            "remaining<sub>i</sub> / (1+r)<sup>midpoint_days<sub>i</sub>/365</sup>",
+            (
+                "<b>paid_to_date<sub>i</sub></b> = numeric(СуммаПлатежа<sub>i</sub>, missing=0)",
+                "Уже выплаченная касса по первичным убыткам инцидента "
+                "(пропуски считаем нулём).",
+            ),
+            (
+                "<b>base<sub>i</sub></b> = k<sub>U,pilot</sub>×OD<sub>i</sub>, если OD&gt;0; "
+                "иначе m<sub>U,pilot</sub>",
+                "База ожидаемого ПСР: от заявленного ОД через k_U, "
+                "либо средний положительный ПСР из ретро, если ОД нет.",
+            ),
+            (
+                "<b>expected_open_PSR<sub>i</sub></b> = p<sub>U,pilot</sub>×"
+                "(base<sub>i</sub> + e<sub>U,pilot</sub>)",
+                "Сколько ПСР (с оргвзносами) ожидали бы «с нуля» по ретро-пилоту.",
+            ),
+            (
+                "<b>observed_PSR<sub>i</sub></b> = претензия<sub>i</sub> + "
+                "ФУ<sub>i</sub> + суд<sub>i</sub>",
+                "Уже выплаченный ПСР по всем убыткам инцидента "
+                "(не только по строке «первичный»).",
+            ),
+            (
+                "<b>remaining<sub>i</sub></b> = max(q<sub>i</sub>×expected_open_PSR<sub>i</sub> "
+                "− observed_PSR<sub>i</sub>, 0)",
+                "Ещё не случившийся хвост: от ретро берём долю q, "
+                "вычитаем уже выплаченное; ниже нуля не опускаем.",
+            ),
+            (
+                "<b>remaining_days<sub>i</sub></b> = max(1095 − age<sub>i</sub>, 0)",
+                "Сколько дней горизонта жизни (~3 года) ещё осталось "
+                "с даты t0 до t_calc.",
+            ),
+            (
+                "<b>midpoint_days<sub>i</sub></b> = remaining_days<sub>i</sub> / 2",
+                "Упрощение: будущий хвост считаем поступившим "
+                "в середине оставшегося окна.",
+            ),
+            (
+                "<b>Yult<sub>i</sub></b> = paid_to_date<sub>i</sub> + "
+                "observed_PSR<sub>i</sub> + "
+                "remaining<sub>i</sub> / (1+r)<sup>midpoint_days<sub>i</sub>/365</sup>",
+                "Итоговый расход инцидента: касса + факт ПСР + "
+                "дисконтированный остаток хвоста.",
+            ),
         ],
-        f"OD = СуммаОсновногоДолгаЗаявлено; q=1 без соглашения и "
-        f"q={result.residual_share:.0%} при соглашении; r={result.discount_rate:.0%}; "
-        "age=(t_calc−t0) в днях. Lifetime NPV-окно — 1095 дней (~3 года).",
+        f"Lifetime NPV-окно — 1095 дней (~3 года). "
+        f"В этом прогоне: q при соглашении = {result.residual_share:.0%}, "
+        f"r = {result.discount_rate:.0%}.",
+        symbols=[
+            ("i", "инцидент (единица ITT после схлопа убытков)"),
+            ("OD", "СуммаОсновногоДолгаЗаявлено"),
+            ("q<sub>i</sub>", f"1 без соглашения; {result.residual_share:.0%} при соглашении "
+             "(режет только ещё не выплаченный хвост)"),
+            ("r", f"годовая ставка дисконта ({result.discount_rate:.0%})"),
+            ("age<sub>i</sub>", "t_calc − t0, дни"),
+            ("t0", "дата вызова модели или ДатаЗаявления"),
+            ("NPV", "приведение будущих рублей хвоста к сегодняшним"),
+        ],
     )}
     <h3>Распределения control vs model</h3>
     <p class="muted">Плотности по ключевым полям расчёта финэффекта.</p>
@@ -1914,14 +2395,31 @@ def build_monitoring_html(
     {_formula(
         "95% CI: двухчастный bootstrap",
         [
-            "1) ретро incident-level строки resample → пересчёт p_U, k_U, m_U, e_U;",
-            "2) текущая витрина resample кластерами по НомерИнцидент → пересчёт Y и ITT;",
-            "CI = 2.5% и 97.5% квантили bootstrap effect(H).",
+            (
+                "1) ретро incident-level строки resample → пересчёт p_U, k_U, m_U, e_U;",
+                "Случайно пересобираем ретро-строки (с возвращением) и заново "
+                "считаем терминальные коэффициенты — учитываем их неопределённость.",
+            ),
+            (
+                "2) текущая витрина resample кластерами по НомерИнцидент → пересчёт Y и ITT;",
+                "Пересобираем текущие инциденты целиком (кластер = инцидент), "
+                "пересчитываем Yult и стратифицированный effect(H).",
+            ),
+            (
+                "CI = 2.5% и 97.5% квантили bootstrap effect(H).",
+                "Интервал, в котором лежит 95% пересчитанных эффектов; "
+                "если содержит 0 — экономия статистически не подтверждена.",
+            ),
         ],
         f"ITT: запрошено {result.bootstrap_iterations} итераций. "
         f"Сценарий 100% compliance: "
         f"{result.bootstrap_compliance_iterations} итераций. "
         "Bootstrap параллелится (bootstrap_n_jobs); прогресс — в tqdm.",
+        symbols=[
+            ("bootstrap", "многократный пересчёт на случайных выборках с возвращением"),
+            ("effect(H)", "тот же стратифицированный ITT, что в §1"),
+            ("CI", "доверительный интервал (здесь — процентильный 95%)"),
+        ],
     )}
   </div>
 
@@ -2077,13 +2575,34 @@ def build_monitoring_html(
     {_formula(
         "Контракт сценария",
         [
-            "<b>forced_extra<sub>i</sub></b> = рекомендованная доплата, если "
-            "model, result=1 и Выплата по модели≠1; иначе 0",
-            "<b>paid_100<sub>i</sub></b> = СуммаПлатежа<sub>i</sub> + forced_extra<sub>i</sub>",
-            "для всех model/result=1: q<sub>i</sub>=7%; затем Yult_100",
-            "<b>effect_100</b> = stratified mean(control actual) − mean(model scenario)",
+            (
+                "<b>forced_extra<sub>i</sub></b> = рекомендованная доплата, если "
+                "model, result=1 и Выплата по модели≠1; иначе 0",
+                "Доплата, которую «доначисляем» в сценарии тем, "
+                "кому модель рекомендовала платить, а по факту не выплатили.",
+            ),
+            (
+                "<b>paid_100<sub>i</sub></b> = СуммаПлатежа<sub>i</sub> + forced_extra<sub>i</sub>",
+                "Касса в сценарии 100% исполнения: факт + вынужденная доплата.",
+            ),
+            (
+                "для всех model/result=1: q<sub>i</sub>=7%; затем Yult_100",
+                "Всем рисковым model-инцидентам ставим остаток ПСР как при соглашении "
+                "и считаем исход Yult_100 по той же схеме, что Yult.",
+            ),
+            (
+                "<b>effect_100</b> = stratified mean(control actual) − mean(model scenario)",
+                "Сценарный ITT: факт ручейка минус сценарий модели, "
+                "снова со стратификацией по филиалу.",
+            ),
         ],
         "Сценарная механика, не LATE/IV. CI — отдельный bootstrap на Yult_100.",
+        symbols=[
+            ("Yult_100", "Yult в сценарии «всегда исполняли рекомендацию»"),
+            ("effect_100", "ITT этого сценария, ₽/инцидент"),
+            ("result=1", "модель ответила «есть ПСР» / риск"),
+            ("Выплата по модели≠1", "рекомендацию фактически не исполнили"),
+        ],
     )}
     {_table(
       result.compliance_b,
@@ -2138,17 +2657,52 @@ def build_monitoring_html(
     {_formula(
         "Экстраполяция потока",
         [
-            "<b>s<sub>m,P</sub></b> = средняя доля месяца m в годовом pilot-потоке ретро",
-            "<b>coverage<sub>m</sub></b> = доля дней месяца m, попавших в окно мониторинга",
-            "<b>seasonal_exposure</b> = Σ<sub>m</sub> coverage<sub>m</sub>×s<sub>m,P</sub>",
-            "<b>N_obs</b> = число eligible-убытков current (model+control)",
-            "<b>N_pilot_eligible_year</b> = N_obs / seasonal_exposure",
-            "<b>network_multiplier</b> = 1 + volume_ratio_NP×risk_ratio_NP",
-            "<b>annual_network_full</b> = effect_per_case × N_pilot_eligible_year × network_multiplier",
-            "<b>annual CI</b> = [ci_low, ci_high] × N_pilot_eligible_year × network_multiplier",
+            (
+                "<b>s<sub>m,P</sub></b> = средняя доля месяца m в годовом pilot-потоке ретро",
+                "Какую долю годового потока пилота обычно даёт месяц m "
+                "(сезонность по ретро).",
+            ),
+            (
+                "<b>coverage<sub>m</sub></b> = доля дней месяца m, попавших в окно мониторинга",
+                "Насколько месяц m уже «закрыт» текущим окном пилота "
+                "(0…1).",
+            ),
+            (
+                "<b>seasonal_exposure</b> = Σ<sub>m</sub> coverage<sub>m</sub>×s<sub>m,P</sub>",
+                "Какую долю типичного года мы уже увидели с учётом сезонности.",
+            ),
+            (
+                "<b>N_obs</b> = число eligible-убытков current (model+control)",
+                "Сколько eligible-инцидентов набралось в окне мониторинга.",
+            ),
+            (
+                "<b>N_pilot_eligible_year</b> = N_obs / seasonal_exposure",
+                "Оценка годового потока eligible на тех же пилотных филиалах.",
+            ),
+            (
+                "<b>network_multiplier</b> = 1 + volume_ratio_NP×risk_ratio_NP",
+                "Во сколько раз больше станет эффект, если тот же ITT на инцидент "
+                "перенести на nonpilot (объём × относительная тяжесть ПСР).",
+            ),
+            (
+                "<b>annual_network_full</b> = effect_per_case × N_pilot_eligible_year × network_multiplier",
+                "Годовая экономия сети: ITT на кейс × годовой поток пилота × множитель сети.",
+            ),
+            (
+                "<b>annual CI</b> = [ci_low, ci_high] × N_pilot_eligible_year × network_multiplier",
+                "Тот же масштаб применяем к границам bootstrap CI с уровня инцидента.",
+            ),
         ],
         "Горизонт Yult не умножается на 365/30: масштабируется число новых убытков. "
         "CI годового эффекта — линейный перенос bootstrap CI с уровня убытка.",
+        symbols=[
+            ("m", "месяц года (1…12)"),
+            ("P", "pilot (ретро/мониторинг пилотных филиалов)"),
+            ("NP", "nonpilot (остальные филиалы сети)"),
+            ("effect_per_case", "ITT Yult на один инцидент, ₽"),
+            ("volume_ratio_NP", "отношение объёма nonpilot к pilot"),
+            ("risk_ratio_NP", "отношение средней тяжести ПСР nonpilot к pilot"),
+        ],
     )}
     <h3>Зачем сезонность и откуда берутся числа</h3>
     <p>Нужно ответить: «в окне набралось N_obs убытков за неполный год;
@@ -2196,101 +2750,7 @@ def build_monitoring_html(
         "Одна строка на календарный месяц.",
       ],
     )}
-    <h3>Сценарии годового эффекта</h3>
-    {_table(
-      result.annual_summary,
-      columns={
-        "horizon": _c("H", "Горизонт"),
-        "effect_per_case": _c("ITT", "ITT на инцидент, ₽"),
-        "effect_100_compliance": _c(
-            "ITT_100",
-            "Сценарный ITT 100% compliance на инцидент, ₽",
-        ),
-        "seasonal_exposure": _c(
-            "exposure",
-            "Доля типичного года, уже увиденная в окне",
-            "Σ_m coverage_m × s_m,P",
-        ),
-        "N_pilot_eligible_year": _c(
-            "N_year",
-            "Ожидаемый годовой поток eligible пилота",
-            "N_obs / seasonal_exposure",
-        ),
-        "N_pilot_model_year_current": _c(
-            "N_model cur",
-            "Годовой поток model при текущей доле model",
-        ),
-        "N_pilot_model_year_full": _c(
-            "N_model весь",
-            "Годовой поток model, если весь eligible идёт в модель",
-            "= N_pilot_eligible_year",
-        ),
-        "volume_ratio_nonpilot": _c(
-            "vol_NP",
-            "Годовой поток nonpilot / pilot (ретро)",
-        ),
-        "risk_ratio_nonpilot": _c(
-            "risk_NP",
-            "Средний ПСР nonpilot / pilot (ретро)",
-        ),
-        "network_multiplier": _c(
-            "net mult",
-            "Множитель сети",
-            "1 + volume_ratio_nonpilot × risk_ratio_nonpilot",
-        ),
-        "annual_pilot_current": _c(
-            "год пилот cur",
-            "Годовой эффект пилота при текущей доле model, ₽/год",
-            "effect_per_case × N_pilot_model_year_current",
-        ),
-        "annual_pilot_full": _c(
-            "год пилот весь",
-            "Годовой эффект пилота при всём потоке в модель, ₽/год",
-            "effect_per_case × N_pilot_eligible_year",
-        ),
-        "annual_pilot_full_ci_low": _c(
-            "год пилот CI↓",
-            "Нижняя граница CI годового эффекта пилота, ₽/год",
-            "ci_low × N_pilot_eligible_year",
-        ),
-        "annual_pilot_full_ci_high": _c(
-            "год пилот CI↑",
-            "Верхняя граница CI годового эффекта пилота, ₽/год",
-            "ci_high × N_pilot_eligible_year",
-        ),
-        "effect_per_case_nonpilot": _c(
-            "ITT_NP",
-            "Эффект на инцидент × risk_ratio, ₽",
-            "effect_per_case × risk_ratio_nonpilot",
-        ),
-        "annual_network_full": _c(
-            "год сеть",
-            "Годовой эффект сети при всём потоке в модель, ₽/год",
-            "annual_pilot_full × network_multiplier",
-        ),
-        "annual_network_full_ci_low": _c(
-            "год сеть CI↓",
-            "Нижняя граница CI годового эффекта сети, ₽/год",
-            "ci_low × N_pilot_eligible_year × network_multiplier",
-        ),
-        "annual_network_full_ci_high": _c(
-            "год сеть CI↑",
-            "Верхняя граница CI годового эффекта сети, ₽/год",
-            "ci_high × N_pilot_eligible_year × network_multiplier",
-        ),
-        "annual_network_full_compliance": _c(
-            "год сеть 100%",
-            "Годовой эффект сети при 100% compliance, ₽/год",
-            "effect_100_compliance × N_pilot_eligible_year × network_multiplier",
-        ),
-      },
-      rows=[
-        "Одна строка на горизонт ult.",
-      ],
-      notes=[
-        "Весь поток в модель = все eligible идут в model-поток; это сценарий, не факт.",
-      ],
-    )}
+    {_annual_scenarios_section(result)}
   </div>
 
   <h2>12. Ограничения</h2>

@@ -42,6 +42,17 @@ COURT_FEE_DEFAULT = 15_000.0
 RETRO_AS_OF_DEFAULT = "2025-06-30"
 RESULT_OUT_OF_MODEL = -100
 RESULT_ELIGIBLE = (0, 1, RESULT_OUT_OF_MODEL)
+# Классы рычагов доплаты при соглашении (взаимоисключающие).
+INSTRUMENT_MODEL = "модель"
+INSTRUMENT_MODEL_RULES = "модель + правила"
+INSTRUMENT_RULES = "правила"
+INSTRUMENT_NONE = "без инструментов"
+INSTRUMENT_CLASS_ORDER: tuple[str, ...] = (
+    INSTRUMENT_MODEL,
+    INSTRUMENT_MODEL_RULES,
+    INSTRUMENT_RULES,
+    INSTRUMENT_NONE,
+)
 WRITEOFF_REFUND_NEEDLES = ("списан",)
 # NPV-окно для lifetime-хвоста ПСР (калибровка ultimate + дисконт до ~3 лет)
 ULTIMATE_HORIZON_DAYS = 1095
@@ -184,6 +195,9 @@ class MonitoringEffectResult:
     sample_size_guidance: pd.DataFrame
     agreement_funnel: pd.DataFrame
     agreement_funnel_money: pd.DataFrame
+    agreement_instruments: pd.DataFrame
+    agreement_instruments_money: pd.DataFrame
+    agreement_instruments_by_filial: pd.DataFrame
     contract: dict[str, str]
     t_calc: pd.Timestamp
     discount_rate: float
@@ -931,6 +945,8 @@ def _prepare_monitoring_contract(
             "Нет колонки «Иные затраты» — Σ выплаты по модели в описании = 0."
         )
     work["_agreement"] = agreement_mask(work)
+    work, instrument_warnings = _attach_agreement_instruments(work)
+    warnings.extend(instrument_warnings)
     call_col = resolve_column(work, "model_call")
     if call_col is not None:
         # после схлопа 0/1 может стать суммой по убыткам — любой вызов = True
@@ -1012,6 +1028,12 @@ def _prepare_monitoring_contract(
         "payout_by_model": payout_col,
         "model_payout_amount": other_costs_col or "Иные затраты",
         "agreement": resolve_column(df, "agreement") or "agreement_mask",
+        "emr20": resolve_column(work, "emr20") or "",
+        "emr20_overpay": resolve_column(work, "emr20_overpay") or "",
+        "director_limit": resolve_column(work, "director_limit") or "",
+        "director_limit_amount": (
+            resolve_column(work, "director_limit_amount") or ""
+        ),
         "t0_primary": call_date_col,
         "t0_fallback": application_col,
         "psr_pretension": psr_columns["pretension"],
@@ -1181,7 +1203,7 @@ def _compliance_a(frame: pd.DataFrame) -> pd.DataFrame:
             {
                 "horizon": "ult",
                 "compliance": status,
-                "n": n,
+        "n": n,
                 "agreement_share": float(part["_agreement"].mean() * 100) if n else np.nan,
                 "mean_cost": float(part["Yult"].mean()),
                 "descriptive_only": True,
@@ -1434,6 +1456,210 @@ def _money_cell(part: pd.DataFrame) -> dict[str, float]:
         "sum_recommended_used": float(used.sum()),
         "sum_over_recommended": float(over.sum()),
     }
+
+
+def _instrument_class_label(model_rec: bool, rules: bool) -> str:
+    """Взаимоисключающий класс рычагов доплаты."""
+    if model_rec and rules:
+        return INSTRUMENT_MODEL_RULES
+    if model_rec:
+        return INSTRUMENT_MODEL
+    if rules:
+        return INSTRUMENT_RULES
+    return INSTRUMENT_NONE
+
+
+def _attach_agreement_instruments(
+    frame: pd.DataFrame,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Флаги/суммы ЕМР+ и лимита директора + класс на инциденте.
+
+    После схлопа 0/1 могут стать суммой по убыткам → gt(0) ≡ max.
+    Суммы уже просуммированы схлопом.
+    """
+    work = frame.copy()
+    warnings: list[str] = []
+    emr_col = resolve_column(work, "emr20")
+    emr_amt_col = resolve_column(work, "emr20_overpay")
+    dir_col = resolve_column(work, "director_limit")
+    dir_amt_col = resolve_column(work, "director_limit_amount")
+
+    missing_flags: list[str] = []
+    if emr_col is not None:
+        # после схлопа 0/1 мог стать суммой → любой >0 = был рычаг
+        work["_rules_emr"] = _to_numeric(work[emr_col]).fillna(0.0).gt(0)
+    else:
+        work["_rules_emr"] = False
+        missing_flags.append("ЕМР+20")
+    if dir_col is not None:
+        work["_rules_director"] = _to_numeric(work[dir_col]).fillna(0.0).gt(0)
+    else:
+        work["_rules_director"] = False
+        missing_flags.append("Выплата из лимитов директоров филиалов")
+    if missing_flags:
+        warnings.append(
+            "Нет колонок рычагов доплаты ("
+            + ", ".join(missing_flags)
+            + ") — соответствующая часть rules = 0."
+        )
+
+    work["_rules"] = work["_rules_emr"] | work["_rules_director"]
+    if emr_amt_col is not None:
+        work["_emr_overpay"] = (
+            _to_numeric(work[emr_amt_col]).fillna(0.0).clip(lower=0.0)
+        )
+    else:
+        work["_emr_overpay"] = 0.0
+        if emr_col is not None:
+            warnings.append(
+                "Нет колонки ПереплатаЕМР+(безКВ) — Σ переплаты ЕМР в классах = 0."
+            )
+    if dir_amt_col is not None:
+        work["_director_limit_amount"] = (
+            _to_numeric(work[dir_amt_col]).fillna(0.0).clip(lower=0.0)
+        )
+    else:
+        work["_director_limit_amount"] = 0.0
+        if dir_col is not None:
+            warnings.append(
+                "Нет колонки СогласованнаяСуммаКВ — Σ лимита директора в классах = 0."
+            )
+    work["_model_rec"] = work["_result"].eq(1)
+    work["_instrument_class"] = [
+        _instrument_class_label(bool(m), bool(r))
+        for m, r in zip(
+            work["_model_rec"].tolist(),
+            work["_rules"].tolist(),
+            strict=True,
+        )
+    ]
+    return work, warnings
+
+
+def _agreement_instrument_tables(
+    frame: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Соглашения × класс рычага: доли (overall / segment) и деньги.
+
+    База — только инциденты с соглашением. Классы взаимоисключающие.
+    """
+    empty = pd.DataFrame()
+    if "_instrument_class" not in frame.columns:
+        return empty, empty, empty
+
+    agr = frame.loc[frame["_agreement"].fillna(False).astype(bool)].copy()
+    if agr.empty:
+        return empty, empty, empty
+
+    n_agr = len(agr)
+
+    def _share_rows(
+        part: pd.DataFrame,
+        *,
+        segment: str,
+        base_n: int,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for cls in INSTRUMENT_CLASS_ORDER:
+            mask = part["_instrument_class"].eq(cls)
+            n = int(mask.sum())
+            rows.append(
+                {
+                    "segment": segment,
+                    "instrument": cls,
+                    "n": n,
+                    "share_of_agreements_pct": (
+                        float(100.0 * n / base_n) if base_n else np.nan
+                    ),
+                    "n_model_rec": int(part.loc[mask, "_model_rec"].sum())
+                    if n
+                    else 0,
+                    "n_rules": int(part.loc[mask, "_rules"].sum()) if n else 0,
+                    "n_with_model_payout": int(
+                        part.loc[mask, "_model_payout_amount"].gt(0).sum()
+                    )
+                    if n and "_model_payout_amount" in part.columns
+                    else 0,
+                }
+            )
+        return rows
+
+    share_rows = _share_rows(agr, segment="all", base_n=n_agr)
+    for seg in ("control", "model"):
+        part = agr.loc[agr["_group"].eq(seg)]
+        share_rows.extend(
+            _share_rows(part, segment=seg, base_n=len(part) if len(part) else 0)
+        )
+    shares = pd.DataFrame(share_rows)
+
+    money_rows: list[dict[str, Any]] = []
+    for seg in ("all", "control", "model"):
+        part = agr if seg == "all" else agr.loc[agr["_group"].eq(seg)]
+        for cls in INSTRUMENT_CLASS_ORDER:
+            sub = part.loc[part["_instrument_class"].eq(cls)]
+            money_rows.append(
+                {
+                    "segment": seg,
+                    "instrument": cls,
+                    "n": len(sub),
+                    "sum_recommended": float(
+                        sub["_recommended_extra"].sum()
+                    )
+                    if len(sub)
+                    else 0.0,
+                    "sum_model_payout": float(
+                        sub["_model_payout_amount"].sum()
+                    )
+                    if len(sub)
+                    else 0.0,
+                    "sum_emr_overpay": float(sub["_emr_overpay"].sum())
+                    if len(sub)
+                    else 0.0,
+                    "sum_director_limit": float(
+                        sub["_director_limit_amount"].sum()
+                    )
+                    if len(sub)
+                    else 0.0,
+                }
+            )
+    money = pd.DataFrame(money_rows)
+
+    filial_rows: list[dict[str, Any]] = []
+    for filial, fpart in agr.groupby("_filial", dropna=False):
+        for seg in ("control", "model"):
+            spart = fpart.loc[fpart["_group"].eq(seg)]
+            n_seg = len(spart)
+            for cls in INSTRUMENT_CLASS_ORDER:
+                mask = spart["_instrument_class"].eq(cls)
+                n = int(mask.sum())
+                sub = spart.loc[mask]
+                filial_rows.append(
+                    {
+                        "filial": str(filial),
+                        "segment": seg,
+                        "instrument": cls,
+                        "n": n,
+                        "n_agreements_segment": n_seg,
+                        "share_of_agreements_pct": (
+                            float(100.0 * n / n_seg) if n_seg else np.nan
+                        ),
+                        "sum_model_payout": float(
+                            sub["_model_payout_amount"].sum()
+                        )
+                        if n
+                        else 0.0,
+                        "sum_emr_overpay": float(sub["_emr_overpay"].sum())
+                        if n
+                        else 0.0,
+                        "sum_director_limit": float(
+                            sub["_director_limit_amount"].sum()
+                        )
+                        if n
+                        else 0.0,
+                    }
+                )
+    filial = pd.DataFrame(filial_rows)
+    return shares, money, filial
 
 
 def _agreement_funnel_tables(
@@ -2018,6 +2244,11 @@ def estimate_monitoring_effect(
     payment_descriptives = _payment_descriptives(current)
     sample_size_guidance = _sample_size_guidance(effects)
     agreement_funnel, agreement_funnel_money = _agreement_funnel_tables(current)
+    (
+        agreement_instruments,
+        agreement_instruments_money,
+        agreement_instruments_by_filial,
+    ) = _agreement_instrument_tables(current)
     current_100 = _add_outcomes(
         current,
         priors.pilot,
@@ -2121,6 +2352,9 @@ def estimate_monitoring_effect(
         sample_size_guidance=sample_size_guidance,
         agreement_funnel=agreement_funnel,
         agreement_funnel_money=agreement_funnel_money,
+        agreement_instruments=agreement_instruments,
+        agreement_instruments_money=agreement_instruments_money,
+        agreement_instruments_by_filial=agreement_instruments_by_filial,
         contract=contract,
         t_calc=calc_date,
         discount_rate=discount_rate,
