@@ -47,11 +47,17 @@ INSTRUMENT_MODEL = "модель"
 INSTRUMENT_MODEL_RULES = "модель + правила"
 INSTRUMENT_RULES = "правила"
 INSTRUMENT_NONE = "без инструментов"
+INSTRUMENT_NO_AGREEMENT = "без соглашения"
 INSTRUMENT_CLASS_ORDER: tuple[str, ...] = (
     INSTRUMENT_MODEL,
     INSTRUMENT_MODEL_RULES,
     INSTRUMENT_RULES,
     INSTRUMENT_NONE,
+)
+# Доли от всех инцидентов: классы соглашений + «без соглашения».
+INSTRUMENT_SHARE_ORDER: tuple[str, ...] = (
+    *INSTRUMENT_CLASS_ORDER,
+    INSTRUMENT_NO_AGREEMENT,
 )
 WRITEOFF_REFUND_NEEDLES = ("списан",)
 # NPV-окно для lifetime-хвоста ПСР (калибровка ultimate + дисконт до ~3 лет)
@@ -1539,55 +1545,63 @@ def _attach_agreement_instruments(
 def _agreement_instrument_tables(
     frame: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Соглашения × класс рычага: доли (overall / segment) и деньги.
+    """Соглашения × класс рычага: доли от всех инцидентов и деньги.
 
-    База — только инциденты с соглашением. Классы взаимоисключающие.
+    Доли: n класса / N всех инцидентов сегмента (с соглашениями и без).
+    Строка «без соглашения» дополняет до 100%. Деньги — только по соглашениям.
     """
     empty = pd.DataFrame()
     if "_instrument_class" not in frame.columns:
         return empty, empty, empty
 
-    agr = frame.loc[frame["_agreement"].fillna(False).astype(bool)].copy()
-    if agr.empty:
+    work = frame.copy()
+    work["_is_agr"] = work["_agreement"].fillna(False).astype(bool)
+    if not bool(work["_is_agr"].any()):
         return empty, empty, empty
 
-    n_agr = len(agr)
+    def _class_mask(part: pd.DataFrame, cls: str) -> pd.Series:
+        if cls == INSTRUMENT_NO_AGREEMENT:
+            return ~part["_is_agr"]
+        return part["_is_agr"] & part["_instrument_class"].eq(cls)
 
     def _share_rows(
         part: pd.DataFrame,
         *,
         segment: str,
-        base_n: int,
     ) -> list[dict[str, Any]]:
+        base_n = len(part)
         rows: list[dict[str, Any]] = []
-        for cls in INSTRUMENT_CLASS_ORDER:
-            mask = part["_instrument_class"].eq(cls)
+        for cls in INSTRUMENT_SHARE_ORDER:
+            mask = _class_mask(part, cls)
             n = int(mask.sum())
             rows.append(
                 {
                     "segment": segment,
                     "instrument": cls,
                     "n": n,
-                    "share_of_agreements_pct": (
+                    "n_incidents": base_n,
+                    "share_of_incidents_pct": (
                         float(100.0 * n / base_n) if base_n else np.nan
                     ),
                     "n_with_model_payout": int(
                         part.loc[mask, "_model_payout_amount"].gt(0).sum()
                     )
-                    if n and "_model_payout_amount" in part.columns
+                    if n
+                    and cls != INSTRUMENT_NO_AGREEMENT
+                    and "_model_payout_amount" in part.columns
                     else 0,
                 }
             )
         return rows
 
-    share_rows = _share_rows(agr, segment="all", base_n=n_agr)
+    share_rows = _share_rows(work, segment="all")
     for seg in ("control", "model"):
-        part = agr.loc[agr["_group"].eq(seg)]
         share_rows.extend(
-            _share_rows(part, segment=seg, base_n=len(part) if len(part) else 0)
+            _share_rows(work.loc[work["_group"].eq(seg)], segment=seg)
         )
     shares = pd.DataFrame(share_rows)
 
+    agr = work.loc[work["_is_agr"]]
     money_rows: list[dict[str, Any]] = []
     for seg in ("all", "control", "model"):
         part = agr if seg == "all" else agr.loc[agr["_group"].eq(seg)]
@@ -1621,12 +1635,12 @@ def _agreement_instrument_tables(
     money = pd.DataFrame(money_rows)
 
     filial_rows: list[dict[str, Any]] = []
-    for filial, fpart in agr.groupby("_filial", dropna=False):
+    for filial, fpart in work.groupby("_filial", dropna=False):
         for seg in ("control", "model"):
             spart = fpart.loc[fpart["_group"].eq(seg)]
-            n_seg = len(spart)
-            for cls in INSTRUMENT_CLASS_ORDER:
-                mask = spart["_instrument_class"].eq(cls)
+            n_base = len(spart)
+            for cls in INSTRUMENT_SHARE_ORDER:
+                mask = _class_mask(spart, cls)
                 n = int(mask.sum())
                 sub = spart.loc[mask]
                 filial_rows.append(
@@ -1635,22 +1649,22 @@ def _agreement_instrument_tables(
                         "segment": seg,
                         "instrument": cls,
                         "n": n,
-                        "n_agreements_segment": n_seg,
-                        "share_of_agreements_pct": (
-                            float(100.0 * n / n_seg) if n_seg else np.nan
+                        "n_incidents": n_base,
+                        "share_of_incidents_pct": (
+                            float(100.0 * n / n_base) if n_base else np.nan
                         ),
                         "sum_model_payout": float(
                             sub["_model_payout_amount"].sum()
                         )
-                        if n
+                        if n and cls != INSTRUMENT_NO_AGREEMENT
                         else 0.0,
                         "sum_emr_overpay": float(sub["_emr_overpay"].sum())
-                        if n
+                        if n and cls != INSTRUMENT_NO_AGREEMENT
                         else 0.0,
                         "sum_director_limit": float(
                             sub["_director_limit_amount"].sum()
                         )
-                        if n
+                        if n and cls != INSTRUMENT_NO_AGREEMENT
                         else 0.0,
                     }
                 )
