@@ -1,6 +1,7 @@
 """Единая ITT-оценка финансового эффекта по витрине мониторинга."""
 from __future__ import annotations
 
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -204,6 +205,7 @@ class MonitoringEffectResult:
     agreement_instruments: pd.DataFrame
     agreement_instruments_money: pd.DataFrame
     agreement_instruments_by_filial: pd.DataFrame
+    agreement_instruments_attention: pd.DataFrame
     contract: dict[str, str]
     t_calc: pd.Timestamp
     discount_rate: float
@@ -212,6 +214,20 @@ class MonitoringEffectResult:
     bootstrap_compliance_iterations: int
     bootstrap_samples: pd.DataFrame = field(default_factory=pd.DataFrame)
     bootstrap_compliance_samples: pd.DataFrame = field(default_factory=pd.DataFrame)
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class AgreementInstrumentsResult:
+    """Быстрый расчёт соглашений × рычаги (без ITT / bootstrap / ретро)."""
+
+    frame: pd.DataFrame
+    agreement_instruments: pd.DataFrame
+    agreement_instruments_money: pd.DataFrame
+    agreement_instruments_by_filial: pd.DataFrame
+    agreement_instruments_attention: pd.DataFrame
+    contract: dict[str, str]
+    t_calc: pd.Timestamp
     warnings: list[str] = field(default_factory=list)
 
 
@@ -1542,9 +1558,101 @@ def _attach_agreement_instruments(
     return work, warnings
 
 
+def _sample_loss_ids(
+    sub: pd.DataFrame,
+    *,
+    k: int = 5,
+    seed: int,
+) -> str:
+    """До k случайных номеров убытков из ячейки (после схлопа — split «; »)."""
+    if sub.empty or "_loss" not in sub.columns:
+        return ""
+    ids: list[str] = []
+    for raw in sub["_loss"].astype("string").fillna(""):
+        for part in str(raw).split(";"):
+            tok = part.strip()
+            if tok and tok.casefold() != "nan":
+                ids.append(tok)
+    uniq = list(dict.fromkeys(ids))
+    if not uniq:
+        return ""
+    rng = np.random.default_rng(int(seed) % (2**32))
+    if len(uniq) <= k:
+        picked = uniq
+    else:
+        picked = [str(x) for x in rng.choice(uniq, size=k, replace=False)]
+    return "; ".join(picked)
+
+
+def _instrument_attention_filials(filial: pd.DataFrame) -> pd.DataFrame:
+    """Филиалы: доля «без инструментов» в model меньше, чем в control."""
+    if filial.empty:
+        return pd.DataFrame()
+    none = filial.loc[filial["instrument"].astype(str).eq(INSTRUMENT_NONE)].copy()
+    if none.empty:
+        return pd.DataFrame()
+    wide = none.pivot_table(
+        index="filial",
+        columns="segment",
+        values=["share_of_incidents_pct", "n", "n_incidents"],
+        aggfunc="first",
+    )
+    if wide.empty:
+        return pd.DataFrame()
+    # flatten MultiIndex columns
+    wide.columns = [f"{a}_{b}" for a, b in wide.columns]
+    for col in (
+        "share_of_incidents_pct_control",
+        "share_of_incidents_pct_model",
+        "n_control",
+        "n_model",
+        "n_incidents_control",
+        "n_incidents_model",
+    ):
+        if col not in wide.columns:
+            wide[col] = np.nan
+    out = wide.reset_index()
+    out["gap_pp"] = (
+        out["share_of_incidents_pct_control"]
+        - out["share_of_incidents_pct_model"]
+    )
+    # model меньше control → gap_pp > 0
+    out = out.loc[
+        out["share_of_incidents_pct_model"].notna()
+        & out["share_of_incidents_pct_control"].notna()
+        & (
+            out["share_of_incidents_pct_model"]
+            < out["share_of_incidents_pct_control"]
+        )
+    ].copy()
+    out = out.sort_values("gap_pp", ascending=False)
+    return out.rename(
+        columns={
+            "share_of_incidents_pct_control": "share_none_control_pct",
+            "share_of_incidents_pct_model": "share_none_model_pct",
+            "n_control": "n_none_control",
+            "n_model": "n_none_model",
+        }
+    )[
+        [
+            "filial",
+            "share_none_control_pct",
+            "share_none_model_pct",
+            "gap_pp",
+            "n_none_control",
+            "n_none_model",
+            "n_incidents_control",
+            "n_incidents_model",
+        ]
+    ]
+
+
 def _agreement_instrument_tables(
     frame: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    *,
+    sample_losses: int = 5,
+    sample_seed: int = 42,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Соглашения × класс рычага: доли от всех инцидентов и деньги.
 
     Доли: n класса / N всех инцидентов сегмента (с соглашениями и без).
@@ -1552,12 +1660,12 @@ def _agreement_instrument_tables(
     """
     empty = pd.DataFrame()
     if "_instrument_class" not in frame.columns:
-        return empty, empty, empty
+        return empty, empty, empty, empty
 
     work = frame.copy()
     work["_is_agr"] = work["_agreement"].fillna(False).astype(bool)
     if not bool(work["_is_agr"].any()):
-        return empty, empty, empty
+        return empty, empty, empty, empty
 
     def _class_mask(part: pd.DataFrame, cls: str) -> pd.Series:
         if cls == INSTRUMENT_NO_AGREEMENT:
@@ -1636,6 +1744,7 @@ def _agreement_instrument_tables(
 
     filial_rows: list[dict[str, Any]] = []
     for filial, fpart in work.groupby("_filial", dropna=False):
+        filial_s = str(filial)
         for seg in ("control", "model"):
             spart = fpart.loc[fpart["_group"].eq(seg)]
             n_base = len(spart)
@@ -1643,15 +1752,23 @@ def _agreement_instrument_tables(
                 mask = _class_mask(spart, cls)
                 n = int(mask.sum())
                 sub = spart.loc[mask]
+                cell_seed = sample_seed + zlib.adler32(
+                    f"{filial_s}|{seg}|{cls}".encode("utf-8")
+                )
                 filial_rows.append(
                     {
-                        "filial": str(filial),
+                        "filial": filial_s,
                         "segment": seg,
                         "instrument": cls,
                         "n": n,
                         "n_incidents": n_base,
                         "share_of_incidents_pct": (
                             float(100.0 * n / n_base) if n_base else np.nan
+                        ),
+                        "sample_losses": _sample_loss_ids(
+                            sub,
+                            k=sample_losses,
+                            seed=cell_seed,
                         ),
                         "sum_model_payout": float(
                             sub["_model_payout_amount"].sum()
@@ -1669,7 +1786,8 @@ def _agreement_instrument_tables(
                     }
                 )
     filial = pd.DataFrame(filial_rows)
-    return shares, money, filial
+    attention = _instrument_attention_filials(filial)
+    return shares, money, filial, attention
 
 
 def _agreement_funnel_tables(
@@ -2195,6 +2313,55 @@ def _data_quality(
     return pd.DataFrame(rows)
 
 
+def estimate_agreement_instruments(
+    monitoring_df: pd.DataFrame,
+    *,
+    t_calc: str | pd.Timestamp | None = None,
+) -> AgreementInstrumentsResult:
+    """Только соглашения × рычаги доплаты — без ретро, ITT и bootstrap.
+
+    Тот же контракт выборки, что у полного мониторинга (дедуп, схлоп,
+    pilot без Арх/Марийска, model/control), но без Yult и годовых сценариев.
+    """
+    current, contract, warnings = _prepare_monitoring_contract(
+        monitoring_df,
+        t_calc=t_calc,
+    )
+    (
+        agreement_instruments,
+        agreement_instruments_money,
+        agreement_instruments_by_filial,
+        agreement_instruments_attention,
+    ) = _agreement_instrument_tables(current)
+    if agreement_instruments.empty:
+        warnings.append(
+            "Нет строк для классов соглашений "
+            "(нет соглашений или пустая ITT-выборка)."
+        )
+    if not agreement_instruments_attention.empty:
+        warnings.append(
+            "Филиалы: доля «без инструментов» в model < control: "
+            + ", ".join(
+                agreement_instruments_attention["filial"].astype(str).tolist()
+            )
+        )
+    calc_date = (
+        pd.Timestamp(t_calc).normalize()
+        if t_calc is not None
+        else pd.Timestamp.today().normalize()
+    )
+    return AgreementInstrumentsResult(
+        frame=current,
+        agreement_instruments=agreement_instruments,
+        agreement_instruments_money=agreement_instruments_money,
+        agreement_instruments_by_filial=agreement_instruments_by_filial,
+        agreement_instruments_attention=agreement_instruments_attention,
+        contract=contract,
+        t_calc=calc_date,
+        warnings=warnings,
+    )
+
+
 def estimate_monitoring_effect(
     monitoring_df: pd.DataFrame,
     retro_df: pd.DataFrame,
@@ -2258,7 +2425,15 @@ def estimate_monitoring_effect(
         agreement_instruments,
         agreement_instruments_money,
         agreement_instruments_by_filial,
+        agreement_instruments_attention,
     ) = _agreement_instrument_tables(current)
+    if not agreement_instruments_attention.empty:
+        warnings.append(
+            "Филиалы: доля «без инструментов» в model < control: "
+            + ", ".join(
+                agreement_instruments_attention["filial"].astype(str).tolist()
+            )
+        )
     current_100 = _add_outcomes(
         current,
         priors.pilot,
@@ -2365,6 +2540,7 @@ def estimate_monitoring_effect(
         agreement_instruments=agreement_instruments,
         agreement_instruments_money=agreement_instruments_money,
         agreement_instruments_by_filial=agreement_instruments_by_filial,
+        agreement_instruments_attention=agreement_instruments_attention,
         contract=contract,
         t_calc=calc_date,
         discount_rate=discount_rate,
@@ -2387,6 +2563,7 @@ __all__ = [
     "HORIZONS",
     "HORIZON_SPECS",
     "ULTIMATE_HORIZON_DAYS",
+    "AgreementInstrumentsResult",
     "MonitoringEffectResult",
     "PILOT_FILIALS",
     "RETRO_AS_OF_DEFAULT",
@@ -2394,6 +2571,7 @@ __all__ = [
     "TerminalRetroPriors",
     "VITRINA_TABLE_DEFAULT",
     "compute_terminal_priors",
+    "estimate_agreement_instruments",
     "estimate_monitoring_effect",
     "filter_retro_lookback",
     "format_money",

@@ -20,11 +20,16 @@ except ImportError:  # pragma: no cover
     matplotlib = None  # type: ignore[assignment]
     plt = None  # type: ignore[assignment]
 
-from querulus.fin_effect.excel_monitoring import MonitoringEffectResult, format_money
+from querulus.fin_effect.excel_monitoring import (
+    AgreementInstrumentsResult,
+    MonitoringEffectResult,
+    format_money,
+)
 
 PLAN_FILENAME = "fin_effect_plan.html"
 REPORT_FILENAME = "fin_effect_report.html"
 CONCLUSION_FILENAME = "fin_effect_conclusion.html"
+INSTRUMENTS_FILENAME = "fin_effect_agreement_instruments.html"
 FORMULA_VERSION = "ITT-U-2026-10-14-v20-observed-psr"
 
 
@@ -1595,14 +1600,19 @@ def _contract_table(result: MonitoringEffectResult) -> pd.DataFrame:
     )
 
 
-def _agreement_instruments_section(result: MonitoringEffectResult) -> str:
+def _agreement_instruments_section(
+    result: MonitoringEffectResult | AgreementInstrumentsResult,
+    *,
+    heading: str = "4c. Соглашения × рычаги доплаты",
+) -> str:
     """Соглашения × рычаги доплаты (модель / правила) — доли и деньги."""
     shares = getattr(result, "agreement_instruments", None)
     money = getattr(result, "agreement_instruments_money", None)
     by_filial = getattr(result, "agreement_instruments_by_filial", None)
+    attention = getattr(result, "agreement_instruments_attention", None)
     if shares is None or getattr(shares, "empty", True):
-        return """
-  <h2 class="mark-new">4c. Соглашения × рычаги доплаты</h2>
+        return f"""
+  <h2 class="mark-new">{escape(heading)}</h2>
   <div class="card mark-new">
     <p class="muted">Нет данных: нет соглашений в ITT-выборке или не найдены
     колонки ЕМР+20 / лимит директоров в витрине.</p>
@@ -1671,6 +1681,46 @@ def _agreement_instruments_section(result: MonitoringEffectResult) -> str:
             "Деньги по классам среди соглашений (не все инциденты).",
         ],
     )
+    attention_html = ""
+    if attention is not None and not getattr(attention, "empty", True):
+        attention_html = (
+            "<h3 class=\"mark-new\">Филиалы: «без инструментов» "
+            "model &lt; control</h3>\n"
+            "<p class=\"muted\">Доля соглашений <b>без инструментов</b> "
+            "среди всех инцидентов сегмента: в model меньше, чем в control "
+            "(gap = control − model, п.п.).</p>\n"
+            + _table(
+                attention,
+                columns={
+                    "filial": _c("filial", "Филиал"),
+                    "share_none_control_pct": _c(
+                        "agr none control %",
+                        "Доля «без инструментов» в control, % от всех инцидентов",
+                    ),
+                    "share_none_model_pct": _c(
+                        "agr none model %",
+                        "Доля «без инструментов» в model, % от всех инцидентов",
+                    ),
+                    "gap_pp": _c(
+                        "gap п.п.",
+                        "control − model, процентные пункты",
+                    ),
+                    "n_none_control": _c(
+                        "n none c",
+                        "Число соглашений без инструментов в control",
+                    ),
+                    "n_none_model": _c(
+                        "n none m",
+                        "Число соглашений без инструментов в model",
+                    ),
+                    "n_incidents_control": _c("N control", "Инцидентов control"),
+                    "n_incidents_model": _c("N model", "Инцидентов model"),
+                },
+                rows=[
+                    "Пустая таблица — таких филиалов нет.",
+                ],
+            )
+        )
     filial_html = ""
     if by_filial is not None and not getattr(by_filial, "empty", True):
         filial_table = _table(
@@ -1691,19 +1741,24 @@ def _agreement_instruments_section(result: MonitoringEffectResult) -> str:
                     "% от всех",
                     "Доля класса среди всех инцидентов филиала×сегмента, %",
                 ),
+                "sample_losses": _c(
+                    "пример убытков",
+                    "До 5 случайных номеров убытков в ячейке",
+                ),
                 "sum_model_payout": _c("Σ Иные затраты", "₽"),
                 "sum_emr_overpay": _c("Σ ПереплатаЕМР+", "₽"),
                 "sum_director_limit": _c("Σ Согл.СуммаКВ", "₽"),
             },
             rows=[
                 "Одна строка на филиал × segment × класс; база — все инциденты.",
+                "Пример убытков — случайная выборка до 5 LossID (воспроизводимый seed).",
             ],
         )
         filial_html = (
             "<h3>По филиалам (control / model)</h3>\n" + filial_table
         )
     return (
-        '<h2 class="mark-new">4c. Соглашения × рычаги доплаты</h2>\n'
+        f'<h2 class="mark-new">{escape(heading)}</h2>\n'
         '<div class="card mark-new">\n'
         "<p><b>model_rec</b> = <code>РезультатПроверки = 1</code>.\n"
         "<b>rules</b> = <code>ЕМР+20 = 1</code> или\n"
@@ -1719,8 +1774,71 @@ def _agreement_instruments_section(result: MonitoringEffectResult) -> str:
         "ПереплатаЕМР+ и СогласованнаяСуммаКВ — суммы правил. Рекомендация —\n"
         "для справки (не критерий класса).</p>\n"
         f"{money_html}\n"
+        f"{attention_html}\n"
         f"{filial_html}\n"
         "</div>\n"
+    )
+
+
+def build_agreement_instruments_html(
+    result: AgreementInstrumentsResult,
+    *,
+    source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
+    title: str = "Соглашения × рычаги доплаты",
+) -> str:
+    """Отдельный HTML только по рычагам — без полного report/conclusion."""
+    generated = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+    n_inc = len(result.frame)
+    n_agr = int(result.frame["_agreement"].fillna(False).sum()) if n_inc else 0
+    warn_html = ""
+    if result.warnings:
+        items = "".join(f"<li>{escape(w)}</li>" for w in result.warnings)
+        warn_html = f'<div class="warning"><ul>{items}</ul></div>'
+    body = _agreement_instruments_section(
+        result,
+        heading="Соглашения × рычаги доплаты",
+    )
+    return f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>{escape(title)}</title>
+<style>{_CSS}</style>
+</head>
+<body>
+<div class="page">
+<h1>{escape(title)}</h1>
+<p class="sub">Сформировано {escape(generated)} · быстрый прогон (без ITT/bootstrap) ·
+t_calc={result.t_calc.date()} · источник <code>{escape(source_label)}</code> ·
+инцидентов {n_inc}, соглашений {n_agr} · файл
+<code>{escape(INSTRUMENTS_FILENAME)}</code></p>
+{warn_html}
+{body}
+<p class="muted">Это не полный fin_effect_report: нет Yult, ITT, CI и заключения.
+Пересчёт: <code>estimate_agreement_instruments</code> →
+<code>write_agreement_instruments_html</code>.</p>
+</div>
+</body>
+</html>
+"""
+
+
+def write_agreement_instruments_html(
+    result: AgreementInstrumentsResult,
+    path: str | Path,
+    *,
+    source_label: str = "[OISUU_report].[dbo].[ВитринаСутяжность]",
+    title: str = "Соглашения × рычаги доплаты",
+) -> Path:
+    """Записать отдельный HTML по соглашениям × рычагам."""
+    return _write(
+        Path(path),
+        build_agreement_instruments_html(
+            result,
+            source_label=source_label,
+            title=title,
+        ),
     )
 
 
@@ -3469,8 +3587,10 @@ def write_error_html(
 __all__ = [
     "CONCLUSION_FILENAME",
     "FORMULA_VERSION",
+    "INSTRUMENTS_FILENAME",
     "PLAN_FILENAME",
     "REPORT_FILENAME",
+    "build_agreement_instruments_html",
     "build_conclusion_body_from_result",
     "build_conclusion_html",
     "build_monitoring_html",
@@ -3478,6 +3598,7 @@ __all__ = [
     "dated_artifact_names",
     "export_run_dir",
     "report_export_stamp",
+    "write_agreement_instruments_html",
     "write_all_monitoring_htmls",
     "write_conclusion_html",
     "write_error_html",
