@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Querulus Integration — каталог тестов</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0f1419;
+      --bg-elev: #1a222c;
+      --line: #3a4654;
+      --text: #e8eef4;
+      --muted: #9aabbc;
+      --accent: #3db88a;
+      --accent-dim: #2a7a5c;
+      --main: #4a9fd8;
+      --second: #e0a04a;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+      --sans: "IBM Plex Sans", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background:
+        radial-gradient(ellipse 80% 50% at 10% -10%, #1a3a32 0%, transparent 55%),
+        radial-gradient(ellipse 60% 40% at 100% 0%, #1a2a3a 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+      font-size: 15px;
+    }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 2.5rem 1.5rem 4rem; }
+    header {
+      margin-bottom: 2rem;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 1.5rem;
+    }
+    header .eyebrow {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin: 0 0 0.5rem;
+    }
+    h1 {
+      font-size: clamp(1.6rem, 3vw, 2.1rem);
+      font-weight: 600;
+      margin: 0 0 0.6rem;
+      letter-spacing: -0.02em;
+    }
+    header p { margin: 0; color: var(--muted); max-width: 42rem; }
+    a { color: var(--main); }
+    code {
+      font-family: var(--mono);
+      font-size: 0.84em;
+      color: var(--accent);
+      background: rgba(61, 184, 138, 0.1);
+      padding: 0.1em 0.35em;
+      border-radius: 3px;
+    }
+    h2 {
+      font-size: 1.2rem;
+      font-weight: 600;
+      margin: 2.4rem 0 0.5rem;
+      letter-spacing: -0.01em;
+    }
+    h2 .tag {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      font-weight: 500;
+      color: var(--muted);
+      margin-left: 0.45rem;
+    }
+    .lead {
+      color: var(--muted);
+      margin: 0 0 1.1rem;
+      max-width: 40rem;
+    }
+    .toc {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin: 1rem 0 0;
+    }
+    .toc a {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      text-decoration: none;
+      padding: 0.35rem 0.65rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--bg-elev);
+      color: var(--muted);
+    }
+    .toc a:hover { color: var(--text); border-color: var(--accent-dim); }
+    .card {
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 1rem 1.15rem;
+      margin: 0.75rem 0 1.1rem;
+    }
+    .card.main-lane { border-color: rgba(74, 159, 216, 0.35); }
+    .card.second-lane { border-color: rgba(224, 160, 74, 0.35); }
+    .test {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--bg-elev);
+      padding: 1rem 1.15rem;
+      margin: 0.65rem 0;
+    }
+    .test h3 {
+      font-family: var(--mono);
+      font-size: 0.88rem;
+      font-weight: 500;
+      margin: 0 0 0.45rem;
+      color: #d5e8f5;
+      word-break: break-word;
+    }
+    .test p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+    .lane {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 0.12rem 0.4rem;
+      border-radius: 3px;
+      margin-right: 0.4rem;
+      vertical-align: middle;
+    }
+    .lane.main { background: rgba(74, 159, 216, 0.18); color: var(--main); }
+    .lane.second { background: rgba(224, 160, 74, 0.18); color: var(--second); }
+    .lane.both { background: rgba(61, 184, 138, 0.15); color: var(--accent); }
+    footer {
+      margin-top: 2.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--line);
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <p class="eyebrow">querulus / integration</p>
+      <h1>Каталог тестов</h1>
+      <p>
+        Простыми словами: зачем каждый тест и что считается успехом.
+        Всего 20 проверок. Если нужного файла модели нет — тест падает
+        (пропусков нет). Как запускать — в
+        <a href="tests.html">tests.html</a>.
+      </p>
+      <nav class="toc" aria-label="Оглавление">
+        <a href="#overview">три группы</a>
+        <a href="#preprocess">подготовка данных</a>
+        <a href="#second">фичи второй модели</a>
+        <a href="#parity">сверка с эталоном</a>
+      </nav>
+    </header>
+
+    <h2 id="overview">Три группы</h2>
+    <div class="card">
+      <p style="margin:0 0 0.65rem;color:var(--muted)">
+        Сервис считает сразу два ответа: <strong style="color:var(--main)">main_</strong>
+        (старая модель) и <strong style="color:var(--second)">second_</strong> (новая 2.0.0).
+        Тесты закрывают общий preprocess, логику second_ и финальную сверку чисел.
+      </p>
+      <p style="margin:0;color:var(--muted)">
+        <strong style="color:var(--text)">Подготовка данных</strong> — как чистим и валидируем входной вектор.<br />
+        <strong style="color:var(--text)">Фичи второй модели</strong> — инфляция, доля работ, порог и калибраторы.<br />
+        <strong style="color:var(--text)">Сверка с эталоном</strong> — ответ сервиса совпадает с заранее сохранённым parquet.
+      </p>
+    </div>
+
+    <!-- ========== PREPROCESS ========== -->
+    <h2 id="preprocess">Подготовка данных <span class="tag">10 тестов · модели не нужны</span></h2>
+    <p class="lead">
+      Проверяем общий preprocess для main_ и second_: пустые поля, регистр,
+      даты ДТП/выплаты и маску severity для юристов.
+    </p>
+
+    <div class="test">
+      <h3><span class="lane main">main</span> test_empty_string_to_nan_main</h3>
+      <p>
+        Если во входном векторе пришла пустая строка <code>""</code>, для старой модели
+        она должна превратиться в пропуск (NaN), а не остаться «пустым текстом».
+        Иначе модель может воспринять пустоту как отдельную категорию.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane second">second</span> test_empty_string_to_nan_second</h3>
+      <p>
+        То же самое для новой модели: пустая строка на входе → NaN после preprocess.
+        Оба слота должны вести себя одинаково.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane main">main</span> test_upper_main</h3>
+      <p>
+        Текстовые поля (филиал, способ получения и т.п.) приводятся к ВЕРХНЕМУ РЕГИСТРУ.
+        Так «москва» и «МОСКВА» не считаются разными значениями при скоринге.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane second">second</span> test_upper_second</h3>
+      <p>
+        Та же нормализация регистра для second_: вход в нижнем регистре → UPPER после подготовки.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane both">общее</span> test_no_duplicate_columns</h3>
+      <p>
+        Если в таблице дважды одно и то же имя колонки — это ошибка конфигурации/вектора.
+        Сервис должен явно упасть с понятной ошибкой, а не считать «не ту» колонку.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane main">main</span> test_dates_strict_main</h3>
+      <p>
+        На корректных датах ДТП и выплаты preprocess проходит успешно и считает
+        производные вроде года события и задержки заявления. Тест фиксирует, что
+        эти поля действительно появляются.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane second">second</span> test_dates_strict_second</h3>
+      <p>
+        Для новой модели после подготовки дат появляются её фичи: суммы в рублях 2022 года
+        (с учётом инфляции) и бакет доли работ в калькуляции. Без этого second_ не сможет
+        набрать нужный вектор признаков.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane main">main</span> test_bad_date_order_main</h3>
+      <p>
+        Если дата ДТП позже даты выплаты — данные противоречивы. Main_ должен отклонить
+        такой вектор ошибкой, а не посчитать модель на мусоре.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane second">second</span> test_bad_date_order_second</h3>
+      <p>
+        Та же проверка для second_: «ДТП после выплаты» — отказ. Оба слота не принимают
+        перепутанный порядок дат.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane both">общее</span> test_is_lawyer_mask_both_slots</h3>
+      <p>
+        Severity (сумма) отдаём не всегда. Если классификатор сказал «не сутяжный»
+        и клиент не юрист — в ответе сумма обнуляется. Если это юрист или кейс
+        всё же сутяжный — сумма остаётся. Так в ответе не светится лишняя severity
+        на «тихих» кейсах.
+      </p>
+    </div>
+
+    <!-- ========== SECOND FEATURES ========== -->
+    <h2 id="second">Фичи второй модели <span class="tag">7 тестов · часть нужна meta/cal</span></h2>
+    <p class="lead">
+      Специфика second_: инфляция (CPI), сбор производных признаков, порог τ
+      из metadata и применение калибраторов вероятности/суммы.
+    </p>
+
+    <div class="test">
+      <h3><span class="lane second">second</span> test_exact_year</h3>
+      <p>
+        Для года, который есть в таблице инфляции, сервис берёт именно его —
+        без подмены на соседний год.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane second">second</span> test_future_year_uses_max</h3>
+      <p>
+        Если год события новее, чем последняя строка в CPI-таблице, берём последний
+        известный год (как «заморозка» курса). Иначе нельзя было бы посчитать
+        реальные рубли на свежих данных.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane second">second</span> test_past_year_uses_min</h3>
+      <p>
+        Если год старше самой ранней записи CPI — используем самый ранний доступный.
+        Старые кейсы всё равно получают осмысленную дефляцию, а не NaN.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane second">second</span> test_deflate_bridge</h3>
+      <p>
+        Иногда в векторе нет «стоимости без износа», но есть сумма ремонта.
+        Сервис подставляет её как базу и всё равно строит колонку в рублях 2022.
+        Так shadow не ломается на урезанном входе из 1С.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane second">second</span> test_share_work_tier_from_works</h3>
+      <p>
+        Считаем долю работ в калькуляции (работы / стоимость без износа) и кладём
+        в бакет low/mid/high. На контрольном примере доля 0.5 должна попасть в mid.
+        Заодно проверяем, что рядом появляются отношение with/without и мощность на тонну.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane second">second</span> test_threshold_from_artifacts_meta</h3>
+      <p>
+        Порог сутяжности τ для second_ лежит в <code>metadata.json</code> (поле best_threshold).
+        Тест убеждается, что файл читается и порог — положительное число.
+        Без этого сервис не знает, где резать вероятность на 0/1.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane second">second</span> test_cf_rg_calibrators_load_and_apply</h3>
+      <p>
+        Калибраторы CF (вероятность) и RG (сумма) успешно загружаются из pickle
+        и применяются к числам: длина ответа совпадает со входом, суммы не уходят в минус.
+        Это «последняя миля» перед ответом second_ клиенту.
+      </p>
+    </div>
+
+    <!-- ========== PARITY ========== -->
+    <h2 id="parity">Сверка с эталоном <span class="tag">3 теста · нужны модели и parquet</span></h2>
+    <p class="lead">
+      Самые важные проверки: живой сервис на реальных (или синтетических) артефактах
+      выдаёт те же CF/RG, что записаны в эталонном датафрейме — с точностью до 2 знаков.
+    </p>
+
+    <div class="test">
+      <h3><span class="lane main">main</span> test_service_matches_df_for_service_main</h3>
+      <p>
+        Берём строки из <code>df_for_service_main.parquet</code> (там уже лежат ожидаемые
+        preds_cf / preds_rg), прогоняем каждую через <code>main_predict</code> и сравниваем
+        с эталоном до сотых. Если preprocess или модель «поехали» — цифры разъедутся.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane second">second</span> test_service_matches_df_for_service_second</h3>
+      <p>
+        То же для новой модели: эталон в <code>df_for_service_second.parquet</code> уже
+        после калибровки и маски юриста. Ответ <code>score_second</code> должен совпасть
+        до 2 знаков. Это контроль полного shadow-пайплайна end-to-end.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane both">dual</span> test_both_slots_filled</h3>
+      <p>
+        Один запрос с обоими слотами: в ответе заполнены и main_, и second_,
+        плюс служебный блок oisuu_responce. Проверяем не цифры, а контракт API —
+        dual-track реально отдаёт оба результата, а не пустой second_response.
+      </p>
+    </div>
+
+    <footer>
+      examples/querulus/integration/test_catalog.html ·
+      запуск — <a href="tests.html">tests.html</a>
+    </footer>
+  </div>
+</body>
+</html>

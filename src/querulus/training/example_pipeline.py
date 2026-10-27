@@ -1455,6 +1455,8 @@ def export_prod_service_artifacts(
         },
         "cf_name": bundle.cf_name,
         "rg_name": bundle.rg_name,
+        # best_threshold — сервисный τ (шкала = threshold_scale).
+        # val_threshold — parity/Val из collect; без сервисных CF/RG калибраторов.
         "best_threshold": float(thresholds.prod),
         "val_threshold": float(thresholds.parity),
         "threshold_scale": thr_scale,

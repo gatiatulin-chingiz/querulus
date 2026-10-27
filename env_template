@@ -17,22 +17,18 @@ OISUU_DB_PORT=1433
 # --- Integration (сервис и тесты integration/) ---
 # Скопируйте этот файл в .env в корне querulus (или задайте переменные в shell).
 # config.py читает env_template / .env относительно cwd.
-OUTBOXML_TRAIN_DF_PATH=
-OUTBOXML_MODEL_GROUP=querulus_ansamble_legacy
-OUTBOXML_PREDS_CF_COL=preds_cf
-OUTBOXML_PREDS_RG_COL=preds_rg
-# Shadow 2.0.0 (second_model): плоский results/ (пусто = рядом с legacy pickle)
+# Stem модели и THRESHOLD — из тела запроса / вектора, не из env.
+# Shadow 2.0.0: пути к meta/cal (пусто SUBDIR = рядом с pickle в results/)
 SHADOW_MODELS_SUBDIR=
-SHADOW_MODEL_GROUP=UU_querulus_2026_10_09_16_51_20
 SHADOW_META_FILENAME=metadata.json
 SECOND_CF_CALIBRATOR_FILENAME=cf_calibrator.pickle
 SECOND_RG_CALIBRATOR_FILENAME=rg_calibrator.pickle
-SHADOW_TRAIN_DF_PATH=
 SERVICE_GIT_COMMIT=
 
 # --- Integration tests (artifacts.py / test_parity) ---
-# Пусто = defaults: integration/results/, stems legacy + UU_…, df_for_service_*.parquet
+# Пусто = defaults: integration/results/, stems ниже, df_for_service_*.parquet
 # Синтетика: INTEGRATION_TEST_RESULTS_DIR=integration/results/test_synth
+# Prod main: INTEGRATION_TEST_MAIN_STEM=querulus_ansamble_2026_04_18_v1
 INTEGRATION_TEST_RESULTS_DIR=
 INTEGRATION_TEST_MAIN_STEM=querulus_ansamble_legacy
 INTEGRATION_TEST_SECOND_STEM=UU_querulus_2026_10_09_16_51_20
