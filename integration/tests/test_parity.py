@@ -49,13 +49,28 @@ def _patch_models_dir() -> None:
 
 
 #new
+def _cell_is_na(v: object) -> bool:
+    """pd.isna на array/list даёт ValueError — только скаляры."""
+    if v is None:
+        return True
+    if isinstance(v, (list, tuple, dict, np.ndarray, pd.Series, pd.Index)):
+        return False
+    if not np.isscalar(v) and not isinstance(v, (str, bytes)):
+        return False
+    try:
+        return bool(pd.isna(v))
+    except (ValueError, TypeError):
+        return False
+
+
+#new
 def _row_to_request(row: pd.Series) -> list[dict]:
     d = row.to_dict()
     for k in (ART.preds_cf_col, ART.preds_rg_col, ART.split_col):
         d.pop(k, None)
     clean = {}
     for k, v in d.items():
-        if pd.isna(v):
+        if _cell_is_na(v):
             clean[k] = None
         elif hasattr(v, "isoformat"):
             clean[k] = v.isoformat()
@@ -63,6 +78,10 @@ def _row_to_request(row: pd.Series) -> list[dict]:
             clean[k] = int(v)
         elif isinstance(v, (np.floating,)):
             clean[k] = float(v)
+        elif isinstance(v, np.ndarray):
+            clean[k] = v.tolist()
+        elif isinstance(v, (pd.Series, pd.Index)):
+            clean[k] = v.tolist()
         else:
             clean[k] = v
     return [clean]

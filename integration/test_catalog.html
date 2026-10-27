@@ -337,9 +337,9 @@
     <div class="test">
       <h3><span class="lane second">second</span> test_cf_rg_calibrators_load_and_apply</h3>
       <p>
-        Калибраторы CF (вероятность) и RG (сумма) успешно загружаются из pickle
-        и применяются к числам: длина ответа совпадает со входом, суммы не уходят в минус.
-        Это «последняя миля» перед ответом second_ клиенту.
+        Калибраторы CF и RG загружаются из pickle. Для isotonic CF — apply на raw scores;
+        для CCCV/CatBoost — достаточно, что объект загрузился (полный apply в parity).
+        RG: длина ответа = входу, суммы ≥ 0.
       </p>
     </div>
 

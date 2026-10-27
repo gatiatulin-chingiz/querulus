@@ -12,6 +12,7 @@ from integration.features.cpi import (
 )
 from integration.features.derived import add_second_model_features
 from integration.scoring.second import (
+    _is_isotonic_1d,
     apply_cf_calibrator,
     apply_rg_calibrator,
     resolve_second_threshold,
@@ -93,9 +94,17 @@ class TestCalibrators(unittest.TestCase):
             cf_cal = pickle.load(f)
         with open(rg_path, "rb") as f:
             rg_cal = pickle.load(f)
-        raw = [0.2, 0.5, 0.8]
-        cal_cf = apply_cf_calibrator(cf_cal, raw, pd.DataFrame())
-        self.assertEqual(len(cal_cf), 3)
+        # Isotonic: apply на raw scores. CCCV/CatBoost: нужен feature-matrix —
+        # здесь только smoke загрузки (+ apply для 1D).
+        self.assertTrue(
+            _is_isotonic_1d(cf_cal)
+            or hasattr(cf_cal, "predict_proba")
+            or hasattr(cf_cal, "predict")
+        )
+        if _is_isotonic_1d(cf_cal):
+            raw = [0.2, 0.5, 0.8]
+            cal_cf = apply_cf_calibrator(cf_cal, raw, pd.DataFrame())
+            self.assertEqual(len(cal_cf), 3)
         cal_rg = apply_rg_calibrator(rg_cal, [1000.0, 5000.0])
         self.assertEqual(len(cal_rg), 2)
         self.assertTrue(all(v >= 0 for v in cal_rg))
