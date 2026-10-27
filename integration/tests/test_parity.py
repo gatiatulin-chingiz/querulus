@@ -13,6 +13,7 @@ import heapq
 import json
 import sys
 import unittest
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator
@@ -21,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 try:
-    from tqdm.auto import tqdm
+    from tqdm import tqdm
 except ImportError:  # pragma: no cover
     tqdm = None  # type: ignore[assignment]
 
@@ -48,9 +49,15 @@ from loguru import logger as _loguru_logger  # noqa: E402
 
 #new
 def _quiet_service_logs() -> None:
-    """Parity гоняет десятки тысяч строк — INFO/DEBUG сервиса не нужен."""
+    """Parity гоняет десятки тысяч строк — INFO/DEBUG и warning-спам рвут tqdm."""
     _loguru_logger.remove()
-    _loguru_logger.add(sys.stderr, level="WARNING")
+    _loguru_logger.add(sys.stderr, level="ERROR")
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
+    warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
+    warnings.filterwarnings("ignore", message=r".*sklearn_tags.*")
+    warnings.filterwarnings("ignore", message=r".*set_bad.*")
+    warnings.filterwarnings("ignore", message=r".*set_over.*")
+    warnings.filterwarnings("ignore", message=r".*set_under.*")
 
 
 #new
@@ -247,44 +254,48 @@ def _run_parity_batches(
 
     pbar = None
     if tqdm is not None:
+        # file=stderr + без nested warnings: иначе бар печатается на каждой строке
         pbar = tqdm(
             total=n_total,
             unit="row",
             desc=f"parity {title}",
             leave=True,
+            file=sys.stderr,
+            dynamic_ncols=True,
+            mininterval=0.5,
+            ascii=True,
         )
 
     try:
-        for chunk in _iter_batches(work, bs):
-            got_cf, got_rg = score_batch(chunk)
-            exp_cf = np.round(chunk[ART.preds_cf_col].to_numpy(dtype=float), 2)
-            exp_rg = np.round(chunk[ART.preds_rg_col].to_numpy(dtype=float), 2)
-            got_cf = np.round(np.asarray(got_cf, dtype=float).ravel(), 2)
-            got_rg = np.round(np.asarray(got_rg, dtype=float).ravel(), 2)
-            if len(got_cf) != len(chunk) or len(got_rg) != len(chunk):
-                raise AssertionError(
-                    f"{title}: длина ответа сервиса != батч "
-                    f"(cf={len(got_cf)} rg={len(got_rg)} batch={len(chunk)})"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            for chunk in _iter_batches(work, bs):
+                got_cf, got_rg = score_batch(chunk)
+                exp_cf = np.round(chunk[ART.preds_cf_col].to_numpy(dtype=float), 2)
+                exp_rg = np.round(chunk[ART.preds_rg_col].to_numpy(dtype=float), 2)
+                got_cf = np.round(np.asarray(got_cf, dtype=float).ravel(), 2)
+                got_rg = np.round(np.asarray(got_rg, dtype=float).ravel(), 2)
+                if len(got_cf) != len(chunk) or len(got_rg) != len(chunk):
+                    raise AssertionError(
+                        f"{title}: длина ответа сервиса != батч "
+                        f"(cf={len(got_cf)} rg={len(got_rg)} batch={len(chunk)})"
+                    )
+                f_ok, c_ok, r_ok, bad = _collect_batch_mismatches(
+                    lane=title,
+                    indices=list(chunk.index),
+                    got_cf=got_cf,
+                    got_rg=got_rg,
+                    exp_cf=exp_cf,
+                    exp_rg=exp_rg,
                 )
-            f_ok, c_ok, r_ok, bad = _collect_batch_mismatches(
-                lane=title,
-                indices=list(chunk.index),
-                got_cf=got_cf,
-                got_rg=got_rg,
-                exp_cf=exp_cf,
-                exp_rg=exp_rg,
-            )
-            full_ok += f_ok
-            cf_ok += c_ok
-            rg_ok += r_ok
-            mismatches.extend(bad)
-            n += len(chunk)
-            if pbar is not None:
-                pbar.update(len(chunk))
-                pbar.set_postfix(
-                    full=f"{100.0 * full_ok / n:.1f}%",
-                    refresh=False,
-                )
+                full_ok += f_ok
+                cf_ok += c_ok
+                rg_ok += r_ok
+                mismatches.extend(bad)
+                n += len(chunk)
+                if pbar is not None:
+                    pbar.set_postfix_str(f"full={100.0 * full_ok / n:.1f}%", refresh=False)
+                    pbar.update(len(chunk))
     finally:
         if pbar is not None:
             pbar.close()
