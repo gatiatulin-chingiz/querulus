@@ -16,10 +16,6 @@ prod_models_path = "./results"
 # Fallback τ, если в векторе нет THRESHOLD. Не читать metadata.json.
 default_main_threshold = env_reader.float("DEFAULT_MAIN_THRESHOLD", 0.6)
 default_second_threshold = env_reader.float("DEFAULT_SECOND_THRESHOLD", 0.6)
-# Совместимость со старым именем env / кодом.
-default_classification_threshold = env_reader.float(
-    "DEFAULT_CLASSIFICATION_THRESHOLD", default_main_threshold
-)
 
 # --- Second 2.0.0 (пути рядом с pickle; stem — из second_model в запросе) ---
 shadow_models_subdir = env_reader.str("SHADOW_MODELS_SUBDIR", "")

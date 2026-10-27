@@ -23,8 +23,7 @@
 
 Порог классификации (число float)
     1) Если во входном векторе есть поле ``'THRESHOLD'`` — используется оно.
-    2) Иначе ``config.classification_threshold``.
-    3) Иначе ``DEFAULT_CLASSIFICATION_THRESHOLD`` (0.6).
+    2) Иначе ``config.default_main_threshold``.
 
 Ответ POST (верхний уровень)
     oisuu_responce — короткий блок для интеграций;
@@ -72,15 +71,6 @@ app = FastAPI()
 
 # Версия API в oisuu_responce["version"] и GET /api/health (см. CHANGELOG.md)
 version = "1.4.0"
-
-# Порог классификации main_, если нет THRESHOLD в векторе
-DEFAULT_CLASSIFICATION_THRESHOLD = float(
-    getattr(
-        config,
-        "default_main_threshold",
-        getattr(config, "default_classification_threshold", 0.6),
-    )
-)
 
 # Имена колонок, которые должны присутствовать в main_request для классификации
 CLASSIFICATION_FEATURES: List[str] = [
@@ -905,13 +895,10 @@ def main_predict(
         logger.exception("main_predict: входной вектор некорректен")
         raise
 
-    # Приоритет порога (контракт сервиса legacy main_):
-    # 1) Если 'THRESHOLD' есть во входном векторе и он валидный — используем его.
-    # 2) Если поле есть, но пустое/битое — DEFAULT.
-    # 3) Если поля нет — DEFAULT.
+    # Приоритет порога main_: THRESHOLD в векторе → config.default_main_threshold.
     threshold_value = get_threshold_from_vector(df_common)
     if threshold_value is None:
-        threshold_value = DEFAULT_CLASSIFICATION_THRESHOLD
+        threshold_value = float(config.default_main_threshold)
 
     # A3/A5: после preprocess+enrich проверяем состав/порядок колонок для mldataworker
     # Здесь мы "вырезаем" ровно те признаки, которые использует классификационная модель,

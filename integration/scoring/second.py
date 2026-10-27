@@ -398,7 +398,7 @@ def apply_rg_calibrator(
 
 #reviewed
 def resolve_second_threshold(df_common: pd.DataFrame) -> float:
-    """τ из THRESHOLD в векторе; иначе config.default_classification_threshold.
+    """τ из THRESHOLD в векторе; иначе config.default_second_threshold.
 
     metadata.json сервис не читает.
     """
@@ -407,13 +407,7 @@ def resolve_second_threshold(df_common: pd.DataFrame) -> float:
     except ImportError:
         import config
 
-    fallback = float(
-        getattr(
-            config,
-            "default_second_threshold",
-            getattr(config, "default_classification_threshold", 0.6),
-        )
-    )
+    fallback = float(config.default_second_threshold)
     if "THRESHOLD" in df_common.columns:
         value = pd.to_numeric(df_common["THRESHOLD"].iloc[0], errors="coerce")
         if not pd.isna(value):
