@@ -18,7 +18,8 @@ OISUU_DB_PORT=1433
 # Скопируйте этот файл в .env в корне querulus (или задайте переменные в shell).
 # config.py читает env_template / .env относительно cwd.
 # Stem модели — из тела запроса. THRESHOLD — из вектора; иначе DEFAULT ниже.
-DEFAULT_CLASSIFICATION_THRESHOLD=0.6
+DEFAULT_MAIN_THRESHOLD=0.6
+DEFAULT_SECOND_THRESHOLD=0.6
 # Shadow 2.0.0: калибраторы (пусто SUBDIR = рядом с pickle в results/)
 SHADOW_MODELS_SUBDIR=
 SECOND_CF_CALIBRATOR_FILENAME=cf_calibrator.pickle

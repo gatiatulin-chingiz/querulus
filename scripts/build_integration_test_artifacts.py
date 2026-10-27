@@ -413,6 +413,7 @@ def main() -> None:
                 "THRESHOLD": THRESHOLD,
                 "split": legacy_row.iloc[0]["split"],
                 "preds_cf": round(p_m, 2),
+                "preds_label": 1.0 if p_m >= THRESHOLD else 0.0,
                 "preds_rg": round(r_m, 2),
             }
         )
@@ -447,6 +448,7 @@ def main() -> None:
                 "THRESHOLD": THRESHOLD,
                 "split": str(fe_row.iloc[0]["split"]),
                 "preds_cf": round(p_s, 2),
+                "preds_label": 1.0 if p_s >= THRESHOLD else 0.0,
                 "preds_rg": round(r_s, 2),
             }
         )

@@ -80,7 +80,7 @@ class TestVectorThreshold(unittest.TestCase):
         from integration import config
 
         thr = resolve_second_threshold(pd.DataFrame({"X": [1]}))
-        self.assertAlmostEqual(thr, float(config.default_classification_threshold))
+        self.assertAlmostEqual(thr, float(config.default_second_threshold))
 
 
 #new

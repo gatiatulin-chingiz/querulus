@@ -408,7 +408,11 @@ def resolve_second_threshold(df_common: pd.DataFrame) -> float:
         import config
 
     fallback = float(
-        getattr(config, "default_classification_threshold", 0.6)
+        getattr(
+            config,
+            "default_second_threshold",
+            getattr(config, "default_classification_threshold", 0.6),
+        )
     )
     if "THRESHOLD" in df_common.columns:
         value = pd.to_numeric(df_common["THRESHOLD"].iloc[0], errors="coerce")

@@ -94,7 +94,7 @@ def _cell_is_na(v: object) -> bool:
 #new
 def _row_to_request(row: pd.Series) -> list[dict]:
     d = row.to_dict()
-    for k in (ART.preds_cf_col, ART.preds_rg_col, ART.split_col):
+    for k in (ART.preds_cf_col, ART.preds_rg_col, ART.preds_label_col, ART.split_col):
         d.pop(k, None)
     clean = {}
     for k, v in d.items():
@@ -120,11 +120,35 @@ def _frame_to_request(df: pd.DataFrame) -> list[dict]:
     """Multi-row vector для сервиса (без эталонных preds / split)."""
     drop = [
         c
-        for c in (ART.preds_cf_col, ART.preds_rg_col, ART.split_col)
+        for c in (
+            ART.preds_cf_col,
+            ART.preds_rg_col,
+            ART.preds_label_col,
+            ART.split_col,
+        )
         if c in df.columns
     ]
     part = df.drop(columns=drop, errors="ignore")
     return json.loads(part.to_json(orient="records", force_ascii=False, date_format="iso"))
+
+
+#new
+def _lane_threshold(title: str) -> float:
+    if title == "second":
+        return float(config.default_second_threshold)
+    return float(config.default_main_threshold)
+
+
+#new
+def _expected_labels(chunk: pd.DataFrame, title: str) -> np.ndarray:
+    """preds_label из parquet или (preds_cf >= τ_lane)."""
+    if ART.preds_label_col in chunk.columns:
+        return np.round(chunk[ART.preds_label_col].to_numpy(dtype=float), 2)
+    thr = _lane_threshold(title)
+    return np.round(
+        (chunk[ART.preds_cf_col].to_numpy(dtype=float) >= thr).astype(float),
+        2,
+    )
 
 
 #new
@@ -156,7 +180,7 @@ def _iter_batches(df: pd.DataFrame, size: int) -> Iterator[pd.DataFrame]:
 #new
 @dataclass(frozen=True)
 class _Mismatch:
-    kind: str  # CF | RG
+    kind: str  # CF | LABEL | RG
     tag: str
     got: float
     expected: float
@@ -186,6 +210,7 @@ def _report_parity(
     n: int,
     full_ok: int,
     cf_ok: int,
+    label_ok: int,
     rg_ok: int,
     mismatches: list[_Mismatch],
     top_n: int = 5,
@@ -195,12 +220,15 @@ def _report_parity(
     lines = [
         f"=== parity {title} ===",
         f"{full_ok} из {n} строк полностью совпали, совпадение {pct:.2f}%",
-        f"CF match: {cf_ok}/{n}"
+        f"CF proba match: {cf_ok}/{n}"
         + (f" ({100.0 * cf_ok / n:.2f}%)" if n else ""),
+        f"CF label match: {label_ok}/{n}"
+        + (f" ({100.0 * label_ok / n:.2f}%)" if n else ""),
         f"RG match: {rg_ok}/{n}"
         + (f" ({100.0 * rg_ok / n:.2f}%)" if n else ""),
     ]
     lines.extend(_format_top("CF", mismatches, top_n))
+    lines.extend(_format_top("LABEL", mismatches, top_n))
     lines.extend(_format_top("RG", mismatches, top_n))
     print("\n".join(lines), flush=True)
 
@@ -211,14 +239,17 @@ def _collect_batch_mismatches(
     lane: str,
     indices: list,
     got_cf: np.ndarray,
+    got_label: np.ndarray,
     got_rg: np.ndarray,
     exp_cf: np.ndarray,
+    exp_label: np.ndarray,
     exp_rg: np.ndarray,
-) -> tuple[int, int, int, list[_Mismatch]]:
+) -> tuple[int, int, int, int, list[_Mismatch]]:
     """Сверка массивов батча → счётчики + список несовпадений."""
     cf_eq = got_cf == exp_cf
+    label_eq = got_label == exp_label
     rg_eq = got_rg == exp_rg
-    full_eq = cf_eq & rg_eq
+    full_eq = cf_eq & label_eq & rg_eq
     bad: list[_Mismatch] = []
     for i in np.flatnonzero(~cf_eq):
         bad.append(
@@ -227,6 +258,15 @@ def _collect_batch_mismatches(
                 f"{lane} idx={indices[i]}",
                 float(got_cf[i]),
                 float(exp_cf[i]),
+            )
+        )
+    for i in np.flatnonzero(~label_eq):
+        bad.append(
+            _Mismatch(
+                "LABEL",
+                f"{lane} idx={indices[i]}",
+                float(got_label[i]),
+                float(exp_label[i]),
             )
         )
     for i in np.flatnonzero(~rg_eq):
@@ -238,7 +278,13 @@ def _collect_batch_mismatches(
                 float(exp_rg[i]),
             )
         )
-    return int(full_eq.sum()), int(cf_eq.sum()), int(rg_eq.sum()), bad
+    return (
+        int(full_eq.sum()),
+        int(cf_eq.sum()),
+        int(label_eq.sum()),
+        int(rg_eq.sum()),
+        bad,
+    )
 
 
 #new
@@ -246,8 +292,10 @@ def _run_parity_batches(
     *,
     title: str,
     df: pd.DataFrame,
-    score_batch: Callable[[pd.DataFrame], tuple[np.ndarray, np.ndarray]],
-) -> tuple[int, int, int, int, list[_Mismatch]]:
+    score_batch: Callable[
+        [pd.DataFrame], tuple[np.ndarray, np.ndarray, np.ndarray]
+    ],
+) -> tuple[int, int, int, int, int, list[_Mismatch]]:
     """Батч-predict + сравнение массивов; tqdm по батчам/строкам."""
     work = _parity_frame(df)
     n_total = len(work)
@@ -255,6 +303,7 @@ def _run_parity_batches(
     n = 0
     full_ok = 0
     cf_ok = 0
+    label_ok = 0
     rg_ok = 0
     mismatches: list[_Mismatch] = []
 
@@ -276,26 +325,36 @@ def _run_parity_batches(
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             for chunk in _iter_batches(work, bs):
-                got_cf, got_rg = score_batch(chunk)
+                got_cf, got_label, got_rg = score_batch(chunk)
                 exp_cf = np.round(chunk[ART.preds_cf_col].to_numpy(dtype=float), 2)
                 exp_rg = np.round(chunk[ART.preds_rg_col].to_numpy(dtype=float), 2)
+                exp_label = _expected_labels(chunk, title)
                 got_cf = np.round(np.asarray(got_cf, dtype=float).ravel(), 2)
+                got_label = np.round(np.asarray(got_label, dtype=float).ravel(), 2)
                 got_rg = np.round(np.asarray(got_rg, dtype=float).ravel(), 2)
-                if len(got_cf) != len(chunk) or len(got_rg) != len(chunk):
+                if (
+                    len(got_cf) != len(chunk)
+                    or len(got_rg) != len(chunk)
+                    or len(got_label) != len(chunk)
+                ):
                     raise AssertionError(
                         f"{title}: длина ответа сервиса != батч "
-                        f"(cf={len(got_cf)} rg={len(got_rg)} batch={len(chunk)})"
+                        f"(cf={len(got_cf)} label={len(got_label)} "
+                        f"rg={len(got_rg)} batch={len(chunk)})"
                     )
-                f_ok, c_ok, r_ok, bad = _collect_batch_mismatches(
+                f_ok, c_ok, l_ok, r_ok, bad = _collect_batch_mismatches(
                     lane=title,
                     indices=list(chunk.index),
                     got_cf=got_cf,
+                    got_label=got_label,
                     got_rg=got_rg,
                     exp_cf=exp_cf,
+                    exp_label=exp_label,
                     exp_rg=exp_rg,
                 )
                 full_ok += f_ok
                 cf_ok += c_ok
+                label_ok += l_ok
                 rg_ok += r_ok
                 mismatches.extend(bad)
                 n += len(chunk)
@@ -306,7 +365,7 @@ def _run_parity_batches(
         if pbar is not None:
             pbar.close()
 
-    return n, full_ok, cf_ok, rg_ok, mismatches
+    return n, full_ok, cf_ok, label_ok, rg_ok, mismatches
 
 
 #new
@@ -325,21 +384,24 @@ class TestParityMain(unittest.TestCase):
         self.assertIn(ART.preds_cf_col, df.columns)
         self.assertIn(ART.preds_rg_col, df.columns)
 
-        def score_batch(chunk: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+        def score_batch(
+            chunk: pd.DataFrame,
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             out = main_predict(ART.main_stem, _frame_to_request(chunk))
             res = out["main_response"]["result"]
             return (
                 np.asarray(res["classification_proba"], dtype=float),
+                np.asarray(res["classification_predictions"], dtype=float),
                 np.asarray(res["regression_predictions"], dtype=float),
             )
 
-        n, full_ok, cf_ok, rg_ok, mismatches = _run_parity_batches(
+        n, full_ok, cf_ok, label_ok, rg_ok, mismatches = _run_parity_batches(
             title="main",
             df=df,
             score_batch=score_batch,
         )
         self.assertGreater(n, 0, "df_for_service_main пуст или отфильтрован")
-        _report_parity("main", n, full_ok, cf_ok, rg_ok, mismatches)
+        _report_parity("main", n, full_ok, cf_ok, label_ok, rg_ok, mismatches)
 
 
 #new
@@ -360,21 +422,24 @@ class TestParitySecond(unittest.TestCase):
         self.assertIn(ART.preds_cf_col, df.columns)
         self.assertIn(ART.preds_rg_col, df.columns)
 
-        def score_batch(chunk: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+        def score_batch(
+            chunk: pd.DataFrame,
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             out = score_second(ART.second_stem, _frame_to_request(chunk))
             res = out["result"]
             return (
                 np.asarray(res["classification_proba"], dtype=float),
+                np.asarray(res["classification_predictions"], dtype=float),
                 np.asarray(res["regression_predictions"], dtype=float),
             )
 
-        n, full_ok, cf_ok, rg_ok, mismatches = _run_parity_batches(
+        n, full_ok, cf_ok, label_ok, rg_ok, mismatches = _run_parity_batches(
             title="second",
             df=df,
             score_batch=score_batch,
         )
         self.assertGreater(n, 0, "df_for_service_second пуст или отфильтрован")
-        _report_parity("second", n, full_ok, cf_ok, rg_ok, mismatches)
+        _report_parity("second", n, full_ok, cf_ok, label_ok, rg_ok, mismatches)
 
 
 #new

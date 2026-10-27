@@ -73,9 +73,13 @@ app = FastAPI()
 # Версия API в oisuu_responce["version"] и GET /api/health (см. CHANGELOG.md)
 version = "1.4.0"
 
-# Порог классификации, если не задан во входном векторе (см. config.default_classification_threshold)
+# Порог классификации main_, если нет THRESHOLD в векторе
 DEFAULT_CLASSIFICATION_THRESHOLD = float(
-    getattr(config, "default_classification_threshold", 0.6)
+    getattr(
+        config,
+        "default_main_threshold",
+        getattr(config, "default_classification_threshold", 0.6),
+    )
 )
 
 # Имена колонок, которые должны присутствовать в main_request для классификации

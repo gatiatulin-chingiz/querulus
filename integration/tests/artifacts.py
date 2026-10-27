@@ -33,6 +33,7 @@ class TestArtifacts:
     second_stem: str
     preds_cf_col: str = "preds_cf"
     preds_rg_col: str = "preds_rg"
+    preds_label_col: str = "preds_label"
     split_col: str = "split"  # опционально: train | test
 
 

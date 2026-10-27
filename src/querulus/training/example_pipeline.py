@@ -1329,6 +1329,7 @@ def save_df_for_service(
         raw = np.asarray(rg_calibrator.predict(preds_rg.to_numpy(dtype=float)), dtype=float)
         preds_rg = pd.Series(np.maximum(0.0, raw), index=preds_rg.index)
 
+    labels: pd.Series | None = None
     if threshold is not None:
         labels = (preds_cf >= float(threshold)).astype(float)
         if "IS_LAWYER" in df_service.columns:
@@ -1344,6 +1345,9 @@ def save_df_for_service(
 
     df_service["preds_cf"] = preds_cf
     df_service["preds_rg"] = preds_rg
+    if labels is not None:
+        # Метки классификации (как classification_predictions у сервиса).
+        df_service["preds_label"] = labels
 
     out_name = (
         "df_for_service_main.parquet"
@@ -1365,6 +1369,7 @@ def save_df_for_service(
         print(f"  calibrators: cf={cf_calibrator is not None} rg={rg_calibrator is not None}")
     if threshold is not None:
         print(f"  threshold (mask): {float(threshold):.4f}")
+        print(f"  preds_label written: yes")
 
     prod_path = bundle.built.get("prod_path")
     if prod_path and slot == "second":

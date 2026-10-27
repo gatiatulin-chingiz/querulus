@@ -1,6 +1,7 @@
 """Конфигурация сервиса querulus (пути к артефактам).
 
-Stem модели — из запроса. THRESHOLD — из вектора; иначе default ниже.
+Stem модели — из запроса. THRESHOLD — из вектора; иначе default ниже
+(отдельно для main_ и second_).
 """
 from pathlib import Path
 
@@ -12,9 +13,12 @@ env_reader.read_env("env_template")
 base_path = Path(__file__).resolve().parent
 prod_models_path = "./results"
 
-# Fallback τ, если в векторе нет THRESHOLD (main_ и second_). Не читать metadata.json.
+# Fallback τ, если в векторе нет THRESHOLD. Не читать metadata.json.
+default_main_threshold = env_reader.float("DEFAULT_MAIN_THRESHOLD", 0.6)
+default_second_threshold = env_reader.float("DEFAULT_SECOND_THRESHOLD", 0.6)
+# Совместимость со старым именем env / кодом.
 default_classification_threshold = env_reader.float(
-    "DEFAULT_CLASSIFICATION_THRESHOLD", 0.6
+    "DEFAULT_CLASSIFICATION_THRESHOLD", default_main_threshold
 )
 
 # --- Second 2.0.0 (пути рядом с pickle; stem — из second_model в запросе) ---
