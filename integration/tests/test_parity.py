@@ -39,7 +39,6 @@ def _patch_models_dir() -> None:
     config.shadow_models_subdir = ""
     config.second_cf_calibrator_filename = ART.cf_calibrator.name
     config.second_rg_calibrator_filename = ART.rg_calibrator.name
-    config.shadow_meta_filename = ART.metadata.name
     if "config" in sys.modules and sys.modules["config"] is not config:
         top = sys.modules["config"]
         top.prod_models_path = config.prod_models_path
@@ -47,7 +46,6 @@ def _patch_models_dir() -> None:
         top.shadow_models_subdir = ""
         top.second_cf_calibrator_filename = ART.cf_calibrator.name
         top.second_rg_calibrator_filename = ART.rg_calibrator.name
-        top.shadow_meta_filename = ART.metadata.name
 
 
 #new
@@ -142,7 +140,6 @@ class TestParitySecond(unittest.TestCase):
         require_file(ART.df_for_service_second, "df_for_service_second")
         require_file(ART.cf_calibrator, "cf_calibrator")
         require_file(ART.rg_calibrator, "rg_calibrator")
-        require_file(ART.metadata, "metadata")
         _patch_models_dir()
 
     def test_service_matches_df_for_service_second(self):

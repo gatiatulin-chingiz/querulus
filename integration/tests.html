@@ -259,9 +259,9 @@
           (export + <code>save_df_for_service(..., slot="second", calibrators, threshold)</code>).</li>
         <li>В <code>integration/results/</code> должны быть:
           <ul class="bullets">
-            <li><code>UU_querulus_….pickle</code>, <code>metadata.json</code>,
+            <li><code>UU_querulus_….pickle</code>,
               <code>cf_calibrator.pickle</code>, <code>rg_calibrator.pickle</code></li>
-            <li><code>df_for_service_second.parquet</code></li>
+            <li><code>df_for_service_second.parquet</code> (с колонкой <code>THRESHOLD</code>)</li>
           </ul>
         </li>
         <li>Для main_ (legacy): <code>querulus_ansamble_legacy.pickle</code> +
@@ -308,8 +308,8 @@ PYTHONPATH=.. python -m unittest discover -s tests -p "test_*.py" -v</div>
         </tr>
         <tr>
           <td><code>test_second_features</code></td>
-          <td>CPI, FE_*, τ из meta, калибраторы</td>
-          <td>meta / cal — частично</td>
+          <td>CPI, FE_*, THRESHOLD из вектора, калибраторы</td>
+          <td>cal — частично</td>
         </tr>
         <tr>
           <td><code>test_parity</code></td>

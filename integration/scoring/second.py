@@ -15,10 +15,8 @@ try:
         feature_names_from_model_result,
         load_optional_pickle,
         second_cf_calibrator_path,
-        second_meta_path,
         second_pickle_path,
         second_rg_calibrator_path,
-        threshold_from_meta,
     )
     from service.masking import masked_predictions
 except ImportError:
@@ -27,10 +25,8 @@ except ImportError:
         feature_names_from_model_result,
         load_optional_pickle,
         second_cf_calibrator_path,
-        second_meta_path,
         second_pickle_path,
         second_rg_calibrator_path,
-        threshold_from_meta,
     )
     from integration.service.masking import masked_predictions
 
@@ -39,8 +35,6 @@ _APPLICANT_FORM_REMAP_UPPER: dict[str, str] = {
     "ПРЕДСТАВИТЕЛЬ (АВТОЮРИСТ)": "ПРЕДСТАВИТЕЛЬ (ПО ДОВЕРЕННОСТИ)",
     "ПРЕДСТАВИТЕЛЬ (НЕ АВТОЮРИСТ)": "ВЫГОДОПРИОБРЕТАТЕЛЬ",
 }
-
-DEFAULT_THRESHOLD_FALLBACK = 0.6
 
 
 #reviewed
@@ -396,20 +390,31 @@ def apply_rg_calibrator(
 
 
 #reviewed
-def resolve_second_threshold(df_common: pd.DataFrame, group_name: str) -> float:
+def resolve_second_threshold(df_common: pd.DataFrame) -> float:
+    """τ из THRESHOLD в векторе; иначе config.default_classification_threshold.
+
+    metadata.json сервис не читает.
+    """
+    try:
+        from integration import config
+    except ImportError:
+        import config
+
+    fallback = float(
+        getattr(config, "default_classification_threshold", 0.6)
+    )
     if "THRESHOLD" in df_common.columns:
         value = pd.to_numeric(df_common["THRESHOLD"].iloc[0], errors="coerce")
         if not pd.isna(value):
             return float(value)
-        logger.warning("Second: THRESHOLD в векторе битый — берём meta/default")
-    meta_thr = threshold_from_meta(second_meta_path(group_name))
-    if meta_thr is not None:
-        return float(meta_thr)
-    logger.warning(
-        "Second: нет best_threshold в meta — fallback {}",
-        DEFAULT_THRESHOLD_FALLBACK,
-    )
-    return float(DEFAULT_THRESHOLD_FALLBACK)
+        logger.warning(
+            "Second: THRESHOLD в векторе битый (raw={!r}) — fallback {}",
+            df_common["THRESHOLD"].iloc[0],
+            fallback,
+        )
+    else:
+        logger.warning("Second: нет THRESHOLD в векторе — fallback {}", fallback)
+    return fallback
 
 
 #reviewed
@@ -434,7 +439,7 @@ def score_second(
     group = _load_group(group_name)
     clf_model, rg_model = group[0], group[1]
     df_common = preprocess_second_vector(features_values)
-    threshold_value = resolve_second_threshold(df_common, group_name)
+    threshold_value = resolve_second_threshold(df_common)
 
     clf_feats = feature_names_from_model_result(clf_model)
     rg_feats = feature_names_from_model_result(rg_model)

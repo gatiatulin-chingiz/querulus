@@ -17,10 +17,10 @@ OISUU_DB_PORT=1433
 # --- Integration (сервис и тесты integration/) ---
 # Скопируйте этот файл в .env в корне querulus (или задайте переменные в shell).
 # config.py читает env_template / .env относительно cwd.
-# Stem модели и THRESHOLD — из тела запроса / вектора, не из env.
-# Shadow 2.0.0: пути к meta/cal (пусто SUBDIR = рядом с pickle в results/)
+# Stem модели — из тела запроса. THRESHOLD — из вектора; иначе DEFAULT ниже.
+DEFAULT_CLASSIFICATION_THRESHOLD=0.6
+# Shadow 2.0.0: калибраторы (пусто SUBDIR = рядом с pickle в results/)
 SHADOW_MODELS_SUBDIR=
-SHADOW_META_FILENAME=metadata.json
 SECOND_CF_CALIBRATOR_FILENAME=cf_calibrator.pickle
 SECOND_RG_CALIBRATOR_FILENAME=rg_calibrator.pickle
 SERVICE_GIT_COMMIT=
@@ -34,7 +34,6 @@ INTEGRATION_TEST_MAIN_STEM=querulus_ansamble_legacy
 INTEGRATION_TEST_SECOND_STEM=UU_querulus_2026_10_09_16_51_20
 INTEGRATION_TEST_MAIN_PICKLE=
 INTEGRATION_TEST_SECOND_PICKLE=
-INTEGRATION_TEST_METADATA=
 INTEGRATION_TEST_CF_CAL=
 INTEGRATION_TEST_RG_CAL=
 INTEGRATION_TEST_DF_MAIN=

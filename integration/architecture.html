@@ -457,8 +457,8 @@
             <li>
               <span class="n">05</span>
               <div>
-                <strong>τ из meta + IS_LAWYER</strong>
-                <span class="hint">best_threshold на cal-шкале; та же маска, что у main_</span>
+                <strong>τ из THRESHOLD + IS_LAWYER</strong>
+                <span class="hint">THRESHOLD в векторе, иначе config default; та же маска, что у main_</span>
               </div>
             </li>
           </ol>
@@ -499,7 +499,7 @@
         <h3>scoring/</h3>
         <ul>
           <li><b>second.py</b> — полный пайплайн second_</li>
-          <li><b>profiles.py</b> — пути к pickle / meta / калибраторам</li>
+          <li><b>profiles.py</b> — пути к pickle / калибраторам</li>
         </ul>
       </div>
     </div>
@@ -523,8 +523,8 @@
         <h3>second_</h3>
         <ul>
           <li><code>UU_querulus_2026_10_09_16_51_20.pickle</code></li>
-          <li><code>metadata.json</code> — <code>best_threshold</code>, <code>threshold_scale: calibrated</code></li>
           <li><code>cf_calibrator.pickle</code>, <code>rg_calibrator.pickle</code></li>
+          <li><code>metadata.json</code> — аудит экспорта (сервис не читает; τ в векторе)</li>
         </ul>
       </div>
     </div>

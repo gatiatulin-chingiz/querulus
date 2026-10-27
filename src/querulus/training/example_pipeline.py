@@ -1326,6 +1326,8 @@ def save_df_for_service(
             is_lawyer = pd.Series(False, index=df_service.index)
         keep = labels.eq(1.0) | is_lawyer
         preds_rg = preds_rg.where(keep, 0.0)
+        # Сервис берёт τ только из вектора — пишем в эталон для parity.
+        df_service["THRESHOLD"] = float(threshold)
 
     df_service["preds_cf"] = preds_cf
     df_service["preds_rg"] = preds_rg
@@ -1408,11 +1410,14 @@ def export_prod_service_artifacts(
     cf_calibrator_name: str = "cf_calibrator.pickle",
     rg_calibrator_name: str = "rg_calibrator.pickle",
 ) -> ProdExportResult:
-    """``metadata.json`` + калибраторы для second_ (``best_threshold`` = τ на cal-шкале).
+    """``metadata.json`` (аудит) + калибраторы для second_.
+
+    Сервис τ **не** читает из meta — только ``THRESHOLD`` в векторе запроса.
+    ``best_threshold`` в meta — для людей / ноутбуков (шкала = threshold_scale).
 
     CF/RG в pickle — sklearn-объекты (CCCV / IsotonicRegression), без модуля querulus.
     Модели пишет ``update_models`` в ``fit_automl_bundle``.
-    Parquet — отдельно через ``save_df_for_service``.
+    Parquet — отдельно через ``save_df_for_service`` (туда же пишется THRESHOLD).
     """
     import pickle
 
@@ -1487,7 +1492,7 @@ def export_prod_service_artifacts(
         encoding="utf-8",
     )
 
-    print("=== metadata.json (second_ τ) ===")
+    print("=== metadata.json (аудит; сервис τ из THRESHOLD в векторе) ===")
     print(f"  {meta_path}")
     print(f"  best_threshold (τ, {thr_scale}): {meta['best_threshold']:.2f}")
     print(f"  ensemble: {ensemble_pkl}")

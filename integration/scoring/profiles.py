@@ -1,13 +1,10 @@
-"""Пути к артефактам main_ / second_ (pickle, meta, калибраторы)."""
+"""Пути к артефактам main_ / second_ (pickle, калибраторы)."""
 from __future__ import annotations
 
-import json
 import os
 import pickle
 from pathlib import Path
-from typing import Any, Optional
-
-from loguru import logger
+from typing import Any
 
 try:
     from integration import config
@@ -15,7 +12,6 @@ except ImportError:
     import config
 
 DEFAULT_SECOND_STEM = "UU_querulus_2026_10_09_16_51_20"
-DEFAULT_SECOND_META = "metadata.json"
 DEFAULT_CF_CALIBRATOR = "cf_calibrator.pickle"
 DEFAULT_RG_CALIBRATOR = "rg_calibrator.pickle"
 
@@ -62,22 +58,6 @@ def second_pickle_path(group_name: str) -> Path:
     return primary
 
 
-#reviewed
-def second_meta_path(group_name: str | None = None) -> Path:
-    name = getattr(config, "shadow_meta_filename", None) or DEFAULT_SECOND_META
-    primary = second_models_dir() / name
-    if primary.is_file():
-        return primary
-    legacy = prod_models_dir() / "querulus" / "2.0.0" / name
-    if legacy.is_file():
-        return legacy
-    if group_name:
-        alt = second_models_dir() / f"querulus_meta_{group_name}.json"
-        if alt.is_file():
-            return alt
-    return primary
-
-
 #new
 def second_cf_calibrator_path() -> Path:
     name = getattr(config, "second_cf_calibrator_filename", None) or DEFAULT_CF_CALIBRATOR
@@ -88,23 +68,6 @@ def second_cf_calibrator_path() -> Path:
 def second_rg_calibrator_path() -> Path:
     name = getattr(config, "second_rg_calibrator_filename", None) or DEFAULT_RG_CALIBRATOR
     return second_models_dir() / name
-
-
-#reviewed
-def threshold_from_meta(meta_path: Path | None = None) -> Optional[float]:
-    path = meta_path or second_meta_path()
-    if not path.is_file():
-        logger.warning("Second meta не найден: {}", path)
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        raw = payload.get("best_threshold")
-        if raw is None:
-            return None
-        return float(raw)
-    except Exception:
-        logger.exception("Не удалось прочитать best_threshold из {}", path)
-        return None
 
 
 #new

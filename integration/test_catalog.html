@@ -179,7 +179,7 @@
       </p>
       <p style="margin:0;color:var(--muted)">
         <strong style="color:var(--text)">Подготовка данных</strong> — как чистим и валидируем входной вектор.<br />
-        <strong style="color:var(--text)">Фичи второй модели</strong> — инфляция, доля работ, порог и калибраторы.<br />
+        <strong style="color:var(--text)">Фичи второй модели</strong> — инфляция, доля работ, THRESHOLD и калибраторы.<br />
         <strong style="color:var(--text)">Сверка с эталоном</strong> — ответ сервиса совпадает с заранее сохранённым parquet.
       </p>
     </div>
@@ -279,7 +279,7 @@
     <h2 id="second">Фичи второй модели <span class="tag">7 тестов · часть нужна meta/cal</span></h2>
     <p class="lead">
       Специфика second_: инфляция (CPI), сбор производных признаков, порог τ
-      из metadata и применение калибраторов вероятности/суммы.
+      из THRESHOLD в векторе и применение калибраторов вероятности/суммы.
     </p>
 
     <div class="test">
@@ -326,11 +326,11 @@
     </div>
 
     <div class="test">
-      <h3><span class="lane second">second</span> test_threshold_from_artifacts_meta</h3>
+      <h3><span class="lane second">second</span> test_resolve_from_vector / test_missing_threshold_uses_config_fallback</h3>
       <p>
-        Порог сутяжности τ для second_ лежит в <code>metadata.json</code> (поле best_threshold).
-        Тест убеждается, что файл читается и порог — положительное число.
-        Без этого сервис не знает, где резать вероятность на 0/1.
+        Порог сутяжности τ для second_: сначала <code>THRESHOLD</code> в векторе,
+        иначе <code>default_classification_threshold</code> из config/env.
+        Файл <code>metadata.json</code> сервис не читает.
       </p>
     </div>
 

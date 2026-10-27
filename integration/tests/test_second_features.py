@@ -1,23 +1,21 @@
-"""Специфика second_: CPI, FE_*, τ из meta, калибраторы."""
+"""Специфика second_: CPI, FE_*, THRESHOLD из вектора, калибраторы."""
 from __future__ import annotations
 
-import json
-import tempfile
 import unittest
-from pathlib import Path
-from unittest import mock
 
 import pandas as pd
 
 from integration.features.cpi import (
     RU_CPI_LEVEL_VS_BASE,
     add_real_monetary_columns,
-    deflate_to_base_year,
     resolve_cpi_year,
 )
 from integration.features.derived import add_second_model_features
-from integration.scoring.profiles import threshold_from_meta
-from integration.scoring.second import apply_cf_calibrator, apply_rg_calibrator
+from integration.scoring.second import (
+    apply_cf_calibrator,
+    apply_rg_calibrator,
+    resolve_second_threshold,
+)
 from integration.tests.artifacts import ART, require_file
 
 
@@ -72,12 +70,16 @@ class TestDerivedFe(unittest.TestCase):
 
 
 #new
-class TestMetaThreshold(unittest.TestCase):
-    def test_threshold_from_artifacts_meta(self):
-        path = require_file(ART.metadata, "metadata")
-        thr = threshold_from_meta(path)
-        self.assertIsNotNone(thr)
-        self.assertGreater(float(thr), 0.0)
+class TestVectorThreshold(unittest.TestCase):
+    def test_resolve_from_vector(self):
+        df = pd.DataFrame({"THRESHOLD": [0.42]})
+        self.assertAlmostEqual(resolve_second_threshold(df), 0.42)
+
+    def test_missing_threshold_uses_config_fallback(self):
+        from integration import config
+
+        thr = resolve_second_threshold(pd.DataFrame({"X": [1]}))
+        self.assertAlmostEqual(thr, float(config.default_classification_threshold))
 
 
 #new

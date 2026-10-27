@@ -410,6 +410,7 @@ def main() -> None:
         main_rows.append(
             {
                 **{c: legacy_row.iloc[0][c] for c in legacy_row.columns if c != "split"},
+                "THRESHOLD": THRESHOLD,
                 "split": legacy_row.iloc[0]["split"],
                 "preds_cf": round(p_m, 2),
                 "preds_rg": round(r_m, 2),
@@ -443,6 +444,7 @@ def main() -> None:
                 "VALUE_BEFORE_WITH": float(fe_row.iloc[0]["VALUE_BEFORE_WITH"]),
                 "VALUE_BEFORE_WITHOUT": float(fe_row.iloc[0]["VALUE_BEFORE_WITHOUT"]),
                 "IS_LAWYER": int(fe_row.iloc[0]["IS_LAWYER"]),
+                "THRESHOLD": THRESHOLD,
                 "split": str(fe_row.iloc[0]["split"]),
                 "preds_cf": round(p_s, 2),
                 "preds_rg": round(r_s, 2),

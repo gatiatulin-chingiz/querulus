@@ -1,6 +1,6 @@
 """Конфигурация сервиса querulus (пути к артефактам).
 
-Имена моделей (stem) и THRESHOLD приходят в запросе / векторе, не из этого файла.
+Stem модели — из запроса. THRESHOLD — из вектора; иначе default ниже.
 """
 from pathlib import Path
 
@@ -12,9 +12,13 @@ env_reader.read_env("env_template")
 base_path = Path(__file__).resolve().parent
 prod_models_path = "./results"
 
+# Fallback τ, если в векторе нет THRESHOLD (main_ и second_). Не читать metadata.json.
+default_classification_threshold = env_reader.float(
+    "DEFAULT_CLASSIFICATION_THRESHOLD", 0.6
+)
+
 # --- Second 2.0.0 (пути рядом с pickle; stem — из second_model в запросе) ---
 shadow_models_subdir = env_reader.str("SHADOW_MODELS_SUBDIR", "")
-shadow_meta_filename = env_reader.str("SHADOW_META_FILENAME", "metadata.json")
 second_cf_calibrator_filename = env_reader.str(
     "SECOND_CF_CALIBRATOR_FILENAME", "cf_calibrator.pickle"
 )

@@ -20,12 +20,11 @@ _RESULTS = _INTEGRATION_ROOT / "results"
 @dataclass(frozen=True)
 #new
 class TestArtifacts:
-    """Пути к pickle / meta / калибраторам / эталонным df."""
+    """Пути к pickle / калибраторам / эталонным df."""
 
     results_dir: Path
     main_pickle: Path
     second_pickle: Path
-    metadata: Path
     cf_calibrator: Path
     rg_calibrator: Path
     df_for_service_main: Path
@@ -59,7 +58,6 @@ def load_artifacts() -> TestArtifacts:
         second_pickle=_env_path(
             "INTEGRATION_TEST_SECOND_PICKLE", results / f"{second_stem}.pickle"
         ),
-        metadata=_env_path("INTEGRATION_TEST_METADATA", results / "metadata.json"),
         cf_calibrator=_env_path(
             "INTEGRATION_TEST_CF_CAL", results / "cf_calibrator.pickle"
         ),

@@ -281,7 +281,7 @@
         <ul class="note" style="margin:0;padding-left:1.1rem">
           <li>Список фич берётся из <code>model_config</code> pickle 2.0.0</li>
           <li>В запросе <strong>нет</strong> готовых FE_* — их строит сервис (CPI REAL_2022, SHARE_WORK tier, …)</li>
-          <li>CF/RG калибраторы + τ из <code>metadata.json</code> (cal-шкала)</li>
+          <li>CF/RG калибраторы; τ из <code>THRESHOLD</code> в векторе, иначе config fallback</li>
           <li>Clip — из <code>feature.clip</code> в pickle, не отдельный dq_bounds</li>
         </ul>
       </div>
