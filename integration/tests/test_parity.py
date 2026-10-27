@@ -215,6 +215,8 @@ class TestParityMain(unittest.TestCase):
             rg_ok += int(ok_r)
             mismatches.extend(bad)
             n += 1
+            if n % 50 == 0:
+                print(f"parity main progress: {n} rows…", flush=True)
         self.assertGreater(n, 0, "df_for_service_main пуст или отфильтрован")
         _report_parity("main", n, cf_ok, rg_ok, mismatches)
 
@@ -253,6 +255,8 @@ class TestParitySecond(unittest.TestCase):
             rg_ok += int(ok_r)
             mismatches.extend(bad)
             n += 1
+            if n % 50 == 0:
+                print(f"parity second progress: {n} rows…", flush=True)
         self.assertGreater(n, 0, "df_for_service_second пуст или отфильтрован")
         _report_parity("second", n, cf_ok, rg_ok, mismatches)
 

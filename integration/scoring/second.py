@@ -83,8 +83,14 @@ def preprocess_second_vector(features_values: List[Dict]) -> pd.DataFrame:
     return add_second_model_features(df)
 
 
+_SECOND_GROUP_CACHE: Dict[str, Any] = {}
+
+
 #reviewed
 def _load_group(group_name: str) -> Any:
+    cached = _SECOND_GROUP_CACHE.get(group_name)
+    if cached is not None:
+        return cached
     path = second_pickle_path(group_name)
     if not path.is_file():
         logger.error("Second pickle не найден || path={}", str(path))
@@ -92,6 +98,7 @@ def _load_group(group_name: str) -> Any:
     with open(path, "rb") as f:
         group = pickle_load(f)
     logger.info("Second pickle loaded || model={} || path={}", group_name, str(path))
+    _SECOND_GROUP_CACHE[group_name] = group
     return group
 
 

@@ -677,10 +677,13 @@ def _df_to_json(df: pd.DataFrame) -> List[Dict]:
     return [{k: row[k] for k in sorted(row.keys())} for row in rows]
 
 
+_MAIN_GROUP_CACHE: Dict[str, Any] = {}
+
+
 #reviewed
 def _get_or_load_group(group_name: str) -> Any:
     """
-    Загружает pickle сборки моделей с диска.
+    Загружает pickle сборки моделей с диска (кэш в процессе).
 
     Вход:
         group_name: stem имени файла ``{group_name}.pickle``.
@@ -693,6 +696,9 @@ def _get_or_load_group(group_name: str) -> Any:
         group[0] — классификация (model_config + model)
         group[1] — регрессия (model_config + model)
     """
+    cached = _MAIN_GROUP_CACHE.get(group_name)
+    if cached is not None:
+        return cached
     path = _prod_models_dir() / f"{group_name}.pickle"
     if not path.is_file():
         logger.error("Pickle не найден || path={}", str(path))
@@ -711,6 +717,7 @@ def _get_or_load_group(group_name: str) -> Any:
         group_name,
         str(path),
     )
+    _MAIN_GROUP_CACHE[group_name] = group
     return group
 
 
