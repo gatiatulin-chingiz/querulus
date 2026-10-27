@@ -1286,7 +1286,9 @@ def save_df_for_service(
     preds_rg = predict_rg(models.dsm_rg_prod, bundle.rg_name, bundle.df).astype(float)
 
     if cf_calibrator is not None:
-        # CCCV: predict_proba(X); Isotonic: predict(raw proba)
+        # CCCV: predict_proba(X); Isotonic: predict(raw proba).
+        # Порядок/dtype колонок — как в integration.scoring.second.apply_cf_calibrator
+        # (CatBoost feature_names_, не sklearn feature_names_in_), иначе parity CF разъедется.
         if hasattr(cf_calibrator, "predict_proba"):
             from querulus.training.outboxml_metrics import prepare_dsm_features
 
@@ -1297,10 +1299,21 @@ def save_df_for_service(
                 ignore_row_filter=True,
             )
             cal_idx = x_cf.index.intersection(preds_cf.index)
-            names = getattr(cf_calibrator, "feature_names_in_", None)
             x_use = x_cf.loc[cal_idx]
-            if names is not None:
-                x_use = x_use.loc[:, list(names)]
+            try:
+                from integration.scoring.second import (
+                    _align_dtypes_for_catboost,
+                    _cf_predict_column_order,
+                )
+
+                order = _cf_predict_column_order(cf_calibrator, x_use)
+                if order is not None:
+                    x_use = x_use.loc[:, order]
+                x_use = _align_dtypes_for_catboost(x_use, cf_calibrator)
+            except Exception:
+                names = getattr(cf_calibrator, "feature_names_in_", None)
+                if names is not None:
+                    x_use = x_use.loc[:, list(names)]
             preds_cf = pd.Series(
                 np.asarray(cf_calibrator.predict_proba(x_use)[:, 1], dtype=float),
                 index=cal_idx,
