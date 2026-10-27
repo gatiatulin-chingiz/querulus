@@ -40,6 +40,8 @@ INTEGRATION_TEST_DF_MAIN=
 INTEGRATION_TEST_DF_SECOND=
 # Пусто / 0 / all = весь parquet; иначе лимит строк
 INTEGRATION_TEST_MAX_ROWS=
+# Размер multi-row батча в parity (default 512)
+INTEGRATION_TEST_BATCH_SIZE=512
 
 # --- Monitoring (monitoring/) ---
 EMAIL_LOGIN=

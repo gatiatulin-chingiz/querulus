@@ -100,4 +100,13 @@ def max_rows_limit() -> int | None:
     return max(1, int(raw))
 
 
+#new
+def batch_size() -> int:
+    """Размер батча для multi-row predict в parity (INTEGRATION_TEST_BATCH_SIZE)."""
+    raw = os.environ.get("INTEGRATION_TEST_BATCH_SIZE", "").strip()
+    if not raw:
+        return 512
+    return max(1, int(raw))
+
+
 ART = load_artifacts()

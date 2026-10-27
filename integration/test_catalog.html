@@ -353,17 +353,17 @@
     <div class="test">
       <h3><span class="lane main">main</span> test_service_matches_df_for_service_main</h3>
       <p>
-        Берём строки из <code>df_for_service_main.parquet</code>, прогоняем через
-        <code>main_predict</code>, сравниваем preds до сотых. Тест не падает на расхождениях:
-        печатает сколько совпало CF/RG и топ-5 несовпадений по |Δ|.
+        Батчами (multi-row) гоняем <code>df_for_service_main.parquet</code> через
+        <code>main_predict</code>, сравниваем массивы preds до сотых. tqdm по строкам;
+        сводка «N из M полностью совпали» + топ-5 |Δ|. Не падает на mismatch.
       </p>
     </div>
 
     <div class="test">
       <h3><span class="lane second">second</span> test_service_matches_df_for_service_second</h3>
       <p>
-        То же для second_: эталон в <code>df_for_service_second.parquet</code>, ответ
-        <code>score_second</code>. Сводка CF/RG match + топ-5 несовпадений; без fail на mismatch.
+        То же для second_: батчи <code>score_second</code> vs
+        <code>df_for_service_second.parquet</code>, tqdm + сводка match % и топ-5 |Δ|.
       </p>
     </div>
 

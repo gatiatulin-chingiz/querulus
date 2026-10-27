@@ -4,18 +4,26 @@
 ``classification_proba`` и ``regression_predictions`` ответа сервиса
 (для second_ — уже после калибраторов и маски IS_LAWYER).
 
-Невалидные строки не валят тест: печатается статистика совпадений CF/RG
-и топ-5 несовпадений по |Δ|.
+Скоринг батчами (multi-row vector → сравнение массивов). Сводка match %
+и топ-5 несовпадений; расхождения тест не валят.
 """
 from __future__ import annotations
 
+import heapq
+import json
 import sys
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Iterator
 
 import numpy as np
 import pandas as pd
+
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover
+    tqdm = None  # type: ignore[assignment]
 
 _INTEGRATION = Path(__file__).resolve().parents[1]
 _QUERULUS = _INTEGRATION.parent
@@ -31,6 +39,7 @@ from integration.scoring.second import score_second  # noqa: E402
 from integration.service.main import main_predict  # noqa: E402
 from integration.tests.artifacts import (  # noqa: E402
     ART,
+    batch_size,
     max_rows_limit,
     require_file,
 )
@@ -100,22 +109,41 @@ def _row_to_request(row: pd.Series) -> list[dict]:
 
 
 #new
-def _iter_rows(df: pd.DataFrame):
-    """Все строки; если есть split — по train/test; лимит INTEGRATION_TEST_MAX_ROWS."""
+def _frame_to_request(df: pd.DataFrame) -> list[dict]:
+    """Multi-row vector для сервиса (без эталонных preds / split)."""
+    drop = [
+        c
+        for c in (ART.preds_cf_col, ART.preds_rg_col, ART.split_col)
+        if c in df.columns
+    ]
+    part = df.drop(columns=drop, errors="ignore")
+    return json.loads(part.to_json(orient="records", force_ascii=False, date_format="iso"))
+
+
+#new
+def _parity_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """train/test по split + лимит INTEGRATION_TEST_MAX_ROWS."""
     limit = max_rows_limit()
     if ART.split_col in df.columns:
+        parts = []
         for split in ("train", "test"):
             part = df[df[ART.split_col] == split]
             if part.empty:
                 continue
             if limit is not None:
                 part = part.head(limit)
-            for idx, row in part.iterrows():
-                yield split, idx, row
-    else:
-        part = df if limit is None else df.head(limit)
-        for idx, row in part.iterrows():
-            yield "all", idx, row
+            parts.append(part)
+        if not parts:
+            return df.iloc[0:0]
+        return pd.concat(parts, axis=0)
+    return df if limit is None else df.head(limit)
+
+
+#new
+def _iter_batches(df: pd.DataFrame, size: int) -> Iterator[pd.DataFrame]:
+    n = len(df)
+    for start in range(0, n, size):
+        yield df.iloc[start : start + size]
 
 
 #new
@@ -129,11 +157,6 @@ class _Mismatch:
     @property
     def abs_delta(self) -> float:
         return abs(self.got - self.expected)
-
-
-#new
-def _round2(v: float) -> float:
-    return round(float(v), 2)
 
 
 #new
@@ -157,7 +180,7 @@ def _report_parity(
         + (f" ({100.0 * rg_ok / n:.2f}%)" if n else ""),
     ]
     if mismatches:
-        top = sorted(mismatches, key=lambda m: m.abs_delta, reverse=True)[:top_n]
+        top = heapq.nlargest(top_n, mismatches, key=lambda m: m.abs_delta)
         lines.append(f"top-{len(top)} mismatches by |Δ|:")
         for i, m in enumerate(top, 1):
             lines.append(
@@ -170,29 +193,108 @@ def _report_parity(
 
 
 #new
-def _compare_row(
-    cf: float,
-    rg: float,
-    row: pd.Series,
-    tag: str,
-) -> tuple[bool, bool, list[_Mismatch]]:
-    exp_cf = _round2(row[ART.preds_cf_col])
-    exp_rg = _round2(row[ART.preds_rg_col])
-    got_cf = _round2(cf)
-    got_rg = _round2(rg)
-    cf_ok = got_cf == exp_cf
-    rg_ok = got_rg == exp_rg
+def _collect_batch_mismatches(
+    *,
+    lane: str,
+    indices: list,
+    got_cf: np.ndarray,
+    got_rg: np.ndarray,
+    exp_cf: np.ndarray,
+    exp_rg: np.ndarray,
+) -> tuple[int, int, int, list[_Mismatch]]:
+    """Сверка массивов батча → счётчики + список несовпадений."""
+    cf_eq = got_cf == exp_cf
+    rg_eq = got_rg == exp_rg
+    full_eq = cf_eq & rg_eq
     bad: list[_Mismatch] = []
-    if not cf_ok:
-        bad.append(_Mismatch("CF", tag, got_cf, exp_cf))
-    if not rg_ok:
-        bad.append(_Mismatch("RG", tag, got_rg, exp_rg))
-    return cf_ok, rg_ok, bad
+    for i in np.flatnonzero(~cf_eq):
+        bad.append(
+            _Mismatch(
+                "CF",
+                f"{lane} idx={indices[i]}",
+                float(got_cf[i]),
+                float(exp_cf[i]),
+            )
+        )
+    for i in np.flatnonzero(~rg_eq):
+        bad.append(
+            _Mismatch(
+                "RG",
+                f"{lane} idx={indices[i]}",
+                float(got_rg[i]),
+                float(exp_rg[i]),
+            )
+        )
+    return int(full_eq.sum()), int(cf_eq.sum()), int(rg_eq.sum()), bad
+
+
+#new
+def _run_parity_batches(
+    *,
+    title: str,
+    df: pd.DataFrame,
+    score_batch: Callable[[pd.DataFrame], tuple[np.ndarray, np.ndarray]],
+) -> tuple[int, int, int, int, list[_Mismatch]]:
+    """Батч-predict + сравнение массивов; tqdm по батчам/строкам."""
+    work = _parity_frame(df)
+    n_total = len(work)
+    bs = batch_size()
+    n = 0
+    full_ok = 0
+    cf_ok = 0
+    rg_ok = 0
+    mismatches: list[_Mismatch] = []
+
+    pbar = None
+    if tqdm is not None:
+        pbar = tqdm(
+            total=n_total,
+            unit="row",
+            desc=f"parity {title}",
+            leave=True,
+        )
+
+    try:
+        for chunk in _iter_batches(work, bs):
+            got_cf, got_rg = score_batch(chunk)
+            exp_cf = np.round(chunk[ART.preds_cf_col].to_numpy(dtype=float), 2)
+            exp_rg = np.round(chunk[ART.preds_rg_col].to_numpy(dtype=float), 2)
+            got_cf = np.round(np.asarray(got_cf, dtype=float).ravel(), 2)
+            got_rg = np.round(np.asarray(got_rg, dtype=float).ravel(), 2)
+            if len(got_cf) != len(chunk) or len(got_rg) != len(chunk):
+                raise AssertionError(
+                    f"{title}: длина ответа сервиса != батч "
+                    f"(cf={len(got_cf)} rg={len(got_rg)} batch={len(chunk)})"
+                )
+            f_ok, c_ok, r_ok, bad = _collect_batch_mismatches(
+                lane=title,
+                indices=list(chunk.index),
+                got_cf=got_cf,
+                got_rg=got_rg,
+                exp_cf=exp_cf,
+                exp_rg=exp_rg,
+            )
+            full_ok += f_ok
+            cf_ok += c_ok
+            rg_ok += r_ok
+            mismatches.extend(bad)
+            n += len(chunk)
+            if pbar is not None:
+                pbar.update(len(chunk))
+                pbar.set_postfix(
+                    full=f"{100.0 * full_ok / n:.1f}%",
+                    refresh=False,
+                )
+    finally:
+        if pbar is not None:
+            pbar.close()
+
+    return n, full_ok, cf_ok, rg_ok, mismatches
 
 
 #new
 class TestParityMain(unittest.TestCase):
-    """main_predict vs df_for_service_main (сводка, без fail на mismatch)."""
+    """main_predict vs df_for_service_main — multi-row батчи + сводка."""
 
     @classmethod
     def setUpClass(cls):
@@ -205,33 +307,27 @@ class TestParityMain(unittest.TestCase):
         df = pd.read_parquet(ART.df_for_service_main)
         self.assertIn(ART.preds_cf_col, df.columns)
         self.assertIn(ART.preds_rg_col, df.columns)
-        n = 0
-        full_ok = 0
-        cf_ok = 0
-        rg_ok = 0
-        mismatches: list[_Mismatch] = []
-        for split, idx, row in _iter_rows(df):
-            out = main_predict(ART.main_stem, _row_to_request(row))
+
+        def score_batch(chunk: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+            out = main_predict(ART.main_stem, _frame_to_request(chunk))
             res = out["main_response"]["result"]
-            tag = f"main split={split} idx={idx}"
-            ok_c, ok_r, bad = _compare_row(
-                float(res["classification_proba"][0]),
-                float(res["regression_predictions"][0]),
-                row,
-                tag,
+            return (
+                np.asarray(res["classification_proba"], dtype=float),
+                np.asarray(res["regression_predictions"], dtype=float),
             )
-            cf_ok += int(ok_c)
-            rg_ok += int(ok_r)
-            full_ok += int(ok_c and ok_r)
-            mismatches.extend(bad)
-            n += 1
+
+        n, full_ok, cf_ok, rg_ok, mismatches = _run_parity_batches(
+            title="main",
+            df=df,
+            score_batch=score_batch,
+        )
         self.assertGreater(n, 0, "df_for_service_main пуст или отфильтрован")
         _report_parity("main", n, full_ok, cf_ok, rg_ok, mismatches)
 
 
 #new
 class TestParitySecond(unittest.TestCase):
-    """score_second vs df_for_service_second (сводка, без fail на mismatch)."""
+    """score_second vs df_for_service_second — multi-row батчи + сводка."""
 
     @classmethod
     def setUpClass(cls):
@@ -246,26 +342,20 @@ class TestParitySecond(unittest.TestCase):
         df = pd.read_parquet(ART.df_for_service_second)
         self.assertIn(ART.preds_cf_col, df.columns)
         self.assertIn(ART.preds_rg_col, df.columns)
-        n = 0
-        full_ok = 0
-        cf_ok = 0
-        rg_ok = 0
-        mismatches: list[_Mismatch] = []
-        for split, idx, row in _iter_rows(df):
-            out = score_second(ART.second_stem, _row_to_request(row))
+
+        def score_batch(chunk: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+            out = score_second(ART.second_stem, _frame_to_request(chunk))
             res = out["result"]
-            tag = f"second split={split} idx={idx}"
-            ok_c, ok_r, bad = _compare_row(
-                float(res["classification_proba"][0]),
-                float(res["regression_predictions"][0]),
-                row,
-                tag,
+            return (
+                np.asarray(res["classification_proba"], dtype=float),
+                np.asarray(res["regression_predictions"], dtype=float),
             )
-            cf_ok += int(ok_c)
-            rg_ok += int(ok_r)
-            full_ok += int(ok_c and ok_r)
-            mismatches.extend(bad)
-            n += 1
+
+        n, full_ok, cf_ok, rg_ok, mismatches = _run_parity_batches(
+            title="second",
+            df=df,
+            score_batch=score_batch,
+        )
         self.assertGreater(n, 0, "df_for_service_second пуст или отфильтрован")
         _report_parity("second", n, full_ok, cf_ok, rg_ok, mismatches)
 
@@ -284,17 +374,22 @@ class TestDualPredict(unittest.TestCase):
     def test_both_slots_filled(self):
         main_df = pd.read_parquet(ART.df_for_service_main)
         second_df = pd.read_parquet(ART.df_for_service_second)
-        main_row = main_df.iloc[0]
-        second_row = second_df.iloc[0]
+        # multi-row smoke: по 3 строки (или меньше, если parquet короткий)
+        main_chunk = main_df.head(min(3, len(main_df)))
+        second_chunk = second_df.head(min(3, len(second_df)))
         out = main_predict(
             ART.main_stem,
-            _row_to_request(main_row),
+            _frame_to_request(main_chunk),
             ART.second_stem,
-            _row_to_request(second_row),
+            _frame_to_request(second_chunk),
         )
         self.assertIn("oisuu_responce", out)
         self.assertIn("main_response", out)
         self.assertTrue(out["second_response"].get("result"))
+        main_cf = out["main_response"]["result"]["classification_proba"]
+        second_cf = out["second_response"]["result"]["classification_proba"]
+        self.assertEqual(len(main_cf), len(main_chunk))
+        self.assertEqual(len(second_cf), len(second_chunk))
 
 
 if __name__ == "__main__":
