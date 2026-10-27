@@ -38,7 +38,7 @@ INTEGRATION_TEST_CF_CAL=
 INTEGRATION_TEST_RG_CAL=
 INTEGRATION_TEST_DF_MAIN=
 INTEGRATION_TEST_DF_SECOND=
-# Пусто = 200 строк; 0 или all = весь parquet
+# Пусто / 0 / all = весь parquet; иначе лимит строк
 INTEGRATION_TEST_MAX_ROWS=
 
 # --- Monitoring (monitoring/) ---

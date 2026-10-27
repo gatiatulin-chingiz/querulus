@@ -132,22 +132,21 @@ def _round2(v: float) -> float:
 def _report_parity(
     title: str,
     n: int,
+    full_ok: int,
     cf_ok: int,
     rg_ok: int,
     mismatches: list[_Mismatch],
     top_n: int = 5,
 ) -> None:
     """Печать сводки; тест не валим из‑за расхождений."""
-    cf_bad = n - cf_ok
-    rg_bad = n - rg_ok
+    pct = (100.0 * full_ok / n) if n else 0.0
     lines = [
         f"=== parity {title} ===",
-        f"rows={n}",
+        f"{full_ok} из {n} строк полностью совпали, совпадение {pct:.2f}%",
         f"CF match: {cf_ok}/{n}"
-        + (f" ({100.0 * cf_ok / n:.1f}%)" if n else ""),
+        + (f" ({100.0 * cf_ok / n:.2f}%)" if n else ""),
         f"RG match: {rg_ok}/{n}"
-        + (f" ({100.0 * rg_ok / n:.1f}%)" if n else ""),
-        f"CF mismatch: {cf_bad}, RG mismatch: {rg_bad}",
+        + (f" ({100.0 * rg_ok / n:.2f}%)" if n else ""),
     ]
     if mismatches:
         top = sorted(mismatches, key=lambda m: m.abs_delta, reverse=True)[:top_n]
@@ -198,6 +197,7 @@ class TestParityMain(unittest.TestCase):
         self.assertIn(ART.preds_cf_col, df.columns)
         self.assertIn(ART.preds_rg_col, df.columns)
         n = 0
+        full_ok = 0
         cf_ok = 0
         rg_ok = 0
         mismatches: list[_Mismatch] = []
@@ -213,12 +213,11 @@ class TestParityMain(unittest.TestCase):
             )
             cf_ok += int(ok_c)
             rg_ok += int(ok_r)
+            full_ok += int(ok_c and ok_r)
             mismatches.extend(bad)
             n += 1
-            if n % 50 == 0:
-                print(f"parity main progress: {n} rows…", flush=True)
         self.assertGreater(n, 0, "df_for_service_main пуст или отфильтрован")
-        _report_parity("main", n, cf_ok, rg_ok, mismatches)
+        _report_parity("main", n, full_ok, cf_ok, rg_ok, mismatches)
 
 
 #new
@@ -238,6 +237,7 @@ class TestParitySecond(unittest.TestCase):
         self.assertIn(ART.preds_cf_col, df.columns)
         self.assertIn(ART.preds_rg_col, df.columns)
         n = 0
+        full_ok = 0
         cf_ok = 0
         rg_ok = 0
         mismatches: list[_Mismatch] = []
@@ -253,12 +253,11 @@ class TestParitySecond(unittest.TestCase):
             )
             cf_ok += int(ok_c)
             rg_ok += int(ok_r)
+            full_ok += int(ok_c and ok_r)
             mismatches.extend(bad)
             n += 1
-            if n % 50 == 0:
-                print(f"parity second progress: {n} rows…", flush=True)
         self.assertGreater(n, 0, "df_for_service_second пуст или отфильтрован")
-        _report_parity("second", n, cf_ok, rg_ok, mismatches)
+        _report_parity("second", n, full_ok, cf_ok, rg_ok, mismatches)
 
 
 #new

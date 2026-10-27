@@ -90,14 +90,12 @@ def require_file(path: Path, label: str) -> Path:
 
 #new
 def max_rows_limit() -> int | None:
-    """Лимит строк для parity (INTEGRATION_TEST_MAX_ROWS).
+    """Опциональный лимит строк для parity (INTEGRATION_TEST_MAX_ROWS).
 
-    Пусто → 200 (smoke). ``0`` / ``all`` → без лимита.
+    Пусто / ``0`` / ``all`` → без лимита (весь parquet).
     """
     raw = os.environ.get("INTEGRATION_TEST_MAX_ROWS", "").strip().lower()
-    if not raw:
-        return 200
-    if raw in {"0", "all", "none", "-1"}:
+    if not raw or raw in {"0", "all", "none", "-1"}:
         return None
     return max(1, int(raw))
 
