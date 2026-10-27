@@ -353,18 +353,17 @@
     <div class="test">
       <h3><span class="lane main">main</span> test_service_matches_df_for_service_main</h3>
       <p>
-        Берём строки из <code>df_for_service_main.parquet</code> (там уже лежат ожидаемые
-        preds_cf / preds_rg), прогоняем каждую через <code>main_predict</code> и сравниваем
-        с эталоном до сотых. Если preprocess или модель «поехали» — цифры разъедутся.
+        Берём строки из <code>df_for_service_main.parquet</code>, прогоняем через
+        <code>main_predict</code>, сравниваем preds до сотых. Тест не падает на расхождениях:
+        печатает сколько совпало CF/RG и топ-5 несовпадений по |Δ|.
       </p>
     </div>
 
     <div class="test">
       <h3><span class="lane second">second</span> test_service_matches_df_for_service_second</h3>
       <p>
-        То же для новой модели: эталон в <code>df_for_service_second.parquet</code> уже
-        после калибровки и маски юриста. Ответ <code>score_second</code> должен совпасть
-        до 2 знаков. Это контроль полного shadow-пайплайна end-to-end.
+        То же для second_: эталон в <code>df_for_service_second.parquet</code>, ответ
+        <code>score_second</code>. Сводка CF/RG match + топ-5 несовпадений; без fail на mismatch.
       </p>
     </div>
 

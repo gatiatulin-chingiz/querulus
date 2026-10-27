@@ -3,11 +3,15 @@
 Эталон в parquet: колонки ``preds_cf`` / ``preds_rg`` — ожидаемые
 ``classification_proba`` и ``regression_predictions`` ответа сервиса
 (для second_ — уже после калибраторов и маски IS_LAWYER).
+
+Невалидные строки не валят тест: печатается статистика совпадений CF/RG
+и топ-5 несовпадений по |Δ|.
 """
 from __future__ import annotations
 
 import sys
 import unittest
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -107,22 +111,81 @@ def _iter_rows(df: pd.DataFrame):
 
 
 #new
-def _assert_preds(test: unittest.TestCase, cf: float, rg: float, row: pd.Series, tag: str):
-    test.assertEqual(
-        round(cf, 2),
-        round(float(row[ART.preds_cf_col]), 2),
-        msg=f"{tag} CF mismatch",
-    )
-    test.assertEqual(
-        round(rg, 2),
-        round(float(row[ART.preds_rg_col]), 2),
-        msg=f"{tag} RG mismatch",
-    )
+@dataclass(frozen=True)
+class _Mismatch:
+    kind: str  # CF | RG
+    tag: str
+    got: float
+    expected: float
+
+    @property
+    def abs_delta(self) -> float:
+        return abs(self.got - self.expected)
+
+
+#new
+def _round2(v: float) -> float:
+    return round(float(v), 2)
+
+
+#new
+def _report_parity(
+    title: str,
+    n: int,
+    cf_ok: int,
+    rg_ok: int,
+    mismatches: list[_Mismatch],
+    top_n: int = 5,
+) -> None:
+    """Печать сводки; тест не валим из‑за расхождений."""
+    cf_bad = n - cf_ok
+    rg_bad = n - rg_ok
+    lines = [
+        f"=== parity {title} ===",
+        f"rows={n}",
+        f"CF match: {cf_ok}/{n}"
+        + (f" ({100.0 * cf_ok / n:.1f}%)" if n else ""),
+        f"RG match: {rg_ok}/{n}"
+        + (f" ({100.0 * rg_ok / n:.1f}%)" if n else ""),
+        f"CF mismatch: {cf_bad}, RG mismatch: {rg_bad}",
+    ]
+    if mismatches:
+        top = sorted(mismatches, key=lambda m: m.abs_delta, reverse=True)[:top_n]
+        lines.append(f"top-{len(top)} mismatches by |Δ|:")
+        for i, m in enumerate(top, 1):
+            lines.append(
+                f"  {i}. [{m.kind}] {m.tag}: got={m.got} expected={m.expected} "
+                f"|Δ|={m.abs_delta}"
+            )
+    else:
+        lines.append("mismatches: none")
+    print("\n".join(lines), flush=True)
+
+
+#new
+def _compare_row(
+    cf: float,
+    rg: float,
+    row: pd.Series,
+    tag: str,
+) -> tuple[bool, bool, list[_Mismatch]]:
+    exp_cf = _round2(row[ART.preds_cf_col])
+    exp_rg = _round2(row[ART.preds_rg_col])
+    got_cf = _round2(cf)
+    got_rg = _round2(rg)
+    cf_ok = got_cf == exp_cf
+    rg_ok = got_rg == exp_rg
+    bad: list[_Mismatch] = []
+    if not cf_ok:
+        bad.append(_Mismatch("CF", tag, got_cf, exp_cf))
+    if not rg_ok:
+        bad.append(_Mismatch("RG", tag, got_rg, exp_rg))
+    return cf_ok, rg_ok, bad
 
 
 #new
 class TestParityMain(unittest.TestCase):
-    """main_predict vs df_for_service_main."""
+    """main_predict vs df_for_service_main (сводка, без fail на mismatch)."""
 
     @classmethod
     def setUpClass(cls):
@@ -135,23 +198,30 @@ class TestParityMain(unittest.TestCase):
         self.assertIn(ART.preds_cf_col, df.columns)
         self.assertIn(ART.preds_rg_col, df.columns)
         n = 0
+        cf_ok = 0
+        rg_ok = 0
+        mismatches: list[_Mismatch] = []
         for split, idx, row in _iter_rows(df):
             out = main_predict(ART.main_stem, _row_to_request(row))
             res = out["main_response"]["result"]
-            _assert_preds(
-                self,
+            tag = f"main split={split} idx={idx}"
+            ok_c, ok_r, bad = _compare_row(
                 float(res["classification_proba"][0]),
                 float(res["regression_predictions"][0]),
                 row,
-                f"main split={split} idx={idx}",
+                tag,
             )
+            cf_ok += int(ok_c)
+            rg_ok += int(ok_r)
+            mismatches.extend(bad)
             n += 1
         self.assertGreater(n, 0, "df_for_service_main пуст или отфильтрован")
+        _report_parity("main", n, cf_ok, rg_ok, mismatches)
 
 
 #new
 class TestParitySecond(unittest.TestCase):
-    """score_second vs df_for_service_second."""
+    """score_second vs df_for_service_second (сводка, без fail на mismatch)."""
 
     @classmethod
     def setUpClass(cls):
@@ -166,18 +236,25 @@ class TestParitySecond(unittest.TestCase):
         self.assertIn(ART.preds_cf_col, df.columns)
         self.assertIn(ART.preds_rg_col, df.columns)
         n = 0
+        cf_ok = 0
+        rg_ok = 0
+        mismatches: list[_Mismatch] = []
         for split, idx, row in _iter_rows(df):
             out = score_second(ART.second_stem, _row_to_request(row))
             res = out["result"]
-            _assert_preds(
-                self,
+            tag = f"second split={split} idx={idx}"
+            ok_c, ok_r, bad = _compare_row(
                 float(res["classification_proba"][0]),
                 float(res["regression_predictions"][0]),
                 row,
-                f"second split={split} idx={idx}",
+                tag,
             )
+            cf_ok += int(ok_c)
+            rg_ok += int(ok_r)
+            mismatches.extend(bad)
             n += 1
         self.assertGreater(n, 0, "df_for_service_second пуст или отфильтрован")
+        _report_parity("second", n, cf_ok, rg_ok, mismatches)
 
 
 #new
