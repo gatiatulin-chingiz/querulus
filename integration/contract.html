@@ -187,9 +187,10 @@
       <p class="eyebrow">Querulus · API 1.4.0</p>
       <h1>Контракт HTTP API</h1>
       <p>
-        Запрос и полный ответ <code>POST /api/predict</code> (dual-track).
-        Боевой блок для ОИСУУ — <code>oisuu_responce</code> всегда от <strong>main_</strong> (legacy).
-        <code>second_response</code> — shadow 2.0.0 (FE_* + калибраторы + τ).
+        Запрос и полный ответ <code>POST /api/predict</code> (dual-track):
+        <code>main_response</code> (legacy) + <code>second_response</code> (2.0.0).
+        Блок <code>oisuu_responce</code> убран; <code>version</code> и <code>CPMComment</code> —
+        внутри каждого трека.
         <a href="architecture.html">архитектура</a> ·
         <a href="functions.html">карта функций</a> ·
         <a href="tests.html">тесты</a>
@@ -214,12 +215,12 @@
         <tr>
           <td><span class="pill get">GET</span></td>
           <td><code>/api/health</code></td>
-          <td><code>{"health": true, "version": "1.4.0"}</code> (+ опционально <code>git_commit</code>)</td>
+          <td><code>{"health": true, "main_version": "1.4.0", "second_version": "2.0.0"}</code> (+ опционально <code>git_commit</code>)</td>
         </tr>
         <tr>
           <td><span class="pill post">POST</span></td>
           <td><code>/api/predict</code></td>
-          <td>JSON: <code>oisuu_responce</code> + <code>main_response</code> + <code>second_response</code></td>
+          <td>JSON: <code>main_response</code> + <code>second_response</code></td>
         </tr>
       </tbody>
     </table>
@@ -289,36 +290,22 @@
 
     <h2 id="response">Ответ <span class="tag">200 OK</span></h2>
     <div class="prewrap">{
-  <span class="k">"oisuu_responce"</span>: { … },   <span class="c">// боевой блок ОИСУУ ← всегда main_</span>
-  <span class="k">"main_response"</span>:  { … },   <span class="c">// полный результат legacy</span>
+  <span class="k">"main_response"</span>:  { … },   <span class="c">// legacy · version из MAIN_VERSION</span>
   <span class="k">"second_response"</span>: { … }    <span class="c">// 2.0.0 или {}</span>
 }</div>
-
-    <div class="card oisuu">
-      <h3>oisuu_responce</h3>
-      <table>
-        <thead><tr><th>Поле</th><th>Тип</th><th>Смысл</th></tr></thead>
-        <tbody>
-          <tr><td><code>version</code></td><td><code>"1.4.0"</code></td><td>версия API</td></tr>
-          <tr><td><code>threshold</code></td><td>float (2 знака)</td><td>порог классификации main_</td></tr>
-          <tr><td><code>CPMComment</code></td><td>string</td><td>SHAP top-фичи clf + reg</td></tr>
-          <tr><td><code>classification_proba</code></td><td>number[]</td><td>P(класс=1), 2 знака</td></tr>
-          <tr><td><code>classification_predictions</code></td><td>number[]</td><td>0 / 1 по порогу</td></tr>
-          <tr><td><code>regression_predictions</code></td><td>number[]</td><td>маскированная регрессия</td></tr>
-          <tr><td><code>predictions</code></td><td>string</td><td>тот же итог как JSON-строка (контракт ОИСУУ)</td></tr>
-        </tbody>
-      </table>
-    </div>
 
     <div class="card main-lane">
       <h3>main_response</h3>
       <div class="prewrap">{
   <span class="k">"usage_model"</span>: <span class="s">"&lt;main_model&gt;"</span>,
+  <span class="k">"version"</span>: <span class="s">"1.4.0"</span>,
+  <span class="k">"CPMComment"</span>: <span class="s">"shap_clf: … | shap_reg: …"</span>,
   <span class="k">"result"</span>: {
     <span class="k">"classification_proba"</span>: […],
     <span class="k">"classification_predictions"</span>: […],
     <span class="k">"regression_predictions"</span>: […],
-    <span class="k">"prediction"</span>: […]          <span class="c">// список, не JSON-строка</span>
+    <span class="k">"prediction"</span>: […],
+    <span class="k">"threshold"</span>: <span class="n">0.55</span>
   },
   <span class="k">"df"</span>: {
     <span class="k">"input"</span>:  [ { …preprocess… } ],
@@ -329,15 +316,17 @@
 
     <div class="card second-lane">
       <h3>second_response</h3>
-      <p class="note">Та же форма, что <code>main_response</code>, плюс <code>result.threshold</code> (τ 2.0.0).</p>
+      <p class="note">Та же форма, что <code>main_response</code>; <code>version</code> из <code>SECOND_VERSION</code> (по умолчанию 2.0.0).</p>
       <div class="prewrap">{
   <span class="k">"usage_model"</span>: <span class="s">"&lt;second_model&gt;"</span>,
+  <span class="k">"version"</span>: <span class="s">"2.0.0"</span>,
+  <span class="k">"CPMComment"</span>: <span class="s">"shap_clf: … | shap_reg: …"</span>,
   <span class="k">"result"</span>: {
     <span class="k">"classification_proba"</span>: […],
     <span class="k">"classification_predictions"</span>: […],
     <span class="k">"regression_predictions"</span>: […],
     <span class="k">"prediction"</span>: […],
-    <span class="k">"threshold"</span>: <span class="n">0.42</span>          <span class="c">// только second_</span>
+    <span class="k">"threshold"</span>: <span class="n">0.42</span>
   },
   <span class="k">"df"</span>: { <span class="k">"input"</span>: […], <span class="k">"output"</span>: […] }
 }</div>
@@ -439,22 +428,16 @@ Content-Type: application/json
 
     <h3>Response 200</h3>
     <div class="prewrap">{
-  <span class="k">"oisuu_responce"</span>: {
-    <span class="k">"version"</span>: <span class="s">"1.4.0"</span>,
-    <span class="k">"threshold"</span>: <span class="n">0.55</span>,
-    <span class="k">"CPMComment"</span>: <span class="s">"shap_clf: FILIAL=0.12, APPLICANT_AGE=0.08 | shap_reg: AMOUNT_REPAIR=0.31"</span>,
-    <span class="k">"classification_proba"</span>: [<span class="n">0.72</span>],
-    <span class="k">"classification_predictions"</span>: [<span class="n">1.0</span>],
-    <span class="k">"regression_predictions"</span>: [<span class="n">85432.1</span>],
-    <span class="k">"predictions"</span>: <span class="s">"[85432.1]"</span>
-  },
   <span class="k">"main_response"</span>: {
     <span class="k">"usage_model"</span>: <span class="s">"querulus_ansamble_legacy"</span>,
+    <span class="k">"version"</span>: <span class="s">"1.4.0"</span>,
+    <span class="k">"CPMComment"</span>: <span class="s">"shap_clf: FILIAL=0.12, APPLICANT_AGE=0.08 | shap_reg: AMOUNT_REPAIR=0.31"</span>,
     <span class="k">"result"</span>: {
       <span class="k">"classification_proba"</span>: [<span class="n">0.72</span>],
       <span class="k">"classification_predictions"</span>: [<span class="n">1.0</span>],
       <span class="k">"regression_predictions"</span>: [<span class="n">85432.1</span>],
-      <span class="k">"prediction"</span>: [<span class="n">85432.1</span>]
+      <span class="k">"prediction"</span>: [<span class="n">85432.1</span>],
+      <span class="k">"threshold"</span>: <span class="n">0.55</span>
     },
     <span class="k">"df"</span>: {
       <span class="k">"input"</span>: [
@@ -472,13 +455,15 @@ Content-Type: application/json
         {
           <span class="k">"FILIAL"</span>: <span class="s">"МОСКВА"</span>,
           <span class="k">"AMOUNT_REPAIR"</span>: <span class="n">120000</span>,
-          <span class="c">"…матрицы после prepare_dataset (clf+reg)…"</span>
+          <span class="c">"…матрицы после prepare_dataset (clf+rg)…"</span>
         }
       ]
     }
   },
   <span class="k">"second_response"</span>: {
     <span class="k">"usage_model"</span>: <span class="s">"UU_querulus_2026_10_09_16_51_20"</span>,
+    <span class="k">"version"</span>: <span class="s">"2.0.0"</span>,
+    <span class="k">"CPMComment"</span>: <span class="s">"shap_clf: … | shap_reg: …"</span>,
     <span class="k">"result"</span>: {
       <span class="k">"classification_proba"</span>: [<span class="n">0.61</span>],
       <span class="k">"classification_predictions"</span>: [<span class="n">1.0</span>],
@@ -513,7 +498,6 @@ Content-Type: application/json
 }</div>
     <h3>Response (фрагмент)</h3>
     <div class="prewrap">{
-  <span class="k">"oisuu_responce"</span>: { <span class="c">/* как выше */</span> },
   <span class="k">"main_response"</span>:  { <span class="c">/* как выше */</span> },
   <span class="k">"second_response"</span>: {}
 }</div>
@@ -535,7 +519,8 @@ Content-Type: application/json
 
 {
   <span class="k">"health"</span>: <span class="n">true</span>,
-  <span class="k">"version"</span>: <span class="s">"1.4.0"</span>,
+  <span class="k">"main_version"</span>: <span class="s">"1.4.0"</span>,
+  <span class="k">"second_version"</span>: <span class="s">"2.0.0"</span>,
   <span class="k">"git_commit"</span>: <span class="s">"abc1234"</span>   <span class="c">// только если задан SERVICE_GIT_COMMIT</span>
 }</div>
 

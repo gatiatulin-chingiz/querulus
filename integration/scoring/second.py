@@ -19,6 +19,7 @@ try:
         second_rg_calibrator_path,
     )
     from service.masking import masked_predictions
+    from service.shap_comment import shap_top_features_comment, unwrap_mldataworker_model
 except ImportError:
     from integration.features.derived import add_second_model_features
     from integration.scoring.profiles import (
@@ -29,6 +30,10 @@ except ImportError:
         second_rg_calibrator_path,
     )
     from integration.service.masking import masked_predictions
+    from integration.service.shap_comment import (
+        shap_top_features_comment,
+        unwrap_mldataworker_model,
+    )
 
 _APPLICANT_FORM_REMAP_UPPER: dict[str, str] = {
     "СКРЫТЫЙ ЮРИСТ": "ЮРИСТ С ПОТЕРПЕВШИМ",
@@ -441,6 +446,11 @@ def score_second(
     features_values: List[Dict],
 ) -> Dict[str, Any]:
     """Полный скоринг 2.0.0 → структура как main_response."""
+    try:
+        from integration import config
+    except ImportError:
+        import config
+
     group = _load_group(group_name)
     clf_model, rg_model = group[0], group[1]
     df_common = preprocess_second_vector(features_values)
@@ -466,17 +476,28 @@ def score_second(
     cal_reg = apply_rg_calibrator(rg_cal, raw_reg)
     masked = masked_predictions(labels, cal_reg, df_common)
 
+    cpm_comment = (
+        shap_top_features_comment(
+            unwrap_mldataworker_model(model_c),
+            t_c,
+            prefix="shap_clf",
+        )
+        + " | "
+        + shap_top_features_comment(
+            unwrap_mldataworker_model(model_r),
+            t_r,
+            prefix="shap_reg",
+        )
+    ).strip()
+
     rounded_proba = _round_numbers(proba)
     rounded_labels = _round_numbers(labels)
     rounded_masked = _round_numbers(masked)
 
-    prediction_metrics = {
+    result_body = {
         "classification_proba": rounded_proba,
         "classification_predictions": rounded_labels,
         "regression_predictions": rounded_masked,
-    }
-    result_body = {
-        **prediction_metrics,
         "prediction": rounded_masked,
         "threshold": round(float(threshold_value), 2),
     }
@@ -486,6 +507,8 @@ def score_second(
 
     return {
         "usage_model": group_name,
+        "version": config.second_version,
+        "CPMComment": cpm_comment,
         "result": result_body,
         "df": {
             "input": json_loads_records(df_common),

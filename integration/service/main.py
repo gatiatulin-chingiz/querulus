@@ -7,7 +7,7 @@
     Маска по классу и IS_LAWYER (см. ``_masked_predictions``).
 
 Точки входа HTTP
-    GET  /api/health  — проверка живости, ``health``, ``version``; опционально ``git_commit``.
+    GET  /api/health  — ``health``, ``main_version``, ``second_version``; опционально ``git_commit``.
     POST /api/predict — тело JSON по схеме ``ServiceRequest`` (mldataworker):
         - main_model (str): stem файла ``<main_model>.pickle`` основной модели
           (ансамбль: классификация + регрессия в одном pickle);
@@ -26,11 +26,8 @@
     2) Иначе ``config.default_main_threshold``.
 
 Ответ POST (верхний уровень)
-    oisuu_responce — короткий блок для интеграций;
-    main_response — usage_model, result, df (поля oisuu не дублируются; порядок ключей
-    в result совпадает с порядком одноимённых метрик в oisuu);
-    second_response — при second_model+second_request: скоринг shadow 2.0.0;
-    иначе {}. Боевой oisuu_responce всегда от main_.
+    main_response — usage_model, version, CPMComment, result, df (legacy);
+    second_response — то же для shadow 2.0.0 при second_*; иначе {}.
 
 # Dual-track: main_ = legacy ensemble; second_ = 2.0.0 (FE + калибраторы + τ cal).
 
@@ -61,16 +58,24 @@ try:
     from integration import config
     from integration.scoring.second import score_second
     from integration.service.masking import masked_predictions
+    from integration.service.shap_comment import (
+        shap_top_features_comment,
+        unwrap_mldataworker_model,
+    )
 except ImportError:
     import config
     from scoring.second import score_second
     from service.masking import masked_predictions
+    from service.shap_comment import (
+        shap_top_features_comment,
+        unwrap_mldataworker_model,
+    )
 
 # HTTP-приложение FastAPI
 app = FastAPI()
 
-# Версия API в oisuu_responce["version"] и GET /api/health (см. CHANGELOG.md)
-version = "1.4.0"
+# Совместимость re-export: версия main_-трека (см. config.main_version).
+version = config.main_version
 
 # Имена колонок, которые должны присутствовать в main_request для классификации
 CLASSIFICATION_FEATURES: List[str] = [
@@ -228,8 +233,9 @@ def _startup_log() -> None:
         models_dir = _prod_models_dir()
         exists = models_dir.is_dir()
         logger.info(
-            "Service startup || version={} || models_dir={} || models_dir_exists={} || cwd={}",
-            version,
+            "Service startup || main_version={} || second_version={} || models_dir={} || models_dir_exists={} || cwd={}",
+            config.main_version,
+            config.second_version,
             str(models_dir),
             exists,
             str(Path.cwd()),
@@ -459,204 +465,6 @@ def _round_numbers(obj: Any, ndigits: int=2) -> Any:
     return obj
 
 #reviewed
-def _unwrap_mldataworker_model(model: Any) -> Any:
-    """
-    Достаёт «сырой» estimator из обёрток mldataworker.
-
-    По текущему контракту модели могут быть обёрнуты и реальный estimator находится в:
-        model.model.model
-    """
-    inner = model
-    for _ in range(2):
-        if hasattr(inner, "model"):
-            inner = getattr(inner, "model")
-        else:
-            break
-    return inner
-
-
-#reviewed
-def _shap_top_features_comment(
-    model: Any,
-    t: pd.DataFrame,
-    *,
-    prefix: str,
-    top_n: int = 5,
-) -> str:
-    """
-    Считает SHAP для единичного запроса и возвращает короткую строку для CPMComment.
-
-    Если SHAP недоступен или падает — возвращает строку с причиной (без raising),
-    чтобы не ломать scoring.
-    """
-    try:
-        import shap  # type: ignore
-    except Exception as e:
-        return f"{prefix}: SHAP unavailable ({type(e).__name__})"
-
-    try:
-        base_model = _unwrap_mldataworker_model(model)
-        feature_names = list(t.columns)
-        proba_prefix = ""
-        base_raw_for_pct: Optional[float] = None
-
-        def _is_catboost_model(m: Any) -> bool:
-            mod = getattr(m, "__module__", "") or ""
-            name = getattr(m, "__class__", type(m)).__name__
-            return mod.startswith("catboost") or name.startswith("CatBoost")
-
-        # CatBoost: считаем нативно (стабильный порядок фич), иначе TreeExplainer.
-        if _is_catboost_model(base_model):
-            if not hasattr(base_model, "get_feature_importance"):
-                raise ValueError("CatBoost model without get_feature_importance()")
-            try:
-                from catboost import Pool  # type: ignore
-            except Exception:
-                raise
-
-            # Важно: `get_cat_feature_indices()` возвращает индексы в порядке фичей модели.
-            # Порядок/набор колонок в `t` может отличаться, поэтому маппим categorical по именам.
-            cat_idxs: list[int] = []
-            try:
-                model_feature_names = list(getattr(base_model, "feature_names_", None) or [])
-                if not model_feature_names and hasattr(base_model, "get_feature_names"):
-                    model_feature_names = list(base_model.get_feature_names() or [])
-                model_cat_idxs = []
-                if hasattr(base_model, "get_cat_feature_indices"):
-                    model_cat_idxs = list(base_model.get_cat_feature_indices() or [])
-                cat_names = [model_feature_names[i] for i in model_cat_idxs if i < len(model_feature_names)]
-                name_to_idx = {name: i for i, name in enumerate(feature_names)}
-                cat_idxs = [name_to_idx[n] for n in cat_names if n in name_to_idx]
-            except Exception:
-                cat_idxs = []
-
-            df_pool = t.copy()
-            for i, col in enumerate(feature_names):
-                if i in cat_idxs:
-                    df_pool[col] = df_pool[col].astype("string").fillna("NA")
-                else:
-                    df_pool[col] = pd.to_numeric(df_pool[col], errors="coerce").fillna(0.0)
-
-            pool = Pool(df_pool, feature_names=feature_names, cat_features=cat_idxs)
-            values = base_model.get_feature_importance(pool, type="ShapValues")
-            expected_value = None
-        else:
-            # Базовая логика: TreeExplainer для tree-based моделей.
-            try:
-                tree_explainer = shap.TreeExplainer(
-                    base_model,
-                    feature_perturbation="tree_path_dependent",
-                )
-                values = tree_explainer.shap_values(t)
-                expected_value = getattr(tree_explainer, "expected_value", None)
-            except Exception as e:
-                if type(e).__name__ == "CatBoostError" and hasattr(base_model, "get_feature_importance"):
-                    # CatBoost может прокинуть ошибку даже в TreeExplainer, пробуем нативный путь.
-                    from catboost import Pool  # type: ignore
-
-                    cat_idxs = []
-                    try:
-                        model_feature_names = list(getattr(base_model, "feature_names_", None) or [])
-                        if not model_feature_names and hasattr(base_model, "get_feature_names"):
-                            model_feature_names = list(base_model.get_feature_names() or [])
-                        model_cat_idxs = []
-                        if hasattr(base_model, "get_cat_feature_indices"):
-                            model_cat_idxs = list(base_model.get_cat_feature_indices() or [])
-                        cat_names = [model_feature_names[i] for i in model_cat_idxs if i < len(model_feature_names)]
-                        name_to_idx = {name: i for i, name in enumerate(feature_names)}
-                        cat_idxs = [name_to_idx[n] for n in cat_names if n in name_to_idx]
-                    except Exception:
-                        cat_idxs = []
-
-                    df_pool = t.copy()
-                    for i, col in enumerate(feature_names):
-                        if i in cat_idxs:
-                            df_pool[col] = df_pool[col].astype("string").fillna("NA")
-                        else:
-                            df_pool[col] = pd.to_numeric(df_pool[col], errors="coerce").fillna(0.0)
-
-                    pool = Pool(df_pool, feature_names=feature_names, cat_features=cat_idxs)
-                    values = base_model.get_feature_importance(pool, type="ShapValues")
-                    expected_value = None
-                else:
-                    raise
-
-        # Нормализуем форму значений к (n_rows, n_features).
-        # Для классификации некоторые реализации возвращают list[array] по классам.
-        if isinstance(values, list) and values:
-            v = np.asarray(values[0])
-        else:
-            v = np.asarray(values)
-        # CatBoost ShapValues: последний столбец — base value, убираем его.
-        if v.ndim == 3 and v.shape[1] == len(feature_names) + 1:
-            # Классификация: (n_rows, n_features+1, n_classes). Берём класс 1, если он есть.
-            class_idx = 1 if v.shape[2] > 1 else 0
-            # Для вероятности (бинарная классификация) берём raw-score класса 1.
-            if prefix.startswith("shap_clf"):
-                base_raw = float(v[0, -1, class_idx])
-                raw = base_raw + float(np.sum(v[0, :-1, class_idx]))
-                p = 1.0 / (1.0 + float(np.exp(-raw)))
-                proba_prefix = f"p={p:.4f} | "
-                base_raw_for_pct = base_raw
-            v = v[:, :, class_idx]
-        if v.ndim == 2 and v.shape[1] == len(feature_names) + 1:
-            if prefix.startswith("shap_clf"):
-                base_raw = float(v[0, -1])
-                raw = base_raw + float(np.sum(v[0, :-1]))
-                p = 1.0 / (1.0 + float(np.exp(-raw)))
-                proba_prefix = f"p={p:.4f} | "
-                base_raw_for_pct = base_raw
-            v = v[:, :-1]
-        # TreeExplainer ветка: expected_value может быть доступен отдельно.
-        if not proba_prefix and prefix.startswith("shap_clf") and expected_value is not None and v.ndim == 2:
-            try:
-                ev = expected_value
-                if isinstance(ev, (list, tuple, np.ndarray)):
-                    class_idx = 1 if len(ev) > 1 else 0
-                    ev = ev[class_idx]
-                base_raw = float(ev)
-                raw = base_raw + float(np.sum(v[0]))
-                p = 1.0 / (1.0 + float(np.exp(-raw)))
-                proba_prefix = f"p={p:.4f} | "
-                base_raw_for_pct = base_raw
-            except Exception:
-                proba_prefix = ""
-        if v.ndim == 3:
-            v = v[:, :, 0]
-        if v.ndim != 2 or v.shape[0] < 1:
-            return f"{prefix}: SHAP empty"
-
-        row = v[0]
-        if len(feature_names) != row.shape[0]:
-            feature_names = feature_names[: row.shape[0]]
-
-        if prefix.startswith("shap_clf") and base_raw_for_pct is not None:
-            base_p = 1.0 / (1.0 + float(np.exp(-base_raw_for_pct)))
-            # Относительное изменение вероятности от вклада одного признака.
-            # Это не аддитивная декомпозиция в probability-space, но удобно как "impact %".
-            rel = []
-            for c in row:
-                p_i = 1.0 / (1.0 + float(np.exp(-(base_raw_for_pct + float(c)))))
-                if base_p == 0:
-                    rel.append(0.0)
-                else:
-                    rel.append((p_i / base_p - 1.0) * 100.0)
-            rel_arr = np.asarray(rel, dtype=float)
-            idx = np.argsort(np.abs(rel_arr))[::-1][:top_n]
-            parts = [f"{feature_names[i]}={rel_arr[i]:+.2f}%" for i in idx]
-            return f"{prefix}: " + proba_prefix + ", ".join(parts)
-
-        idx = np.argsort(np.abs(row))[::-1][:top_n]
-        parts = [f"{feature_names[i]}={row[i]:+.4f}" for i in idx]
-        return f"{prefix}: " + proba_prefix + ", ".join(parts)
-    except Exception as e:
-        msg = str(e).replace("\n", " ").strip()
-        if len(msg) > 120:
-            msg = msg[:120] + "..."
-        return f"{prefix}: SHAP error ({type(e).__name__}: {msg})"
-
-
-#reviewed
 def _df_to_json(df: pd.DataFrame) -> List[Dict]:
     """
     Преобразует DataFrame в список записей для JSON; ключи в каждой записи по алфавиту.
@@ -864,16 +672,10 @@ def main_predict(
 
     Возвращает:
         dict с ключами:
-            - "oisuu_responce": версия, порог, proba/метки классификации,
-              regression_predictions и predictions (маска, см. ``_masked_predictions``);
-            - "main_response": ``usage_model``, ``result``, ``df`` — те же метрики, что в oisuu.
-            # В `result` выводятся следующие ключи (в указанном порядке):
-            #   - classification_proba: вероятности положительного класса для каждой записи
-            #   - classification_predictions: предсказанные бинарные метки (0 или 1) для каждой записи
-            #   - regression_predictions: маскированная регрессия
-            #   - prediction: то же, что oisuu predictions
+            - "main_response": ``usage_model``, ``version``, ``CPMComment``, ``result``, ``df``.
+              # В `result`: classification_proba / classification_predictions /
+              # regression_predictions / prediction / threshold.
             - "second_response": shadow 2.0.0 (если second_* заданы), иначе {}.
-              # CUTOVER: после shadow перенести логику в main_.
 
     Выбрасывает:
         Исключения из загрузки файлов / prepare_dataset пробрасываются в HTTP 500 в predict_route.
@@ -914,13 +716,8 @@ def main_predict(
     proba = clf["proba"]
     clf_t = clf["t"]
 
-    # oisuu_responce: version/threshold/CPMComment; общие метрики — в prediction_metrics ниже.
-    oisuu: Dict[str, Any] = {
-        "version": version,
-        "threshold": round(float(threshold_value), 2),
-    }
-    oisuu["CPMComment"] = _shap_top_features_comment(
-        _unwrap_mldataworker_model(clf_model.get("model")),
+    cpm_comment = shap_top_features_comment(
+        unwrap_mldataworker_model(clf_model.get("model")),
         clf_t,
         prefix="shap_clf",
     )
@@ -938,11 +735,11 @@ def main_predict(
     )
     raw_reg = reg["raw_predictions"]
     reg_t = reg["t"]
-    oisuu["CPMComment"] = (
-        oisuu.get("CPMComment", "")
+    cpm_comment = (
+        cpm_comment
         + " | "
-        + _shap_top_features_comment(
-            _unwrap_mldataworker_model(rg_model.get("model")),
+        + shap_top_features_comment(
+            unwrap_mldataworker_model(rg_model.get("model")),
             reg_t,
             prefix="shap_reg",
         )
@@ -961,19 +758,12 @@ def main_predict(
     rounded_labels = _round_numbers(labels)
     rounded_masked_reg = _round_numbers(masked_reg)
 
-    # Общие метрики для oisuu_responce и main_response["result"]; порядок ключей — эталон.
-    prediction_metrics: Dict[str, Any] = {
+    result_body: Dict[str, Any] = {
         "classification_proba": rounded_proba,
         "classification_predictions": rounded_labels,
         "regression_predictions": rounded_masked_reg,
-    }
-    oisuu.update(prediction_metrics)
-    oisuu["predictions"] = json.dumps(rounded_masked_reg, ensure_ascii=False)
-
-    # prediction — тот же итог, что oisuu predictions, но списком (не JSON-строка).
-    result_body: Dict[str, Any] = {
-        **prediction_metrics,
         "prediction": rounded_masked_reg,
+        "threshold": round(float(threshold_value), 2),
     }
 
     # Отладочная таблица "что реально подали в модели": объединяем матрицы признаков
@@ -988,9 +778,10 @@ def main_predict(
         "output": _df_to_json(output_df),
     }
 
-    # main_response без копирования полей oisuu; порядок верхнего уровня: usage_model → result → df.
     main_response: Dict[str, Any] = {
         "usage_model": group_name,
+        "version": config.main_version,
+        "CPMComment": cpm_comment,
         "result": result_body,
         "df": df_body,
     }
@@ -1011,7 +802,6 @@ def main_predict(
             raise
 
     return {
-        "oisuu_responce": oisuu,
         "main_response": main_response,
         "second_response": second_response,
     }
@@ -1023,11 +813,15 @@ def health_route():
     Проверка, что процесс жив и маршрут зарегистрирован.
 
     Возвращает:
-        JSONResponse: ``health``, ``version``; при сборке может быть ``git_commit``
-        из переменной окружения ``SERVICE_GIT_COMMIT``.
+        JSONResponse: ``health``, ``main_version``, ``second_version``; при сборке
+        может быть ``git_commit`` из ``SERVICE_GIT_COMMIT``.
     """
     logger.debug("GET /api/health")
-    body: Dict[str, Any] = {"health": True, "version": version}
+    body: Dict[str, Any] = {
+        "health": True,
+        "main_version": config.main_version,
+        "second_version": config.second_version,
+    }
     git_commit = os.environ.get("SERVICE_GIT_COMMIT", "").strip()
     if git_commit:
         body["git_commit"] = git_commit

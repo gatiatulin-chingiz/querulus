@@ -465,9 +465,13 @@ class TestDualPredict(unittest.TestCase):
             ART.second_stem,
             _frame_to_request(second_chunk),
         )
-        self.assertIn("oisuu_responce", out)
+        self.assertNotIn("oisuu_responce", out)
         self.assertIn("main_response", out)
+        self.assertEqual(out["main_response"].get("version"), "1.4.0")
+        self.assertIn("CPMComment", out["main_response"])
         self.assertTrue(out["second_response"].get("result"))
+        self.assertEqual(out["second_response"].get("version"), "2.0.0")
+        self.assertIn("CPMComment", out["second_response"])
         main_cf = out["main_response"]["result"]["classification_proba"]
         second_cf = out["second_response"]["result"]["classification_proba"]
         self.assertEqual(len(main_cf), len(main_chunk))

@@ -18,6 +18,9 @@ OISUU_DB_PORT=1433
 # Скопируйте этот файл в .env в корне querulus (или задайте переменные в shell).
 # config.py читает env_template / .env относительно cwd.
 # Stem модели — из тела запроса. THRESHOLD — из вектора; иначе DEFAULT ниже.
+# Версии треков → main_response / second_response и /api/health.
+MAIN_VERSION=1.4.0
+SECOND_VERSION=2.0.0
 DEFAULT_MAIN_THRESHOLD=0.6
 DEFAULT_SECOND_THRESHOLD=0.6
 # Shadow 2.0.0: калибраторы (пусто SUBDIR = рядом с pickle в results/)

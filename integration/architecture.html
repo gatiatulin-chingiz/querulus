@@ -352,7 +352,7 @@
         <rect x="430" y="18" width="280" height="70" rx="6" fill="#1a2834" stroke="#4a9fd8"/>
         <text x="445" y="40" fill="#8ec5eb" font-family="IBM Plex Sans,sans-serif" font-size="12" font-weight="600">main_ · legacy</text>
         <text x="445" y="58" fill="#9aabbc" font-family="IBM Plex Mono,monospace" font-size="10">preprocess → CF+RG → IS_LAWYER</text>
-        <text x="445" y="74" fill="#6a8aa0" font-family="IBM Plex Mono,monospace" font-size="9">→ oisuu_responce + main_response</text>
+        <text x="445" y="74" fill="#6a8aa0" font-family="IBM Plex Mono,monospace" font-size="9">→ main_response (version + CPMComment)</text>
 
         <rect x="430" y="132" width="280" height="70" rx="6" fill="#2a2418" stroke="#e0a04a"/>
         <text x="445" y="154" fill="#efc07a" font-family="IBM Plex Sans,sans-serif" font-size="12" font-weight="600">second_ · 2.0.0</text>
@@ -364,7 +364,7 @@
 
         <rect x="770" y="80" width="170" height="52" rx="6" fill="#162820" stroke="#2a7a5c" stroke-width="1.5"/>
         <text x="855" y="102" text-anchor="middle" fill="#e8eef4" font-family="IBM Plex Sans,sans-serif" font-size="12" font-weight="600">JSON response</text>
-        <text x="855" y="118" text-anchor="middle" fill="#9aabbc" font-family="IBM Plex Mono,monospace" font-size="9">3 блока ответа</text>
+        <text x="855" y="118" text-anchor="middle" fill="#9aabbc" font-family="IBM Plex Mono,monospace" font-size="9">2 блока ответа</text>
       </svg>
     </div>
 
@@ -416,8 +416,8 @@
             <li>
               <span class="n">05</span>
               <div>
-                <strong>Ответ ОИСУУ</strong>
-                <span class="hint">oisuu_responce + main_response (+ SHAP в CPMComment)</span>
+                <strong>main_response</strong>
+                <span class="hint">version + CPMComment (SHAP) + result + df</span>
               </div>
             </li>
           </ol>
@@ -469,11 +469,10 @@
 
       <div class="node response">
         <div class="label">Выход</div>
-        <div class="title">Три блока JSON</div>
+        <div class="title">Два блока JSON</div>
         <div class="meta">
-          <code>oisuu_responce</code> — контракт ОИСУУ (всегда от main_);
-          <code>main_response</code> — полный результат legacy;
-          <code>second_response</code> — результат 2.0.0 или <code>{}</code>, если second_* не переданы.
+          <code>main_response</code> — legacy (<code>version</code>, <code>CPMComment</code>, result, df);
+          <code>second_response</code> — 2.0.0 или <code>{}</code>, если second_* не переданы.
         </div>
       </div>
     </div>
@@ -485,6 +484,7 @@
         <ul>
           <li><b>main.py</b> — FastAPI, health/predict, скоринг main_</li>
           <li><b>masking.py</b> — общая маска IS_LAWYER</li>
+          <li><b>shap_comment.py</b> — SHAP → CPMComment</li>
           <li><b>mldataworker_shim.py</b> — alias на outboxml локально</li>
         </ul>
       </div>
