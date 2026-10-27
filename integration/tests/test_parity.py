@@ -34,6 +34,14 @@ from integration.tests.artifacts import (  # noqa: E402
     max_rows_limit,
     require_file,
 )
+from loguru import logger as _loguru_logger  # noqa: E402
+
+
+#new
+def _quiet_service_logs() -> None:
+    """Parity гоняет десятки тысяч строк — INFO/DEBUG сервиса не нужен."""
+    _loguru_logger.remove()
+    _loguru_logger.add(sys.stderr, level="WARNING")
 
 
 #new
@@ -191,6 +199,7 @@ class TestParityMain(unittest.TestCase):
         require_file(ART.main_pickle, "main_pickle")
         require_file(ART.df_for_service_main, "df_for_service_main")
         _patch_models_dir()
+        _quiet_service_logs()
 
     def test_service_matches_df_for_service_main(self):
         df = pd.read_parquet(ART.df_for_service_main)
@@ -231,6 +240,7 @@ class TestParitySecond(unittest.TestCase):
         require_file(ART.cf_calibrator, "cf_calibrator")
         require_file(ART.rg_calibrator, "rg_calibrator")
         _patch_models_dir()
+        _quiet_service_logs()
 
     def test_service_matches_df_for_service_second(self):
         df = pd.read_parquet(ART.df_for_service_second)
@@ -269,6 +279,7 @@ class TestDualPredict(unittest.TestCase):
         require_file(ART.df_for_service_main, "df_for_service_main")
         require_file(ART.df_for_service_second, "df_for_service_second")
         _patch_models_dir()
+        _quiet_service_logs()
 
     def test_both_slots_filled(self):
         main_df = pd.read_parquet(ART.df_for_service_main)
