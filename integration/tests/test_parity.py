@@ -167,6 +167,20 @@ class _Mismatch:
 
 
 #new
+def _format_top(kind: str, mismatches: list[_Mismatch], top_n: int) -> list[str]:
+    subset = [m for m in mismatches if m.kind == kind]
+    if not subset:
+        return [f"top-{kind}: none"]
+    top = heapq.nlargest(top_n, subset, key=lambda m: m.abs_delta)
+    lines = [f"top-{len(top)} {kind} mismatches by |Δ|:"]
+    for i, m in enumerate(top, 1):
+        lines.append(
+            f"  {i}. {m.tag}: got={m.got} expected={m.expected} |Δ|={m.abs_delta}"
+        )
+    return lines
+
+
+#new
 def _report_parity(
     title: str,
     n: int,
@@ -186,16 +200,8 @@ def _report_parity(
         f"RG match: {rg_ok}/{n}"
         + (f" ({100.0 * rg_ok / n:.2f}%)" if n else ""),
     ]
-    if mismatches:
-        top = heapq.nlargest(top_n, mismatches, key=lambda m: m.abs_delta)
-        lines.append(f"top-{len(top)} mismatches by |Δ|:")
-        for i, m in enumerate(top, 1):
-            lines.append(
-                f"  {i}. [{m.kind}] {m.tag}: got={m.got} expected={m.expected} "
-                f"|Δ|={m.abs_delta}"
-            )
-    else:
-        lines.append("mismatches: none")
+    lines.extend(_format_top("CF", mismatches, top_n))
+    lines.extend(_format_top("RG", mismatches, top_n))
     print("\n".join(lines), flush=True)
 
 
