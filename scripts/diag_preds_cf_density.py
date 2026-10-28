@@ -12,8 +12,8 @@
   - cal CF через ``apply_cf_calibrator``;
   - ответ ``score_second`` (как в тесте).
 
-Drill-down ``--idx``: scores + FE_* parquet vs service-preprocess +
-prepared matrix (dtype/значения) + порядок колонок калибратора.
+Drill-down ``--idx``: scores + фичи модели **после** preprocess+prepare
+(до predict) — эталонный путь (FE_ из parquet) vs сервис (пересчёт FE_).
 """
 from __future__ import annotations
 
@@ -43,6 +43,8 @@ from integration.scoring.second import (  # noqa: E402
     _prepare_matrix,
     _raw_classification_scores,
     apply_cf_calibrator,
+    enrich_dates_and_forms,
+    prepare_vector_upper,
     preprocess_second_vector,
     score_second,
 )
@@ -65,6 +67,23 @@ def _frame_to_request(df: pd.DataFrame) -> list[dict]:
     return json.loads(
         part.to_json(orient="records", force_ascii=False, date_format="iso")
     )
+
+
+#new
+def _resolve_col(df: pd.DataFrame, name: str) -> str | None:
+    """Имя колонки с учётом регистра."""
+    if name in df.columns:
+        return name
+    lowered = {str(c).casefold(): c for c in df.columns}
+    return lowered.get(name.casefold())
+
+
+#new
+def _preprocess_keep_parquet_fe(features_values: list[dict]) -> pd.DataFrame:
+    """UPPER + dates/forms, FE_* из parquet не трогаем (эталонный путь обучения)."""
+    df = prepare_vector_upper(features_values)
+    df = enrich_dates_and_forms(df)
+    return df
 
 
 #new
@@ -184,13 +203,25 @@ def _print_drilldown(stem: str, row: pd.DataFrame, idx_label: Any) -> None:
     exp_rg = parquet_s.get("preds_rg")
 
     req = _frame_to_request(row)
-    df_pre = preprocess_second_vector(req)
-    pre_s = df_pre.iloc[0]
+    # Сервис: FE_* пересчёт из сырого → prepare_dataset.
+    df_svc = preprocess_second_vector(req)
+    # Эталон: FE_* как в parquet (обучение) → тот же UPPER/dates → prepare_dataset.
+    df_ref = _preprocess_keep_parquet_fe(req)
 
-    clf_df = df_pre.loc[:, feats]
-    model_c, t_c = _prepare_matrix(clf_model, clf_df)
-    raw = float(_raw_classification_scores(model_c, t_c)[0])
-    cal = float(apply_cf_calibrator(cf_cal, [raw], t_c)[0])
+    def _prepared(model_result: dict, frame: pd.DataFrame, names: list[str]):
+        missing = [c for c in names if c not in frame.columns]
+        use = frame.copy()
+        for c in missing:
+            use[c] = np.nan
+        return _prepare_matrix(model_result, use.loc[:, names])
+
+    model_c, t_cf_svc = _prepared(clf_model, df_svc, feats)
+    _, t_cf_ref = _prepared(clf_model, df_ref, feats)
+    _, t_rg_svc = _prepared(rg_model, df_svc, rg_feats)
+    _, t_rg_ref = _prepared(rg_model, df_ref, rg_feats)
+
+    raw = float(_raw_classification_scores(model_c, t_cf_svc)[0])
+    cal = float(apply_cf_calibrator(cf_cal, [raw], t_cf_svc)[0])
     one = score_second(stem, req)
     svc_cf = float(one["result"]["classification_proba"][0])
     svc_label = float(one["result"]["classification_predictions"][0])
@@ -242,7 +273,7 @@ def _print_drilldown(stem: str, row: pd.DataFrame, idx_label: Any) -> None:
         print(f"has predict_proba: {hasattr(cf_cal, 'predict_proba')}")
         order = None
         try:
-            order = _cf_predict_column_order(cf_cal, t_c)
+            order = _cf_predict_column_order(cf_cal, t_cf_svc)
         except Exception as exc:  # noqa: BLE001
             print(f"column order error: {exc}")
         sklearn_in = getattr(cf_cal, "feature_names_in_", None)
@@ -250,28 +281,47 @@ def _print_drilldown(stem: str, row: pd.DataFrame, idx_label: Any) -> None:
             print(f"feature_names_in_ ({len(sklearn_in)}): {list(sklearn_in)[:20]}...")
         if order is not None:
             print(f"cal predict order ({len(order)}): {order}")
-            if list(t_c.columns) != order:
+            if list(t_cf_svc.columns) != order:
                 print(
                     "WARN: prepared matrix column order != cal order "
-                    f"(prepared={list(t_c.columns)[:8]}...)"
+                    f"(prepared={list(t_cf_svc.columns)[:8]}...)"
                 )
 
-    id_cols = [
-        c
-        for c in (
-            "LOSS_NUMBER",
-            "CLAIM_ID",
-            "IS_LAWYER",
-            "EVENT_DATE",
-            "LOSS_DATE_TIME",
-            "PAYMENT_ORDER_DATE_TIME",
-        )
-        if c in row.columns
-    ]
-    if id_cols:
-        print("\n--- identity / key fields (parquet) ---")
-        for c in id_cols:
-            print(f"  {c}: {_fmt_cell(parquet_s[c])}")
+    id_names = (
+        "LOSS_NUMBER",
+        "CLAIM_ID",
+        "IS_LAWYER",
+        "EVENT_DATE",
+        "LOSS_DATE_TIME",
+        "PAYMENT_ORDER_DATE_TIME",
+        "VICTIM_CAPACITY_ENGINE",
+        "VICTIM_MAX_WEIGHT",
+        "FE_DAYS_EVENT_TO_LOSS",
+        "FE_VICTIM_POWER_PER_TON",
+    )
+    print("\n--- identity / key fields (parquet) ---")
+    for name in id_names:
+        col = _resolve_col(row, name)
+        if col is None:
+            print(f"  {name}: «нет колонки»")
+        else:
+            print(f"  {col}: {_fmt_cell(parquet_s[col])}")
+    # Явно: что сервис посчитал до prepare (для FE_DAYS / POWER).
+    print("--- same keys after service preprocess (до prepare) ---")
+    for name in (
+        "EVENT_DATE",
+        "LOSS_DATE_TIME",
+        "PAYMENT_ORDER_DATE_TIME",
+        "VICTIM_CAPACITY_ENGINE",
+        "VICTIM_MAX_WEIGHT",
+        "FE_DAYS_EVENT_TO_LOSS",
+        "FE_VICTIM_POWER_PER_TON",
+    ):
+        col = _resolve_col(df_svc, name)
+        if col is None:
+            print(f"  {name}: «нет колонки»")
+        else:
+            print(f"  {col}: {_fmt_cell(df_svc.iloc[0][col])}")
 
     def _clip_note(model_result: dict, name: str) -> str:
         cfg = model_result.get("model_config") if isinstance(model_result, dict) else None
@@ -288,52 +338,82 @@ def _print_drilldown(stem: str, row: pd.DataFrame, idx_label: Any) -> None:
             if feat.get("name") != name:
                 continue
             clip = feat.get("clip") or {}
-            if not clip:
-                return ""
-            return f" clip[{clip.get('min_value')}, {clip.get('max_value')}]"
+            default = feat.get("default")
+            bits = []
+            if clip:
+                bits.append(f"clip[{clip.get('min_value')}, {clip.get('max_value')}]")
+            if default is not None:
+                bits.append(f"default={default}")
+            return (" " + " ".join(bits)) if bits else ""
         return ""
 
-    model_feats: list[tuple[str, str, dict]] = (
-        [("CF", name, clf_model) for name in feats]
-        + [("RG", name, rg_model) for name in rg_feats if name not in feats]
-    )
-    print("\n--- model features: parquet vs service preprocess ---")
-    print("строки UPPER/lower считаются равными")
-    print(
-        f"{'lane':<4} {'column':<40} {'parquet':<22} {'service_pre':<22} {'same':<5}"
-    )
-    n_diff = 0
-    for lane, name, model_result in model_feats:
-        in_p = name in row.columns
-        pv = parquet_s[name] if in_p else "«нет»"
-        sv = pre_s[name] if name in df_pre.columns else "«нет»"
-        same = "yes" if in_p and name in df_pre.columns and _values_close(pv, sv) else "NO"
-        if same == "NO":
-            n_diff += 1
-        mark = "" if same == "yes" else _clip_note(model_result, name)
+    def _print_prepared_compare(
+        lane: str,
+        names: list[str],
+        t_ref: pd.DataFrame,
+        t_svc: pd.DataFrame,
+        model_result: dict,
+    ) -> int:
         print(
-            f"{lane:<4} {name:<40} {_fmt_cell(pv):<22} {_fmt_cell(sv):<22} {same:<5}{mark}"
+            f"\n--- {lane}: prepared (после preprocess+prepare, до model) ---"
         )
-        for src in _FEATURE_SOURCES.get(name, ()):
-            if src not in row.columns and src not in df_pre.columns:
-                continue
-            sp = parquet_s[src] if src in row.columns else "«нет»"
-            ss = pre_s[src] if src in df_pre.columns else "«нет»"
-            src_same = "yes" if _values_close(sp, ss) else "NO"
-            print(
-                f"{'':4} {'  ↳ ' + src:<40} {_fmt_cell(sp):<22} {_fmt_cell(ss):<22} {src_same:<5}"
+        print(
+            "эталон = FE_/поля из parquet → UPPER/dates → prepare_dataset; "
+            "сервис = пересчёт FE_ → prepare_dataset"
+        )
+        print("строки UPPER/lower считаются равными")
+        print(
+            f"{'column':<40} {'prepared_ref':<18} {'prepared_svc':<18} {'same':<5}"
+        )
+        ref_s = t_ref.iloc[0]
+        svc_s = t_svc.iloc[0]
+        n_diff = 0
+        for name in names:
+            pv = ref_s[name] if name in ref_s.index else "«нет»"
+            sv = svc_s[name] if name in svc_s.index else "«нет»"
+            same = (
+                "yes"
+                if name in ref_s.index
+                and name in svc_s.index
+                and _values_close(pv, sv)
+                else "NO"
             )
-    print(f"summary: model features={len(model_feats)}, diff={n_diff}")
+            if same == "NO":
+                n_diff += 1
+            mark = "" if same == "yes" else _clip_note(model_result, name)
+            print(
+                f"{name:<40} {_fmt_cell(pv):<18} {_fmt_cell(sv):<18} {same:<5}{mark}"
+            )
+            if same == "NO":
+                for src in _FEATURE_SOURCES.get(name, ()):
+                    sp = (
+                        parquet_s[_resolve_col(row, src)]
+                        if _resolve_col(row, src)
+                        else "«нет»"
+                    )
+                    ss = (
+                        df_svc.iloc[0][_resolve_col(df_svc, src)]
+                        if _resolve_col(df_svc, src)
+                        else "«нет»"
+                    )
+                    print(
+                        f"{'  ↳ ' + src:<40} "
+                        f"{_fmt_cell(sp):<18} {_fmt_cell(ss):<18} "
+                        f"{'yes' if _values_close(sp, ss) else 'NO':<5}"
+                    )
+        print(f"summary {lane}: features={len(names)}, prepared_diff={n_diff}")
+        return n_diff
 
-    print("\n--- prepared CF matrix (service prepare_dataset) ---")
-    print(f"shape: {t_c.shape}, columns ({len(t_c.columns)}): {list(t_c.columns)}")
-    prep = t_c.iloc[0]
-    # matrix after cal dtype align (what CCCV actually sees)
-    t_aligned = t_c
+    n_cf_diff = _print_prepared_compare("CF", feats, t_cf_ref, t_cf_svc, clf_model)
+    n_rg_diff = _print_prepared_compare("RG", rg_feats, t_rg_ref, t_rg_svc, rg_model)
+
+    print("\n--- CF prepared dtypes (service) + cal align ---")
+    prep = t_cf_svc.iloc[0]
+    t_aligned = t_cf_svc
     if cf_cal is not None and hasattr(cf_cal, "predict_proba") and not _is_isotonic_1d(cf_cal):
-        order = _cf_predict_column_order(cf_cal, t_c)
+        order = _cf_predict_column_order(cf_cal, t_cf_svc)
         if order is not None:
-            t_aligned = t_c.loc[:, order]
+            t_aligned = t_cf_svc.loc[:, order]
         t_aligned = _align_dtypes_for_catboost(t_aligned, cf_cal)
     aligned = t_aligned.iloc[0]
     print(
@@ -343,53 +423,32 @@ def _print_drilldown(stem: str, row: pd.DataFrame, idx_label: Any) -> None:
     for c in t_aligned.columns:
         print(
             f"{c:<42} {_fmt_cell(prep[c] if c in prep.index else '—'):<18} "
-            f"{str(t_c[c].dtype if c in t_c.columns else '—'):<12} "
+            f"{str(t_cf_svc[c].dtype if c in t_cf_svc.columns else '—'):<12} "
             f"{_fmt_cell(aligned[c]):<18} {str(t_aligned[c].dtype):<12}"
         )
 
-    # parquet raw model-feature values vs prepared (if present)
-    print("\n--- parquet raw feature vs prepared (если колонка была во входе) ---")
-    print(f"{'feature':<42} {'parquet_raw':<22} {'prepared':<22} {'same':<5}")
-    n_mat_diff = 0
-    for c in feats:
-        if c not in row.columns:
-            continue
-        pv = parquet_s[c]
-        mv = prep[c] if c in prep.index else "—"
-        same = "yes" if _values_close(pv, mv) else "NO"
-        if same == "NO":
-            n_mat_diff += 1
-            print(
-                f"{c:<42} {_fmt_cell(pv):<22} {_fmt_cell(mv):<22} {same:<5}"
-            )
-    if n_mat_diff == 0:
-        print("  (нет расхождений среди фич, которые были в parquet до prepare)")
-    else:
-        print(f"summary: parquet_raw≠prepared for {n_mat_diff} features")
-
     print("\n--- hypothesis ---")
-    if abs(exp_cf - svc_cf) < 0.015:
-        print("OK: parquet ≈ service на этой строке.")
+    if abs(exp_cf - svc_cf) < 0.015 and n_rg_diff == 0 and n_cf_diff == 0:
+        print("OK: scores и prepared-фичи совпали.")
+    elif abs(exp_cf - svc_cf) < 0.015:
+        print(
+            f"CF score ≈ parquet, но prepared_diff CF={n_cf_diff} RG={n_rg_diff} "
+            "(часто clip/default: смотри default= у NO)."
+        )
     elif abs(exp_cf - raw) < abs(exp_cf - cal):
         print(
             "Похоже parquet ближе к RAW, а сервис отдаёт CAL — "
             "эталон мог быть без калибратора / другой cal."
         )
-    elif n_diff > 0:
+    elif n_cf_diff or n_rg_diff:
         print(
-            f"Похоже расходятся FE_*/вход до модели ({n_diff} полей): "
-            "сервис пересчитывает FE_*, эталон писал preds по другому кадру."
-        )
-    elif n_mat_diff > 0:
-        print(
-            "Входные фичи есть, но prepare_dataset меняет значения "
-            "(clip/fillna/category collapse) иначе, чем при экспорте эталона."
+            f"Расходятся prepared-фичи до модели (CF={n_cf_diff}, RG={n_rg_diff}): "
+            "сервис пересчитывает FE_*, эталон берёт FE_ из parquet."
         )
     else:
         print(
-            "FE_* и сырой вход похожи, а cal всё равно другой — "
-            "смотри порядок/dtype колонок CCCV (prepared vs aligned) "
-            "или эталон считался через DSM prepare_dsm_features."
+            "Prepared-фичи совпали, а cal другой — смотри порядок/dtype CCCV "
+            "или эталон через DSM prepare_dsm_features."
         )
     print(f"{'=' * 72}\n")
 
