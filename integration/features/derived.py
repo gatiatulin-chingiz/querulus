@@ -8,14 +8,12 @@ try:
     from features.cpi import (
         INFLATION_BASE_YEAR,
         add_real_monetary_columns,
-        deflate_to_base_year,
         real_feature_name,
     )
 except ImportError:
     from integration.features.cpi import (
         INFLATION_BASE_YEAR,
         add_real_monetary_columns,
-        deflate_to_base_year,
         real_feature_name,
     )
 
@@ -67,6 +65,19 @@ def _tier_from_bins(
 
 
 #new
+def drop_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Убрать FE_* / age months: во входном векторе их не будет, не доверяем клиенту."""
+    drop = [
+        c
+        for c in df.columns
+        if str(c).startswith("FE_") or str(c) == "VICTIM_OBJECT_AGE_MONTHS"
+    ]
+    if not drop:
+        return df
+    return df.drop(columns=drop)
+
+
+#new
 def _ensure_share_work(df: pd.DataFrame) -> pd.DataFrame:
     """SHARE_WORK = Работы / VALUE_BEFORE_WITHOUT (не AMOUNT_REPAIR)."""
     out = df
@@ -112,18 +123,12 @@ def add_second_model_features(
     *,
     base_year: int = INFLATION_BASE_YEAR,
 ) -> pd.DataFrame:
-    """Добавить FE_* / age months, нужные CF+RG 2.0.0.
+    """Собрать FE_* / age months из сырого вектора (без доверия к FE_* во входе).
 
-    REAL-суммы дефлируются по дате выплаты (как ``features/derived.py`` на t0),
-    не по дате ДТП. Если ``FE_DAYS_EVENT_TO_LOSS`` или ``FE_VICTIM_POWER_PER_TON``
-    уже есть во входе — не пересчитываем (в эталоне они после clip / NaN).
+    REAL — дефляция по дате выплаты (t0), как в обучении.
+    Clip числовых FE — в ``prepare_dataset`` из model_config.
     """
-    precomputed_days = (
-        pd.to_numeric(df["FE_DAYS_EVENT_TO_LOSS"], errors="coerce")
-        if "FE_DAYS_EVENT_TO_LOSS" in df.columns
-        else None
-    )
-    out = df.copy()
+    out = drop_engineered_features(df).copy()
     out["_CPI_ASOF"] = _cpi_asof_dates(out)
     out = add_real_monetary_columns(
         out, event_date_column="_CPI_ASOF", base_year=base_year
@@ -146,12 +151,10 @@ def add_second_model_features(
         both_positive
     )
 
-    # Уже посчитанные дни не перетираем: в эталоне это значение после clip
-    # (max=36), а сырой LOSS−EVENT бывает сильно больше.
-    if precomputed_days is None:
-        loss_dt = _to_dt(_col(out, "LOSS_DATE_TIME"))
-        event_dt = _to_dt(_col(out, "EVENT_DATE"))
-        out["FE_DAYS_EVENT_TO_LOSS"] = (loss_dt - event_dt).dt.days
+    out["FE_DAYS_EVENT_TO_LOSS"] = _days_between(
+        _col(out, "LOSS_DATE_TIME"),
+        _col(out, "EVENT_DATE"),
+    )
     out["FE_DAYS_TO_PH_CONTRACT_END"] = _days_between(
         _col(out, "POLICYHOLDER_CONTRACT_END_DATE"),
         _col(out, "EVENT_DATE"),
@@ -159,13 +162,10 @@ def add_second_model_features(
 
     out["FE_SHARE_WORK_TIER"] = _tier_from_bins(_col(out, "SHARE_WORK"))
 
-    # Колонка из эталона (в т.ч. NaN → default модели) важнее пересчёта:
-    # сырой л.с./кг × 1e6 потом клипится иначе, чем пропуск.
-    if "FE_VICTIM_POWER_PER_TON" not in out.columns:
-        out["FE_VICTIM_POWER_PER_TON"] = (
-            _safe_div(_col(out, "VICTIM_CAPACITY_ENGINE"), _col(out, "VICTIM_MAX_WEIGHT"))
-            * 1e6
-        )
+    out["FE_VICTIM_POWER_PER_TON"] = (
+        _safe_div(_col(out, "VICTIM_CAPACITY_ENGINE"), _col(out, "VICTIM_MAX_WEIGHT"))
+        * 1e6
+    )
 
     if "VICTIM_OBJECT_YEAR" in out.columns:
         base = _col(out, "EVENT_DATE")
@@ -175,7 +175,6 @@ def add_second_model_features(
             out["VICTIM_OBJECT_YEAR"], base
         )
 
-    # Клип отрицательного DIFF → 0 (как в train DQ).
     if "FE_VALUE_BEFORE_DIFF" in out.columns:
         diff = pd.to_numeric(out["FE_VALUE_BEFORE_DIFF"], errors="coerce")
         out["FE_VALUE_BEFORE_DIFF"] = diff.clip(lower=0)

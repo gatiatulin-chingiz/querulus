@@ -76,8 +76,17 @@ def enrich_dates_and_forms(df: pd.DataFrame) -> pd.DataFrame:
 
 #new
 def preprocess_second_vector(features_values: List[Dict]) -> pd.DataFrame:
-    """UPPER → dates/forms → FE_* (CPI REAL + derived). Clip — в prepare_dataset из JSON."""
+    """UPPER → dates/forms → FE_* из сырого вектора. Clip — в prepare_dataset.
+
+    FE_* / VICTIM_OBJECT_AGE_MONTHS во входе игнорируются (контракт: только сырые поля).
+    """
+    try:
+        from features.derived import drop_engineered_features
+    except ImportError:
+        from integration.features.derived import drop_engineered_features
+
     df = prepare_vector_upper(features_values)
+    df = drop_engineered_features(df)
     df = enrich_dates_and_forms(df)
     if df["EVENT_DATE"].isna().any() or df["PAYMENT_ORDER_DATE_TIME"].isna().any():
         raise ValueError("Second: EVENT_DATE or PAYMENT_ORDER_DATE_TIME is NaN")
