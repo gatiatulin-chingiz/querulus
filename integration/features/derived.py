@@ -99,13 +99,36 @@ def vehicle_age_months_from_year(
 
 
 #new
+def _cpi_asof_dates(df: pd.DataFrame) -> pd.Series:
+    """Год CPI как в обучении: t0 = PAYMENT_ORDER_DATE_TIME, иначе EVENT_DATE."""
+    pay = _to_dt(_col(df, "PAYMENT_ORDER_DATE_TIME"))
+    event = _to_dt(_col(df, "EVENT_DATE"))
+    return pay.where(pay.notna(), event)
+
+
+#new
 def add_second_model_features(
     df: pd.DataFrame,
     *,
     base_year: int = INFLATION_BASE_YEAR,
 ) -> pd.DataFrame:
-    """Добавить FE_* / age months, нужные CF+RG 2.0.0. Сырой вектор без FE_*."""
-    out = add_real_monetary_columns(df, event_date_column="EVENT_DATE", base_year=base_year)
+    """Добавить FE_* / age months, нужные CF+RG 2.0.0.
+
+    REAL-суммы дефлируются по дате выплаты (как ``features/derived.py`` на t0),
+    не по дате ДТП. Дни event→loss считаются по ``LOSS_DATE_TIME``;
+    если даты убытка нет, остаётся уже посчитанный ``FE_DAYS_EVENT_TO_LOSS``.
+    """
+    precomputed_days = (
+        pd.to_numeric(df["FE_DAYS_EVENT_TO_LOSS"], errors="coerce")
+        if "FE_DAYS_EVENT_TO_LOSS" in df.columns
+        else None
+    )
+    out = df.copy()
+    out["_CPI_ASOF"] = _cpi_asof_dates(out)
+    out = add_real_monetary_columns(
+        out, event_date_column="_CPI_ASOF", base_year=base_year
+    )
+    out = out.drop(columns=["_CPI_ASOF"])
     out = _ensure_share_work(out)
 
     t0 = "PAYMENT_ORDER_DATE_TIME"
@@ -123,10 +146,12 @@ def add_second_model_features(
         both_positive
     )
 
-    loss_dt = _col(out, "LOSS_DATE_TIME")
-    if loss_dt.isna().all() and t0 in out.columns:
-        loss_dt = out[t0]
-    out["FE_DAYS_EVENT_TO_LOSS"] = _days_between(loss_dt, _col(out, "EVENT_DATE"))
+    loss_dt = _to_dt(_col(out, "LOSS_DATE_TIME"))
+    event_dt = _to_dt(_col(out, "EVENT_DATE"))
+    days = (loss_dt - event_dt).dt.days
+    if precomputed_days is not None:
+        days = days.where(loss_dt.notna(), precomputed_days)
+    out["FE_DAYS_EVENT_TO_LOSS"] = days
     out["FE_DAYS_TO_PH_CONTRACT_END"] = _days_between(
         _col(out, "POLICYHOLDER_CONTRACT_END_DATE"),
         _col(out, "EVENT_DATE"),

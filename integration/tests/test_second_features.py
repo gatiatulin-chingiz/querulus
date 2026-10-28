@@ -68,6 +68,50 @@ class TestDerivedFe(unittest.TestCase):
         self.assertIn("FE_VICTIM_POWER_PER_TON", out.columns)
         # 0.5 → mid (bins 0.3, 0.6)
         self.assertEqual(str(out["FE_SHARE_WORK_TIER"].iloc[0]), "mid")
+        # event 2022-01-15 → loss 2022-01-20
+        self.assertEqual(int(out["FE_DAYS_EVENT_TO_LOSS"].iloc[0]), 5)
+
+    def test_real_uses_payment_year_not_event_year(self):
+        """CPI as-of = дата выплаты, как в обучении (t0), не EVENT_DATE."""
+        from integration.features.cpi import deflate_to_base_year
+
+        df = pd.DataFrame(
+            {
+                "EVENT_DATE": ["2019-12-05"],
+                "PAYMENT_ORDER_DATE_TIME": ["2023-05-15"],
+                "VALUE_BEFORE_WITH": [100000.0],
+                "VALUE_BEFORE_WITHOUT": [100000.0],
+            }
+        )
+        out = add_second_model_features(df)
+        expected = float(
+            deflate_to_base_year(
+                pd.Series([100000.0]),
+                pd.Series(pd.to_datetime(["2023-05-15"])),
+            ).iloc[0]
+        )
+        got = float(out["FE_VALUE_BEFORE_WITH_REAL_2022"].iloc[0])
+        self.assertAlmostEqual(got, expected, places=2)
+        by_event = float(
+            deflate_to_base_year(
+                pd.Series([100000.0]),
+                pd.Series(pd.to_datetime(["2019-12-05"])),
+            ).iloc[0]
+        )
+        self.assertNotAlmostEqual(got, by_event, places=0)
+
+    def test_days_keep_precomputed_when_loss_date_missing(self):
+        df = pd.DataFrame(
+            {
+                "EVENT_DATE": ["2019-12-05"],
+                "PAYMENT_ORDER_DATE_TIME": ["2023-05-15"],
+                "VALUE_BEFORE_WITH": [1.0],
+                "VALUE_BEFORE_WITHOUT": [1.0],
+                "FE_DAYS_EVENT_TO_LOSS": [36],
+            }
+        )
+        out = add_second_model_features(df)
+        self.assertEqual(int(out["FE_DAYS_EVENT_TO_LOSS"].iloc[0]), 36)
 
 
 #new
