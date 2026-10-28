@@ -115,8 +115,8 @@ def add_second_model_features(
     """Добавить FE_* / age months, нужные CF+RG 2.0.0.
 
     REAL-суммы дефлируются по дате выплаты (как ``features/derived.py`` на t0),
-    не по дате ДТП. Дни event→loss считаются по ``LOSS_DATE_TIME``;
-    если даты убытка нет, остаётся уже посчитанный ``FE_DAYS_EVENT_TO_LOSS``.
+    не по дате ДТП. Если ``FE_DAYS_EVENT_TO_LOSS`` или ``FE_VICTIM_POWER_PER_TON``
+    уже есть во входе — не пересчитываем (в эталоне они после clip / NaN).
     """
     precomputed_days = (
         pd.to_numeric(df["FE_DAYS_EVENT_TO_LOSS"], errors="coerce")
@@ -146,12 +146,12 @@ def add_second_model_features(
         both_positive
     )
 
-    loss_dt = _to_dt(_col(out, "LOSS_DATE_TIME"))
-    event_dt = _to_dt(_col(out, "EVENT_DATE"))
-    days = (loss_dt - event_dt).dt.days
-    if precomputed_days is not None:
-        days = days.where(loss_dt.notna(), precomputed_days)
-    out["FE_DAYS_EVENT_TO_LOSS"] = days
+    # Уже посчитанные дни не перетираем: в эталоне это значение после clip
+    # (max=36), а сырой LOSS−EVENT бывает сильно больше.
+    if precomputed_days is None:
+        loss_dt = _to_dt(_col(out, "LOSS_DATE_TIME"))
+        event_dt = _to_dt(_col(out, "EVENT_DATE"))
+        out["FE_DAYS_EVENT_TO_LOSS"] = (loss_dt - event_dt).dt.days
     out["FE_DAYS_TO_PH_CONTRACT_END"] = _days_between(
         _col(out, "POLICYHOLDER_CONTRACT_END_DATE"),
         _col(out, "EVENT_DATE"),
@@ -159,10 +159,13 @@ def add_second_model_features(
 
     out["FE_SHARE_WORK_TIER"] = _tier_from_bins(_col(out, "SHARE_WORK"))
 
-    out["FE_VICTIM_POWER_PER_TON"] = (
-        _safe_div(_col(out, "VICTIM_CAPACITY_ENGINE"), _col(out, "VICTIM_MAX_WEIGHT"))
-        * 1e6
-    )
+    # Колонка из эталона (в т.ч. NaN → default модели) важнее пересчёта:
+    # сырой л.с./кг × 1e6 потом клипится иначе, чем пропуск.
+    if "FE_VICTIM_POWER_PER_TON" not in out.columns:
+        out["FE_VICTIM_POWER_PER_TON"] = (
+            _safe_div(_col(out, "VICTIM_CAPACITY_ENGINE"), _col(out, "VICTIM_MAX_WEIGHT"))
+            * 1e6
+        )
 
     if "VICTIM_OBJECT_YEAR" in out.columns:
         base = _col(out, "EVENT_DATE")

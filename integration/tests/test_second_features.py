@@ -68,7 +68,7 @@ class TestDerivedFe(unittest.TestCase):
         self.assertIn("FE_VICTIM_POWER_PER_TON", out.columns)
         # 0.5 → mid (bins 0.3, 0.6)
         self.assertEqual(str(out["FE_SHARE_WORK_TIER"].iloc[0]), "mid")
-        # event 2022-01-15 → loss 2022-01-20
+        # колонки не было во входе: event 2022-01-15 → loss 2022-01-20
         self.assertEqual(int(out["FE_DAYS_EVENT_TO_LOSS"].iloc[0]), 5)
 
     def test_real_uses_payment_year_not_event_year(self):
@@ -112,6 +112,35 @@ class TestDerivedFe(unittest.TestCase):
         )
         out = add_second_model_features(df)
         self.assertEqual(int(out["FE_DAYS_EVENT_TO_LOSS"].iloc[0]), 36)
+
+    def test_power_per_ton_keeps_existing_nan(self):
+        df = pd.DataFrame(
+            {
+                "EVENT_DATE": ["2022-01-15"],
+                "PAYMENT_ORDER_DATE_TIME": ["2022-02-01"],
+                "VALUE_BEFORE_WITH": [1.0],
+                "VALUE_BEFORE_WITHOUT": [1.0],
+                "VICTIM_CAPACITY_ENGINE": [100.0],
+                "VICTIM_MAX_WEIGHT": [1500.0],
+                "FE_VICTIM_POWER_PER_TON": [float("nan")],
+            }
+        )
+        out = add_second_model_features(df)
+        self.assertTrue(pd.isna(out["FE_VICTIM_POWER_PER_TON"].iloc[0]))
+
+    def test_power_per_ton_computed_when_missing(self):
+        df = pd.DataFrame(
+            {
+                "EVENT_DATE": ["2022-01-15"],
+                "PAYMENT_ORDER_DATE_TIME": ["2022-02-01"],
+                "VALUE_BEFORE_WITH": [1.0],
+                "VALUE_BEFORE_WITHOUT": [1.0],
+                "VICTIM_CAPACITY_ENGINE": [100.0],
+                "VICTIM_MAX_WEIGHT": [40000.0],
+            }
+        )
+        out = add_second_model_features(df)
+        self.assertAlmostEqual(float(out["FE_VICTIM_POWER_PER_TON"].iloc[0]), 2500.0, places=3)
 
 
 #new

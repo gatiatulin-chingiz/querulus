@@ -118,6 +118,24 @@ def _fmt_cell(v: Any) -> str:
     return repr(v) if isinstance(v, str) else str(v)
 
 
+# Источники производных фич модели (что смотреть, если сама фича разъехалась).
+_FEATURE_SOURCES: dict[str, tuple[str, ...]] = {
+    "FE_DAYS_EVENT_TO_LOSS": ("LOSS_DATE_TIME", "EVENT_DATE"),
+    "FE_DAYS_TO_PH_CONTRACT_END": ("POLICYHOLDER_CONTRACT_END_DATE", "EVENT_DATE"),
+    "FE_VALUE_BEFORE_WITH_REAL_2022": ("VALUE_BEFORE_WITH", "PAYMENT_ORDER_DATE_TIME"),
+    "FE_VALUE_BEFORE_WITHOUT_REAL_2022": ("VALUE_BEFORE_WITHOUT", "PAYMENT_ORDER_DATE_TIME"),
+    "FE_VALUE_BEFORE_RATIO": ("VALUE_BEFORE_WITH", "VALUE_BEFORE_WITHOUT"),
+    "FE_VALUE_BEFORE_DIFF": (
+        "VALUE_BEFORE_WITH",
+        "VALUE_BEFORE_WITHOUT",
+        "PAYMENT_ORDER_DATE_TIME",
+    ),
+    "FE_SHARE_WORK_TIER": ("SHARE_WORK", "WORKS", "WORK", "VALUE_BEFORE_WITHOUT"),
+    "FE_VICTIM_POWER_PER_TON": ("VICTIM_CAPACITY_ENGINE", "VICTIM_MAX_WEIGHT"),
+    "VICTIM_OBJECT_AGE_MONTHS": ("VICTIM_OBJECT_YEAR", "EVENT_DATE"),
+}
+
+
 #new
 def _values_close(a: Any, b: Any) -> bool:
     try:
@@ -125,6 +143,8 @@ def _values_close(a: Any, b: Any) -> bool:
             return True
     except (ValueError, TypeError):
         pass
+    if isinstance(a, str) and isinstance(b, str):
+        return a.casefold() == b.casefold()
     try:
         fa, fb = float(a), float(b)
         if np.isfinite(fa) and np.isfinite(fb):
@@ -149,10 +169,12 @@ def _resolve_row(df: pd.DataFrame, idx_arg: int) -> tuple[Any, pd.DataFrame]:
 
 #new
 def _print_drilldown(stem: str, row: pd.DataFrame, idx_label: Any) -> None:
-    """Разбор одной строки: scores / FE_* / prepared matrix / cal order."""
+    """Разбор одной строки: scores / фичи модели / prepared matrix / cal order."""
     group = _load_second_group(stem)
     clf_model = group[0]
+    rg_model = group[1]
     feats = feature_names_from_model_result(clf_model)
+    rg_feats = feature_names_from_model_result(rg_model)
     cf_cal = load_optional_pickle(second_cf_calibrator_path())
 
     parquet_s = row.iloc[0]
@@ -241,9 +263,8 @@ def _print_drilldown(stem: str, row: pd.DataFrame, idx_label: Any) -> None:
             "CLAIM_ID",
             "IS_LAWYER",
             "EVENT_DATE",
+            "LOSS_DATE_TIME",
             "PAYMENT_ORDER_DATE_TIME",
-            "FILIAL",
-            "APPLICANT_FORM",
         )
         if c in row.columns
     ]
@@ -252,41 +273,57 @@ def _print_drilldown(stem: str, row: pd.DataFrame, idx_label: Any) -> None:
         for c in id_cols:
             print(f"  {c}: {_fmt_cell(parquet_s[c])}")
 
-    # FE_* and model features: parquet vs after service preprocess
-    compare_cols = []
-    for c in feats:
-        if c not in compare_cols:
-            compare_cols.append(c)
-    for c in sorted(df_pre.columns):
-        if c.startswith("FE_") or c == "VICTIM_OBJECT_AGE_MONTHS" or c == "SHARE_WORK":
-            if c not in compare_cols:
-                compare_cols.append(c)
+    def _clip_note(model_result: dict, name: str) -> str:
+        cfg = model_result.get("model_config") if isinstance(model_result, dict) else None
+        if hasattr(cfg, "model_dump"):
+            cfg = cfg.model_dump()
+        if not isinstance(cfg, dict):
+            return ""
+        for feat in cfg.get("features") or []:
+            if not isinstance(feat, dict):
+                if hasattr(feat, "model_dump"):
+                    feat = feat.model_dump()
+                else:
+                    continue
+            if feat.get("name") != name:
+                continue
+            clip = feat.get("clip") or {}
+            if not clip:
+                return ""
+            return f" clip[{clip.get('min_value')}, {clip.get('max_value')}]"
+        return ""
 
-    print("\n--- parquet vs service preprocess (model + FE_*) ---")
+    model_feats: list[tuple[str, str, dict]] = (
+        [("CF", name, clf_model) for name in feats]
+        + [("RG", name, rg_model) for name in rg_feats if name not in feats]
+    )
+    print("\n--- model features: parquet vs service preprocess ---")
+    print("строки UPPER/lower считаются равными")
     print(
-        f"{'column':<42} {'in_parq':<7} {'parquet':<22} {'service_pre':<22} {'same':<5}"
+        f"{'lane':<4} {'column':<40} {'parquet':<22} {'service_pre':<22} {'same':<5}"
     )
     n_diff = 0
-    n_missing_parq = 0
-    for c in compare_cols:
-        in_p = c in row.columns
-        pv = parquet_s[c] if in_p else "«нет в parquet»"
-        sv = pre_s[c] if c in df_pre.columns else "«нет после pre»"
-        if not in_p:
-            n_missing_parq += 1
-            same = "—"
-        else:
-            same = "yes" if _values_close(pv, sv) else "NO"
-            if same == "NO":
-                n_diff += 1
-        if same == "NO" or not in_p or c.startswith("FE_"):
+    for lane, name, model_result in model_feats:
+        in_p = name in row.columns
+        pv = parquet_s[name] if in_p else "«нет»"
+        sv = pre_s[name] if name in df_pre.columns else "«нет»"
+        same = "yes" if in_p and name in df_pre.columns and _values_close(pv, sv) else "NO"
+        if same == "NO":
+            n_diff += 1
+        mark = "" if same == "yes" else _clip_note(model_result, name)
+        print(
+            f"{lane:<4} {name:<40} {_fmt_cell(pv):<22} {_fmt_cell(sv):<22} {same:<5}{mark}"
+        )
+        for src in _FEATURE_SOURCES.get(name, ()):
+            if src not in row.columns and src not in df_pre.columns:
+                continue
+            sp = parquet_s[src] if src in row.columns else "«нет»"
+            ss = pre_s[src] if src in df_pre.columns else "«нет»"
+            src_same = "yes" if _values_close(sp, ss) else "NO"
             print(
-                f"{c:<42} {str(in_p):<7} {_fmt_cell(pv):<22} {_fmt_cell(sv):<22} {same:<5}"
+                f"{'':4} {'  ↳ ' + src:<40} {_fmt_cell(sp):<22} {_fmt_cell(ss):<22} {src_same:<5}"
             )
-    print(
-        f"summary: FE/model cols compared={len(compare_cols)}, "
-        f"diff parquet↔pre={n_diff}, missing_in_parquet={n_missing_parq}"
-    )
+    print(f"summary: model features={len(model_feats)}, diff={n_diff}")
 
     print("\n--- prepared CF matrix (service prepare_dataset) ---")
     print(f"shape: {t_c.shape}, columns ({len(t_c.columns)}): {list(t_c.columns)}")
