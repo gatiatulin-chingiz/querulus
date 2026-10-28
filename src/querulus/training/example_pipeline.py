@@ -1274,6 +1274,11 @@ def save_df_for_service(
 
     Если переданы калибраторы / ``threshold`` — preds как у сервиса second_
     (cal CF proba, cal RG + маска IS_LAWYER при наличии threshold).
+
+    ``preds_cf``:
+      - с ``cf_calibrator`` → **калиброванные** P(class=1);
+      - без калибратора → **сырые** scores модели.
+    ``preds_rg`` аналогично (после RG-cal и маски, если задан ``threshold``).
     """
     if models.dsm_cf_prod is None or models.dsm_rg_prod is None:
         raise ValueError("Нужны dsm_cf_prod / dsm_rg_prod")

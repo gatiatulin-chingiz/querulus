@@ -61,6 +61,62 @@ def _quiet_service_logs() -> None:
 
 
 #new
+def _print_loaded_artifacts(lane: str) -> None:
+    """В stdout теста: какие pickle / parquet / cal подхватил ART."""
+    meta_path = ART.results_dir / "metadata.json"
+    lines = [
+        f"=== parity artifacts ({lane}) ===",
+        f"  results_dir: {ART.results_dir.resolve()}",
+        f"  main_stem / pickle: {ART.main_stem} || {ART.main_pickle}",
+        f"    exists={ART.main_pickle.is_file()} "
+        f"size={ART.main_pickle.stat().st_size if ART.main_pickle.is_file() else 0}",
+        f"  second_stem / pickle: {ART.second_stem} || {ART.second_pickle}",
+        f"    exists={ART.second_pickle.is_file()} "
+        f"size={ART.second_pickle.stat().st_size if ART.second_pickle.is_file() else 0}",
+        f"  cf_calibrator: {ART.cf_calibrator} exists={ART.cf_calibrator.is_file()}",
+        f"  rg_calibrator: {ART.rg_calibrator} exists={ART.rg_calibrator.is_file()}",
+        f"  df_main: {ART.df_for_service_main} exists={ART.df_for_service_main.is_file()}",
+        f"  df_second: {ART.df_for_service_second} "
+        f"exists={ART.df_for_service_second.is_file()}",
+        f"  metadata.json: {meta_path} exists={meta_path.is_file()}",
+    ]
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            lines.append(
+                f"    best_threshold={meta.get('best_threshold')} "
+                f"scale={meta.get('threshold_scale')} "
+                f"calibration={meta.get('calibration')}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"    meta read error: {exc}")
+    for path, label in (
+        (ART.df_for_service_main, "df_main"),
+        (ART.df_for_service_second, "df_second"),
+    ):
+        if not path.is_file():
+            continue
+        try:
+            import pyarrow.parquet as pq
+
+            pf = pq.ParquetFile(path)
+            n_rows = pf.metadata.num_rows if pf.metadata is not None else None
+            cols = list(pf.schema_arrow.names)
+            thr = None
+            if "THRESHOLD" in cols:
+                thr_s = pd.read_parquet(path, columns=["THRESHOLD"])["THRESHOLD"]
+                thr = thr_s.dropna().unique().tolist()[:5]
+            lines.append(
+                f"  {label} rows={n_rows} cols={len(cols)} "
+                f"THRESHOLD_unique={thr} "
+                f"has_preds_label={'preds_label' in cols}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"  {label} read error: {exc}")
+    print("\n".join(lines), flush=True)
+
+
+#new
 def _patch_models_dir() -> None:
     config.prod_models_path = str(ART.results_dir.resolve())
     config.base_path = _INTEGRATION
@@ -377,6 +433,7 @@ class TestParityMain(unittest.TestCase):
         require_file(ART.main_pickle, "main_pickle")
         require_file(ART.df_for_service_main, "df_for_service_main")
         _patch_models_dir()
+        _print_loaded_artifacts("main")
         _quiet_service_logs()
 
     def test_service_matches_df_for_service_main(self):
@@ -415,6 +472,7 @@ class TestParitySecond(unittest.TestCase):
         require_file(ART.cf_calibrator, "cf_calibrator")
         require_file(ART.rg_calibrator, "rg_calibrator")
         _patch_models_dir()
+        _print_loaded_artifacts("second")
         _quiet_service_logs()
 
     def test_service_matches_df_for_service_second(self):
@@ -451,6 +509,7 @@ class TestDualPredict(unittest.TestCase):
         require_file(ART.df_for_service_main, "df_for_service_main")
         require_file(ART.df_for_service_second, "df_for_service_second")
         _patch_models_dir()
+        _print_loaded_artifacts("dual")
         _quiet_service_logs()
 
     def test_both_slots_filled(self):

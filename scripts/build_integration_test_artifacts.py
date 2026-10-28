@@ -387,19 +387,41 @@ def main() -> None:
     with open(OUT_DIR / "rg_calibrator.pickle", "wb") as f:
         pickle.dump(rg_cal, f)
 
-    # Also copy calibrators next to default results for service path override in tests
+    # Полная схема как у export_prod_service_artifacts (в т.ч. calibration.cf/rg).
     meta = {
+        "model_name": "querulus",
+        "model_version": "2.0.0",
         "best_threshold": THRESHOLD,
+        "val_threshold": THRESHOLD,
         "threshold_scale": "calibrated",
         "threshold_source": "synthetic_test",
         "calibration": {
-            "cf": str(OUT_DIR / "cf_calibrator.pickle"),
-            "rg": str(OUT_DIR / "rg_calibrator.pickle"),
+            "cf": str((OUT_DIR / "cf_calibrator.pickle").resolve()),
+            "rg": str((OUT_DIR / "rg_calibrator.pickle").resolve()),
         },
+        "artifacts": {
+            "ensemble": str((OUT_DIR / f"{SECOND_STEM}.pickle").resolve()),
+            "cf_calibrator": str((OUT_DIR / "cf_calibrator.pickle").resolve()),
+            "rg_calibrator": str((OUT_DIR / "rg_calibrator.pickle").resolve()),
+            "df_for_service": str(
+                (OUT_DIR / "df_for_service_second.parquet").resolve()
+            ),
+        },
+        "preds_cf_col": "preds_cf",
+        "preds_rg_col": "preds_rg",
+        "note": (
+            "preds_cf / preds_rg в df_for_service_* — после калибраторов "
+            "(isotonic); THRESHOLD записан в каждую строку."
+        ),
     }
-    (OUT_DIR / "metadata.json").write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    meta_text = json.dumps(meta, ensure_ascii=False, indent=2)
+    (OUT_DIR / "metadata.json").write_text(meta_text, encoding="utf-8")
+    # Локальный results/ часто отстаёт от контура — обновляем schema meta и тут.
+    results_meta = INTEGRATION / "results" / "metadata.json"
+    results_meta.parent.mkdir(parents=True, exist_ok=True)
+    results_meta.write_text(meta_text, encoding="utf-8")
+    print("metadata ->", OUT_DIR / "metadata.json")
+    print("metadata ->", results_meta)
 
     print("=== reference preds train+test ===")
     main_rows = []
