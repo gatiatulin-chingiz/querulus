@@ -1346,11 +1346,34 @@ def save_df_for_service(
 
 
 def _cf_calibrator_for_service(calibrator: Any) -> Any:
-    """Объект для pickle сервиса: sklearn CCCV, без обёрток querulus."""
+    """Объект для pickle сервиса: 1D ``IsotonicRegression`` по raw score.
+
+    Сервис (`apply_cf_calibrator`) зовёт ``predict(raw_scores)``, не CCCV.
+    Из ``CalibratedClassifierCV`` достаём внутренний isotonic; обёртки
+    querulus (``_calibrated_model``) разворачиваем.
+    """
     inner = getattr(calibrator, "_calibrated_model", None)
     if inner is not None:
-        return inner
-    return calibrator
+        calibrator = inner
+    # Уже 1D isotonic / estimator без predict_proba(X).
+    if (
+        hasattr(calibrator, "predict")
+        and not hasattr(calibrator, "predict_proba")
+        and not hasattr(calibrator, "calibrated_classifiers_")
+    ):
+        return calibrator
+    cals = getattr(calibrator, "calibrated_classifiers_", None)
+    if not cals:
+        raise ValueError(
+            "CF calibrator для сервиса: нужен IsotonicRegression или "
+            f"CalibratedClassifierCV(method='isotonic'); получено {type(calibrator)!r}"
+        )
+    bundle = cals[0]
+    isos = getattr(bundle, "calibrators_", None) or getattr(bundle, "calibrators", None)
+    if not isos:
+        raise ValueError("CalibratedClassifierCV без calibrators — нельзя выгрузить 1D iso")
+    # binary: один calibrator; иначе берём последний (positive class).
+    return isos[0] if len(isos) == 1 else isos[-1]
 
 
 def _rg_calibrator_for_service(calibrator: Any) -> Any:
@@ -1391,7 +1414,7 @@ def export_prod_service_artifacts(
     Сервис τ **не** читает из meta — только ``THRESHOLD`` в векторе запроса.
     ``best_threshold`` в meta — для людей / ноутбуков (шкала = threshold_scale).
 
-    CF/RG в pickle — sklearn-объекты (CCCV / IsotonicRegression), без модуля querulus.
+    CF/RG в pickle — 1D ``IsotonicRegression`` (из CCCV достаём iso), без модуля querulus.
     Модели пишет ``update_models`` в ``fit_automl_bundle``.
     Parquet — отдельно через ``save_df_for_service`` (туда же пишется THRESHOLD).
     """
