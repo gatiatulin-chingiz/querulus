@@ -110,6 +110,7 @@ class TestDerivedFe(unittest.TestCase):
                     "WORK": [1.0],
                     "VICTIM_CAPACITY_ENGINE": [1.0],
                     "VICTIM_MAX_WEIGHT": [1.0],
+                    "VICTIM_OBJECT_YEAR": [2015],
                     "LOSS_DATE_TIME": ["2019-12-06"],
                     "POLICYHOLDER_CONTRACT_END_DATE": ["2020-01-01"],
                 }

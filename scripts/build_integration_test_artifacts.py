@@ -120,6 +120,16 @@ def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         out["IS_LAWYER"] = (np.arange(len(out)) % 7 == 0).astype(int)
     if "WORKS" not in out.columns:
         out["WORKS"] = pd.to_numeric(out["VALUE_BEFORE_WITHOUT"], errors="coerce") * 0.4
+    # Контракт сервиса: WORK (сумма работ) и LOSS_NUMBER обязательны во входе.
+    if "WORK" not in out.columns:
+        out["WORK"] = pd.to_numeric(out["WORKS"], errors="coerce")
+    if "LOSS_NUMBER" not in out.columns:
+        if "INCIDENT_NUMBER" in out.columns:
+            out["LOSS_NUMBER"] = out["INCIDENT_NUMBER"].map(
+                lambda v: f"LOSS-{v}" if pd.notna(v) else "LOSS-UNKNOWN"
+            )
+        else:
+            out["LOSS_NUMBER"] = [f"LOSS-{i:06d}" for i in range(len(out))]
     if "LOSS_DATE_TIME" not in out.columns:
         out["LOSS_DATE_TIME"] = out["PAYMENT_ORDER_DATE_TIME"]
     if "POLICYHOLDER_CONTRACT_END_DATE" not in out.columns:
@@ -477,7 +487,9 @@ def main() -> None:
                 "POLICYHOLDER_CONTRACT_END_DATE": pd.Timestamp(
                     fe_row.iloc[0]["POLICYHOLDER_CONTRACT_END_DATE"]
                 ).isoformat(),
+                "WORK": float(fe_row.iloc[0]["WORK"]),
                 "WORKS": float(fe_row.iloc[0]["WORKS"]),
+                "LOSS_NUMBER": str(fe_row.iloc[0]["LOSS_NUMBER"]),
                 "VALUE_BEFORE_WITH": float(fe_row.iloc[0]["VALUE_BEFORE_WITH"]),
                 "VALUE_BEFORE_WITHOUT": float(fe_row.iloc[0]["VALUE_BEFORE_WITHOUT"]),
                 "IS_LAWYER": int(fe_row.iloc[0]["IS_LAWYER"]),

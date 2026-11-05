@@ -75,6 +75,21 @@ _CACHE = ArtifactCache()
 
 
 # reviewed
+def _combine_output_matrices(clf_t: pd.DataFrame, reg_t: pd.DataFrame) -> pd.DataFrame:
+    """Собрать ``df.output`` из матриц clf+rg без дублей имён.
+
+    У second_ списки фич пересекаются (как в prod config). Общие имена
+    оставляем из clf; копии из rg получают суффикс ``__rg`` (кодировки
+    в model_config могут отличаться).
+    """
+    shared = [c for c in reg_t.columns if c in clf_t.columns]
+    if not shared:
+        return pd.concat([clf_t, reg_t], axis=1)
+    reg_part = reg_t.rename(columns={c: f"{c}__rg" for c in shared})
+    return pd.concat([clf_t, reg_part], axis=1)
+
+
+# reviewed
 def _load_model_pair(stem: str, track: str) -> Any:
     """Загрузить pickle трека и проверить пару [clf, rg] с model_config/model."""
     group = _CACHE.get(model_pickle_path(stem))
@@ -318,10 +333,7 @@ def score_main(group_name: str, features_values: List[Dict]) -> Dict[str, Any]:
     }
 
     # Отладочная таблица «что реально подали в модели» (после всех трансформаций).
-    output_df = pd.concat([clf_t, reg_t], axis=1)
-    if output_df.columns.duplicated().any():
-        dupes = output_df.columns[output_df.columns.duplicated()].tolist()
-        raise ValueError(f"Дубли имён колонок в output после объединения clf/reg: {dupes}")
+    output_df = _combine_output_matrices(clf_t, reg_t)
 
     # Собираем ответ main_.
     return {
@@ -413,13 +425,8 @@ def score_second(
         "prediction": rounded_masked,
         "threshold": round(float(threshold_value), 2),
     }
-    # Собираем ответ second_ (дубли колонок — как у main_: ошибка, не soft-drop).
-    output_df = pd.concat([t_c, t_r], axis=1)
-    if output_df.columns.duplicated().any():
-        dupes = output_df.columns[output_df.columns.duplicated()].tolist()
-        raise ValueError(
-            f"Дубли имён колонок в output после объединения clf/reg: {dupes}"
-        )
+    # Собираем ответ second_ (пересечение фич clf∩rg → суффикс __rg в output).
+    output_df = _combine_output_matrices(t_c, t_r)
 
     return {
         "usage_model": group_name,
