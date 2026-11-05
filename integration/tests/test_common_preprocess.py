@@ -10,26 +10,25 @@ _QUERULUS = _INTEGRATION.parent
 if str(_QUERULUS) not in sys.path:
     sys.path.insert(0, str(_QUERULUS))
 
-from integration.service.mldataworker_shim import install_mldataworker_shim
+from integration.src.shim import install_mldataworker_shim
 
 install_mldataworker_shim()
 
 import numpy as np
 import pandas as pd
 
-from integration.scoring.second import prepare_vector_upper, preprocess_second_vector
-from integration.service.main import (
-    enrich_common_vector_dataframe,
-    prepare_common_vector_dataframe,
-    preprocessing_and_validate_vector,
+from integration.src.is_lawyer import masked_predictions
+from integration.src.preprocessing.common import (
+    coerce_and_enrich,
+    prepare_vector_upper,
     validate_derived_dates_strict,
     validate_no_duplicate_columns,
-    validate_preprocessing_invariants,
+    validate_preprocessed_vector,
 )
-from integration.service.masking import masked_predictions
+from integration.src.preprocessing.second import preprocess_second_vector
 
 
-#new
+# new
 def _base_vector(**overrides) -> list[dict]:
     row = {
         "EVENT_DATE": "2024-06-01T10:00:00",
@@ -38,8 +37,11 @@ def _base_vector(**overrides) -> list[dict]:
         "FILIAL": "москва",
         "EMPTY_COL": "",
         "IS_LAWYER": 0,
+        "INCIDENT_NUMBER": "INC-1",
+        "LOSS_NUMBER": "LOSS-1",
         "VALUE_BEFORE_WITH": 100000,
         "VALUE_BEFORE_WITHOUT": 120000,
+        "WORK": 40000,
         "WORKS": 40000,
         "AMOUNT_REPAIR": 120000,
         "VICTIM_MAX_WEIGHT": 1500,
@@ -70,10 +72,10 @@ def _base_vector(**overrides) -> list[dict]:
     return [row]
 
 
-#new
+# new
 class TestCommonPreprocess(unittest.TestCase):
     def test_empty_string_to_nan_main(self):
-        df = prepare_common_vector_dataframe(_base_vector())
+        df = prepare_vector_upper(_base_vector())
         self.assertTrue(pd.isna(df["EMPTY_COL"].iloc[0]))
 
     def test_empty_string_to_nan_second(self):
@@ -81,7 +83,7 @@ class TestCommonPreprocess(unittest.TestCase):
         self.assertTrue(pd.isna(df["EMPTY_COL"].iloc[0]))
 
     def test_upper_main(self):
-        df = prepare_common_vector_dataframe(_base_vector())
+        df = prepare_vector_upper(_base_vector())
         self.assertEqual(df["FILIAL"].iloc[0], "МОСКВА")
 
     def test_upper_second(self):
@@ -94,9 +96,11 @@ class TestCommonPreprocess(unittest.TestCase):
             validate_no_duplicate_columns(df)
 
     def test_dates_strict_main(self):
-        df = preprocessing_and_validate_vector(_base_vector())
+        df = coerce_and_enrich(prepare_vector_upper(_base_vector()))
+        validate_preprocessed_vector(df)
         validate_derived_dates_strict(df)
         self.assertIn("EVENT_YEAR", df.columns)
+        self.assertIn("PAYMENT_ORDER_YEAR", df.columns)
         self.assertIn("APPLY_DELAY", df.columns)
 
     def test_dates_strict_second(self):
@@ -107,12 +111,15 @@ class TestCommonPreprocess(unittest.TestCase):
 
     def test_bad_date_order_main(self):
         with self.assertRaises(ValueError):
-            preprocessing_and_validate_vector(
-                _base_vector(
-                    EVENT_DATE="2024-07-01T00:00:00",
-                    PAYMENT_ORDER_DATE_TIME="2024-06-01T00:00:00",
+            df = coerce_and_enrich(
+                prepare_vector_upper(
+                    _base_vector(
+                        EVENT_DATE="2024-07-01T00:00:00",
+                        PAYMENT_ORDER_DATE_TIME="2024-06-01T00:00:00",
+                    )
                 )
             )
+            validate_preprocessed_vector(df)
 
     def test_bad_date_order_second(self):
         with self.assertRaises(ValueError):

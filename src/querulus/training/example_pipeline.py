@@ -359,27 +359,12 @@ def pick_prod_threshold_on_dsm(
     sev = predict_rg(models.dsm_rg_prod, bundle.rg_name, df.loc[tau_idx])
     scale = "raw"
     if cf_calibrator is not None:
-        from querulus.training.outboxml_metrics import prepare_dsm_features
-
-        x_cf = prepare_dsm_features(
-            models.dsm_cf_prod,
-            bundle.cf_name,
-            df.loc[tau_idx],
-            ignore_row_filter=True,
+        # CF-калибратор — 1D isotonic по raw score.
+        proba = pd.Series(
+            np.asarray(cf_calibrator.predict(proba.to_numpy()), dtype=float),
+            index=proba.index,
         )
-        if hasattr(cf_calibrator, "predict_proba"):
-            cal_idx = x_cf.index.intersection(proba.index)
-            cal_p = np.asarray(
-                cf_calibrator.predict_proba(x_cf.loc[cal_idx])[:, 1], dtype=float
-            )
-            proba = pd.Series(cal_p, index=cal_idx)
-            scale = "calibrated"
-        elif hasattr(cf_calibrator, "predict"):
-            proba = pd.Series(
-                np.asarray(cf_calibrator.predict(proba.to_numpy()), dtype=float),
-                index=proba.index,
-            )
-            scale = "calibrated"
+        scale = "calibrated"
     if rg_calibrator is not None:
         from querulus.training.calibration import apply_severity_calibrator
 
@@ -1291,46 +1276,14 @@ def save_df_for_service(
     preds_rg = predict_rg(models.dsm_rg_prod, bundle.rg_name, bundle.df).astype(float)
 
     if cf_calibrator is not None:
-        # CCCV: predict_proba(X); Isotonic: predict(raw proba).
-        # Порядок/dtype колонок — как в integration.scoring.second.apply_cf_calibrator
-        # (CatBoost feature_names_, не sklearn feature_names_in_), иначе parity CF разъедется.
-        if hasattr(cf_calibrator, "predict_proba"):
-            from querulus.training.outboxml_metrics import prepare_dsm_features
-
-            x_cf = prepare_dsm_features(
-                models.dsm_cf_prod,
-                bundle.cf_name,
-                bundle.df,
-                ignore_row_filter=True,
-            )
-            cal_idx = x_cf.index.intersection(preds_cf.index)
-            x_use = x_cf.loc[cal_idx]
-            try:
-                from integration.scoring.second import (
-                    _align_dtypes_for_catboost,
-                    _cf_predict_column_order,
-                )
-
-                order = _cf_predict_column_order(cf_calibrator, x_use)
-                if order is not None:
-                    x_use = x_use.loc[:, order]
-                x_use = _align_dtypes_for_catboost(x_use, cf_calibrator)
-            except Exception:
-                names = getattr(cf_calibrator, "feature_names_in_", None)
-                if names is not None:
-                    x_use = x_use.loc[:, list(names)]
-            preds_cf = pd.Series(
-                np.asarray(cf_calibrator.predict_proba(x_use)[:, 1], dtype=float),
-                index=cal_idx,
-            )
-        elif hasattr(cf_calibrator, "predict"):
-            preds_cf = pd.Series(
-                np.asarray(
-                    cf_calibrator.predict(preds_cf.to_numpy(dtype=float)), dtype=float
-                ),
-                index=preds_cf.index,
-            )
-    if rg_calibrator is not None and hasattr(rg_calibrator, "predict"):
+        # CF-калибратор — 1D isotonic по raw score (как integration.apply_cf_calibrator).
+        preds_cf = pd.Series(
+            np.asarray(
+                cf_calibrator.predict(preds_cf.to_numpy(dtype=float)), dtype=float
+            ),
+            index=preds_cf.index,
+        )
+    if rg_calibrator is not None:
         raw = np.asarray(rg_calibrator.predict(preds_rg.to_numpy(dtype=float)), dtype=float)
         preds_rg = pd.Series(np.maximum(0.0, raw), index=preds_rg.index)
 

@@ -158,7 +158,7 @@
       <h1>Каталог тестов</h1>
       <p>
         Простыми словами: зачем каждый тест и что считается успехом.
-        Всего 20 проверок. Если нужного файла модели нет — тест падает
+        Всего 23 проверки. Если нужного файла модели нет — тест падает
         (пропусков нет). Как запускать — в
         <a href="tests.html">tests.html</a>.
       </p>
@@ -276,7 +276,7 @@
     </div>
 
     <!-- ========== SECOND FEATURES ========== -->
-    <h2 id="second">Фичи второй модели <span class="tag">7 тестов · часть нужна meta/cal</span></h2>
+    <h2 id="second">Фичи второй модели <span class="tag">10 тестов · часть нужна cal</span></h2>
     <p class="lead">
       Специфика second_: инфляция (CPI), сбор производных признаков, порог τ
       из THRESHOLD в векторе и применение калибраторов вероятности/суммы.
@@ -322,6 +322,24 @@
         Считаем долю работ в калькуляции (работы / стоимость без износа) и кладём
         в бакет low/mid/high. На контрольном примере доля 0.5 должна попасть в mid.
         Заодно проверяем, что рядом появляются отношение with/without и мощность на тонну.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane second">second</span> test_real_uses_payment_year_not_event_year</h3>
+      <p>
+        REAL_2022 дефлируется по дате выплаты (<code>PAYMENT_ORDER_DATE_TIME</code>),
+        как на обучении (t0), а не по дате ДТП. На кейсе event 2019 / payment 2023
+        REAL не совпадает с дефляцией по EVENT_DATE.
+      </p>
+    </div>
+
+    <div class="test">
+      <h3><span class="lane second">second</span> test_ignores_incoming_fe_columns</h3>
+      <p>
+        FE_* во входе выкидываются; дни event→loss и мощность на тонну
+        пересчитываются из сырых полей (<code>LOSS_DATE_TIME</code>, capacity/weight),
+        даже если в векторе уже лежали другие FE_*.
       </p>
     </div>
 
@@ -377,7 +395,7 @@
     </div>
 
     <footer>
-      examples/querulus/integration/test_catalog.html ·
+      examples/querulus/integration/docs/test_catalog.html ·
       запуск — <a href="tests.html">tests.html</a>
     </footer>
   </div>

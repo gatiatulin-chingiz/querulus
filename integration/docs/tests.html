@@ -204,7 +204,7 @@
       <ol class="steps">
         <li><code>outboxml</code> установлен через pip:
           <div class="prewrap">pip install outboxml</div>
-          Shim <code>mldataworker</code> → <code>outboxml</code> из site-packages.
+          Shim <code>src/shim.py</code>: <code>mldataworker</code> → <code>outboxml</code> из site-packages.
         </li>
         <li>Артефакты в каталоге results (см. ниже).</li>
       </ol>
@@ -218,7 +218,7 @@
       <tbody>
         <tr>
           <td><code>df_for_service_main.parquet</code></td>
-          <td>main_ (legacy)</td>
+          <td>main_</td>
           <td>вектор + <code>preds_cf</code> / <code>preds_rg</code></td>
         </tr>
         <tr>
@@ -259,12 +259,12 @@
           (export + <code>save_df_for_service(..., slot="second", calibrators, threshold)</code>).</li>
         <li>В <code>integration/results/</code> должны быть:
           <ul class="bullets">
-            <li><code>UU_querulus_….pickle</code>,
+            <li><code>UU_querulus_2026_10_27_20_12_44.pickle</code>,
               <code>cf_calibrator.pickle</code>, <code>rg_calibrator.pickle</code></li>
             <li><code>df_for_service_second.parquet</code> (с колонкой <code>THRESHOLD</code>)</li>
           </ul>
         </li>
-        <li>Для main_ (legacy): <code>querulus_ansamble_legacy.pickle</code> +
+        <li>Для main_: <code>querulus_ansamble_2026_04_18_v1.pickle</code> +
           <code>df_for_service_main.parquet</code> с preds того же пути, что <code>main_predict</code>.</li>
       </ol>
     </div>
@@ -362,7 +362,7 @@ PYTHONPATH=.. python -m unittest discover -s tests -p "test_*.py" -v</div>
     </table>
 
     <footer>
-      examples/querulus/integration/tests.html · заменяет tests/test_instruction.md
+      examples/querulus/integration/docs/tests.html · заменяет tests/test_instruction.md
     </footer>
   </div>
 </body>

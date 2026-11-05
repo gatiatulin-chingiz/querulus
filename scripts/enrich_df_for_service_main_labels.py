@@ -17,7 +17,7 @@ from pathlib import Path
 import pandas as pd
 
 
-#new
+# new
 def enrich(path: Path, threshold: float, out: Path | None = None) -> Path:
     df = pd.read_parquet(path)
     if "preds_cf" not in df.columns or "preds_rg" not in df.columns:
@@ -47,7 +47,7 @@ def enrich(path: Path, threshold: float, out: Path | None = None) -> Path:
     return target
 
 
-#new
+# new
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)

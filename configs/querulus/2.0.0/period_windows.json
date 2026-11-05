@@ -1,0 +1,50 @@
+{
+  "base_train_period": [
+    "2022-01-01",
+    "2024-05-31"
+  ],
+  "base_test_period": [
+    "2024-06-01",
+    "2025-06-01"
+  ],
+  "train_core": [
+    "2022-01-01",
+    "2024-01-02"
+  ],
+  "val_period": [
+    "2024-01-03",
+    "2024-04-01"
+  ],
+  "cal_period": [
+    "2024-04-02",
+    "2024-05-31"
+  ],
+  "parity_train_period": [
+    "2022-01-01",
+    "2024-04-01"
+  ],
+  "parity_test_period": [
+    "2024-06-01",
+    "2025-06-01"
+  ],
+  "prod_train_period": [
+    "2022-01-01",
+    "2025-02-27"
+  ],
+  "prod_tau_cal_period": [
+    "2025-02-28",
+    "2025-04-16"
+  ],
+  "prod_test_period": [
+    "2025-04-20",
+    "2025-06-01"
+  ],
+  "date_column": "PAYMENT_ORDER_DATE_TIME",
+  "freq_target": "TARGET_FREQ",
+  "prod_cutoff": "2025-04-20",
+  "prod_tau_cal_cutoff": "2025-04-20",
+  "prod_fit_test_fraction": 0.7,
+  "prod_tau_cal_fraction": 0.15,
+  "prod_holdout_fraction": 0.15,
+  "prod_cal_fraction": 0.15
+}

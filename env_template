@@ -17,14 +17,16 @@ OISUU_DB_PORT=1433
 # --- Integration (сервис и тесты integration/) ---
 # Скопируйте этот файл в .env в корне querulus (или задайте переменные в shell).
 # config.py читает env_template / .env относительно cwd.
-# Stem модели — из тела запроса. THRESHOLD — из вектора; иначе DEFAULT ниже.
+# THRESHOLD — из вектора; иначе DEFAULT ниже.
 # Версии треков → main_response / second_response и /api/health.
+# MAIN_MODEL_STEM / SECOND_MODEL_STEM грузятся на старте (иначе процесс не поднимается).
 MAIN_VERSION=1.4.0
 SECOND_VERSION=2.0.0
 DEFAULT_MAIN_THRESHOLD=0.6
 DEFAULT_SECOND_THRESHOLD=0.6
-# Shadow 2.0.0: калибраторы (пусто SUBDIR = рядом с pickle в results/)
-SHADOW_MODELS_SUBDIR=
+MAIN_MODEL_STEM=querulus_ansamble_2026_04_18_v1
+SECOND_MODEL_STEM=UU_querulus_2026_10_27_20_12_44
+# Калибраторы second_ рядом с pickle в каталоге моделей (results/)
 SECOND_CF_CALIBRATOR_FILENAME=cf_calibrator.pickle
 SECOND_RG_CALIBRATOR_FILENAME=rg_calibrator.pickle
 SERVICE_GIT_COMMIT=
@@ -32,7 +34,7 @@ SERVICE_GIT_COMMIT=
 # --- Integration tests (artifacts.py / test_parity) ---
 # Пусто = defaults: integration/results/, stems ниже, df_for_service_*.parquet
 # Синтетика: INTEGRATION_TEST_RESULTS_DIR=integration/results/test_synth
-# Prod main: INTEGRATION_TEST_MAIN_STEM=querulus_ansamble_2026_04_18_v1
+# Синтетика в test_synth собрана под эти имена файлов, не под stem сервиса.
 INTEGRATION_TEST_RESULTS_DIR=
 INTEGRATION_TEST_MAIN_STEM=querulus_ansamble_legacy
 INTEGRATION_TEST_SECOND_STEM=UU_querulus_2026_10_09_16_51_20

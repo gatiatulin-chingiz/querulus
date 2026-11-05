@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Querulus Integration — дерево функций</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #10141a;
+      --panel: #171d26;
+      --card: #1c2430;
+      --line: #2e3846;
+      --text: #e8eef4;
+      --muted: #8fa0b3;
+      --new: #4a9eff;
+      --changed: #f0c040;
+      --reviewed: #3ecf8e;
+      --unknown: #8fa0b3;
+      --arrow: #7a8fa3;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+      --sans: "IBM Plex Sans", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+    }
+    .wrap { padding: 0.75rem 0.85rem 1rem; }
+    header .eyebrow {
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0 0 0.2rem;
+    }
+    h1 { margin: 0 0 0.25rem; font-size: 1.2rem; }
+    header p { margin: 0; color: var(--muted); font-size: 0.82rem; }
+    .legend {
+      display: flex; flex-wrap: wrap; gap: 0.85rem;
+      margin: 0.5rem 0; font-family: var(--mono); font-size: 0.72rem;
+    }
+    .legend span { display: inline-flex; align-items: center; gap: 0.3rem; }
+    .legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+    .c-new { background: var(--new); }
+    .c-changed { background: var(--changed); }
+    .c-reviewed { background: var(--reviewed); }
+    .c-unknown { background: var(--unknown); }
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center;
+      margin-bottom: 0.4rem;
+    }
+    .toolbar input {
+      flex: 1 1 200px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      color: var(--text);
+      padding: 0.35rem 0.55rem;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+    }
+    .entry-btns { display: flex; flex-wrap: wrap; gap: 0.28rem; margin-bottom: 0.5rem; }
+    .entry-btns button {
+      font-family: var(--mono); font-size: 0.68rem;
+      padding: 0.22rem 0.45rem; border-radius: 4px;
+      border: 1px solid var(--line); background: var(--panel);
+      color: var(--muted); cursor: pointer;
+    }
+    .entry-btns button.on {
+      color: var(--text); border-color: #4a6a8a; background: #1c2836;
+    }
+    .stats { margin-left: auto; font-family: var(--mono); font-size: 0.68rem; color: var(--muted); }
+    .tree-box {
+      position: relative;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: auto;
+      width: 100%;
+      height: calc(100vh - 160px);
+    }
+    #wires {
+      position: absolute;
+      left: 0; top: 0;
+      pointer-events: none;
+      overflow: visible;
+      z-index: 0;
+    }
+    .vtree {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: flex-start;
+      min-width: max-content;
+      padding: 1.25rem 1.5rem 2rem;
+    }
+    /* unit = карточка + дети справа */
+    .unit {
+      display: flex;
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 1.35rem;
+    }
+    .unit.spine {
+      align-items: flex-start;
+    }
+    .unit.spine > .card {
+      margin-top: 0.15rem;
+    }
+    .card {
+      position: relative;
+      flex: 0 0 auto;
+      max-width: 280px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--unknown);
+      border-radius: 5px;
+      padding: 0.3rem 1.15rem 0.35rem 0.45rem;
+    }
+    .card.new { border-left-color: var(--new); }
+    .card.changed { border-left-color: var(--changed); }
+    .card.reviewed { border-left-color: var(--reviewed); }
+    .card .name {
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      font-weight: 600;
+      display: block;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .card.new .name { color: var(--new); }
+    .card.changed .name { color: var(--changed); }
+    .card.reviewed .name { color: var(--reviewed); }
+    .card.unknown .name { color: var(--unknown); }
+    .card .meta {
+      margin-top: 0.2rem;
+      font-size: 0.68rem;
+      line-height: 1.25;
+      color: var(--muted);
+      white-space: normal;
+    }
+    .card .toggle {
+      position: absolute;
+      top: 0.2rem; right: 0.2rem;
+      width: 0.95rem; height: 0.95rem;
+      border: 1px solid var(--line);
+      background: #141a22; color: var(--muted);
+      border-radius: 3px; cursor: pointer;
+      font-size: 0.62rem; line-height: 1; padding: 0;
+    }
+    /* depth 0–1 и depth≥3: дети в ряд справа */
+    .kids-row {
+      display: flex;
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 1.1rem;
+    }
+    /* depth 2 (score_*): дети столбиком справа */
+    .kids-col {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+    .card.priv { opacity: 0.9; }
+    .loop { font-family: var(--mono); font-size: 0.62rem; color: var(--muted); }
+    .note { margin-top: 0.5rem; font-size: 0.72rem; color: var(--muted); }
+    .note code { font-family: var(--mono); color: var(--new); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <p class="eyebrow">querulus / integration</p>
+      <h1>Дерево вызовов</h1>
+      <p>
+        Один вызов — цепочка вправо; несколько — ветви столбиком.
+        <code>score_second</code> под <code>score_main</code>.
+      </p>
+    </header>
+    <div class="legend">
+      <span><i class="c-new"></i># new</span>
+      <span><i class="c-changed"></i># changed</span>
+      <span><i class="c-reviewed"></i># reviewed</span>
+      <span><i class="c-unknown"></i># unknown</span>
+    </div>
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="фильтр…" autocomplete="off" />
+      <span class="stats" id="stats"></span>
+    </div>
+    <div class="entry-btns" id="entries"></div>
+    <div class="tree-box" id="box">
+      <svg id="wires" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div class="vtree" id="tree"></div>
+    </div>
+    <p class="note">
+      Пересобрать: <code>python examples/querulus/scripts/_gen_functions_html.py</code>
+    </p>
+  </div>
+  <script>
+  const DATA = {"nodes": [{"id": "main._startup", "module": "main", "name": "_startup", "tag": "reviewed", "lineno": 35, "file": "main.py", "summary": "Пишет лог, грузит модели и гоняет контрольный пример"}, {"id": "main.health_route", "module": "main", "name": "health_route", "tag": "reviewed", "lineno": 121, "file": "main.py", "summary": "Отвечает, что сервис жив, и какие версии треков"}, {"id": "main.lifespan", "module": "main", "name": "lifespan", "tag": "reviewed", "lineno": 59, "file": "main.py", "summary": "При старте сервиса поднимает модели в память"}, {"id": "main.main_predict", "module": "main", "name": "main_predict", "tag": "reviewed", "lineno": 72, "file": "main.py", "summary": "Считает основной трек и при необходимости второй"}, {"id": "main.predict_route", "module": "main", "name": "predict_route", "tag": "reviewed", "lineno": 139, "file": "main.py", "summary": "Принимает HTTP-запрос на скоринг и отдаёт ответ"}, {"id": "src.calibration.apply_cf_calibrator", "module": "src.calibration", "name": "apply_cf_calibrator", "tag": "reviewed", "lineno": 18, "file": "src/calibration.py", "summary": "Isotonic-калибровка вероятностей классификации"}, {"id": "src.calibration.apply_rg_calibrator", "module": "src.calibration", "name": "apply_rg_calibrator", "tag": "reviewed", "lineno": 38, "file": "src/calibration.py", "summary": "Isotonic-калибровка сумм регрессии (clip ≥ 0)"}, {"id": "src.explain._catboost_shap_values", "module": "src.explain", "name": "_catboost_shap_values", "tag": "reviewed", "lineno": 41, "file": "src/explain.py", "summary": "SHAP через CatBoost get_feature_importance"}, {"id": "src.explain.shap_top_features_comment", "module": "src.explain", "name": "shap_top_features_comment", "tag": "reviewed", "lineno": 69, "file": "src/explain.py", "summary": "Короткий текст, какие признаки сильнее всего повлияли"}, {"id": "src.explain.unwrap_mldataworker_model", "module": "src.explain", "name": "unwrap_mldataworker_model", "tag": "reviewed", "lineno": 20, "file": "src/explain.py", "summary": "Снимает служебные обёртки вокруг модели"}, {"id": "src.is_lawyer.masked_predictions", "module": "src.is_lawyer", "name": "masked_predictions", "tag": "reviewed", "lineno": 14, "file": "src/is_lawyer.py", "summary": "Накладывает бизнес-правила на суммы регрессии"}, {"id": "src.models.calibrator_paths", "module": "src.models", "name": "calibrator_paths", "tag": "reviewed", "lineno": 75, "file": "src/models.py", "summary": "Пути к файлам калибраторов второго трека"}, {"id": "src.models.feature_names_from_model_result", "module": "src.models", "name": "feature_names_from_model_result", "tag": "reviewed", "lineno": 93, "file": "src/models.py", "summary": "Читает список признаков из сохранённой модели"}, {"id": "src.models.model_pickle_path", "module": "src.models", "name": "model_pickle_path", "tag": "reviewed", "lineno": 69, "file": "src/models.py", "summary": "Строит путь к файлу модели"}, {"id": "src.models.prod_models_dir", "module": "src.models", "name": "prod_models_dir", "tag": "reviewed", "lineno": 56, "file": "src/models.py", "summary": "Папка, где лежат модели и калибраторы"}, {"id": "src.predictions._classification_proba_and_labels", "module": "src.predictions", "name": "_classification_proba_and_labels", "tag": "reviewed", "lineno": 128, "file": "src/predictions.py", "summary": "Считает вероятности и метки 0/1 по порогу"}, {"id": "src.predictions._load_model_pair", "module": "src.predictions", "name": "_load_model_pair", "tag": "reviewed", "lineno": 78, "file": "src/predictions.py", "summary": "Достаёт из файла пару моделей классификации и регрессии"}, {"id": "src.predictions._raw_classification_scores", "module": "src.predictions", "name": "_raw_classification_scores", "tag": "reviewed", "lineno": 340, "file": "src/predictions.py", "summary": "Сырой скор классификации до калибровки"}, {"id": "src.predictions._round_numbers", "module": "src.predictions", "name": "_round_numbers", "tag": "reviewed", "lineno": 162, "file": "src/predictions.py", "summary": "Округляет числа в ответе до двух знаков"}, {"id": "src.predictions.preload_models", "module": "src.predictions", "name": "preload_models", "tag": "reviewed", "lineno": 103, "file": "src/predictions.py", "summary": "Заранее загружает модели и калибраторы в память"}, {"id": "src.predictions.run_classification_model", "module": "src.predictions", "name": "run_classification_model", "tag": "reviewed", "lineno": 189, "file": "src/predictions.py", "summary": "Прогоняет классификацию и возвращает метки"}, {"id": "src.predictions.run_regression_model", "module": "src.predictions", "name": "run_regression_model", "tag": "reviewed", "lineno": 216, "file": "src/predictions.py", "summary": "Прогоняет регрессию и возвращает суммы"}, {"id": "src.predictions.score_main", "module": "src.predictions", "name": "score_main", "tag": "reviewed", "lineno": 240, "file": "src/predictions.py", "summary": "Полный скоринг основной модели: от входа до ответа"}, {"id": "src.predictions.score_second", "module": "src.predictions", "name": "score_second", "tag": "reviewed", "lineno": 354, "file": "src/predictions.py", "summary": "Полный скоринг второй модели в том же формате ответа"}, {"id": "src.preprocessing.common.coerce_and_enrich", "module": "src.preprocessing.common", "name": "coerce_and_enrich", "tag": "reviewed", "lineno": 132, "file": "src/preprocessing/common.py", "summary": "Приводит типы, даты, форму заявителя и NOT_NOTIFICATION к нужному виду"}, {"id": "src.preprocessing.common.df_to_records", "module": "src.preprocessing.common", "name": "df_to_records", "tag": "reviewed", "lineno": 339, "file": "src/preprocessing/common.py", "summary": "Переводит таблицу в список словарей для JSON"}, {"id": "src.preprocessing.common.prepare_matrix", "module": "src.preprocessing.common", "name": "prepare_matrix", "tag": "reviewed", "lineno": 270, "file": "src/preprocessing/common.py", "summary": "Подгоняет таблицу под то, что ждала модель при обучении"}, {"id": "src.preprocessing.common.prepare_vector_upper", "module": "src.preprocessing.common", "name": "prepare_vector_upper", "tag": "reviewed", "lineno": 99, "file": "src/preprocessing/common.py", "summary": "Собирает таблицу из JSON и поднимает строки в UPPER"}, {"id": "src.preprocessing.common.preprocess_input_vector", "module": "src.preprocessing.common", "name": "preprocess_input_vector", "tag": "reviewed", "lineno": 249, "file": "src/preprocessing/common.py", "summary": "Общий вход main_/second_: UPPER → касты → validate"}, {"id": "src.preprocessing.common.require_columns", "module": "src.preprocessing.common", "name": "require_columns", "tag": "reviewed", "lineno": 218, "file": "src/preprocessing/common.py", "summary": "Проверяет наличие колонок и режет кадр в нужном порядке"}, {"id": "src.preprocessing.common.resolve_threshold", "module": "src.preprocessing.common", "name": "resolve_threshold", "tag": "reviewed", "lineno": 312, "file": "src/preprocessing/common.py", "summary": "Берёт порог классификации из запроса или из настроек"}, {"id": "src.preprocessing.common.validate_derived_dates_strict", "module": "src.preprocessing.common", "name": "validate_derived_dates_strict", "tag": "reviewed", "lineno": 179, "file": "src/preprocessing/common.py", "summary": "Проверяет, что даты после подготовки выглядят корректно"}, {"id": "src.preprocessing.common.validate_input_vector", "module": "src.preprocessing.common", "name": "validate_input_vector", "tag": "reviewed", "lineno": 242, "file": "src/preprocessing/common.py", "summary": "Проверяет полный входной контракт и preprocess-инварианты"}, {"id": "src.preprocessing.common.validate_model_features", "module": "src.preprocessing.common", "name": "validate_model_features", "tag": "reviewed", "lineno": 264, "file": "src/preprocessing/common.py", "summary": "После FE проверяет только engineered-колонки"}, {"id": "src.preprocessing.common.validate_no_duplicate_columns", "module": "src.preprocessing.common", "name": "validate_no_duplicate_columns", "tag": "reviewed", "lineno": 171, "file": "src/preprocessing/common.py", "summary": "Запрещает повторяющиеся имена колонок"}, {"id": "src.preprocessing.common.validate_preprocessed_vector", "module": "src.preprocessing.common", "name": "validate_preprocessed_vector", "tag": "reviewed", "lineno": 196, "file": "src/preprocessing/common.py", "summary": "UPPER / дубли колонок / даты после enrich"}, {"id": "src.preprocessing.cpi.cpi.add_real_monetary_columns", "module": "src.preprocessing.cpi.cpi", "name": "add_real_monetary_columns", "tag": "reviewed", "lineno": 138, "file": "src/preprocessing/cpi/cpi.py", "summary": "Пересчитывает суммы в цены базового года"}, {"id": "src.preprocessing.cpi.cpi.deflate_to_base_year", "module": "src.preprocessing.cpi.cpi", "name": "deflate_to_base_year", "tag": "reviewed", "lineno": 113, "file": "src/preprocessing/cpi/cpi.py", "summary": "Убирает инфляцию из денежных сумм по готовому году"}, {"id": "src.preprocessing.cpi.cpi.real_feature_name", "module": "src.preprocessing.cpi.cpi", "name": "real_feature_name", "tag": "reviewed", "lineno": 96, "file": "src/preprocessing/cpi/cpi.py", "summary": "Собирает имя колонки для суммы без инфляции"}, {"id": "src.preprocessing.cpi.cpi.resolve_cpi_year", "module": "src.preprocessing.cpi.cpi", "name": "resolve_cpi_year", "tag": "reviewed", "lineno": 53, "file": "src/preprocessing/cpi/cpi.py", "summary": "Подбирает год, по которому искать индекс цен"}, {"id": "src.preprocessing.second.features._amount_bins", "module": "src.preprocessing.second.features", "name": "_amount_bins", "tag": "reviewed", "lineno": 51, "file": "src/preprocessing/second/features.py", "summary": "Режет сумму на три денежных бакета"}, {"id": "src.preprocessing.second.features._safe_div", "module": "src.preprocessing.second.features", "name": "_safe_div", "tag": "reviewed", "lineno": 45, "file": "src/preprocessing/second/features.py", "summary": "Делит числа и подставляет пустоту при делении на ноль"}, {"id": "src.preprocessing.second.features.add_second_model_features", "module": "src.preprocessing.second.features", "name": "add_second_model_features", "tag": "reviewed", "lineno": 66, "file": "src/preprocessing/second/features.py", "summary": "Считает дополнительные признаки для второй модели"}, {"id": "src.preprocessing.second.preprocess.preprocess_second_vector", "module": "src.preprocessing.second.preprocess", "name": "preprocess_second_vector", "tag": "reviewed", "lineno": 23, "file": "src/preprocessing/second/preprocess.py", "summary": "Готовит вход и считает фичи для второй модели"}, {"id": "src.shim._alias_models", "module": "src.shim", "name": "_alias_models", "tag": "new", "lineno": 66, "file": "src/shim.py", "summary": "Подменяет модуль моделей на outboxml при необходимости"}, {"id": "src.shim._ensure_pkg", "module": "src.shim", "name": "_ensure_pkg", "tag": "new", "lineno": 44, "file": "src/shim.py", "summary": "Гарантирует, что пакет виден в sys.modules"}, {"id": "src.shim.install_mldataworker_shim", "module": "src.shim", "name": "install_mldataworker_shim", "tag": "new", "lineno": 81, "file": "src/shim.py", "summary": "Подставляет заглушку, если нет настоящего mldataworker"}, {"id": "src.startup_check._check_result", "module": "src.startup_check", "name": "_check_result", "tag": "reviewed", "lineno": 29, "file": "src/startup_check.py", "summary": "Проверяет результат контрольного скоринга"}, {"id": "src.startup_check.assert_startup_scores", "module": "src.startup_check", "name": "assert_startup_scores", "tag": "reviewed", "lineno": 52, "file": "src/startup_check.py", "summary": "Прогоняет контрольный пример при старте сервиса"}], "edges": [{"from": "main._startup", "to": "src.models.prod_models_dir"}, {"from": "main._startup", "to": "src.predictions.preload_models"}, {"from": "main._startup", "to": "src.startup_check.assert_startup_scores"}, {"from": "main.lifespan", "to": "main._startup"}, {"from": "main.main_predict", "to": "src.predictions.score_main"}, {"from": "main.main_predict", "to": "src.predictions.score_second"}, {"from": "main.predict_route", "to": "main.main_predict"}, {"from": "src.explain.shap_top_features_comment", "to": "src.explain.unwrap_mldataworker_model"}, {"from": "src.explain.shap_top_features_comment", "to": "src.explain._catboost_shap_values"}, {"from": "src.models.model_pickle_path", "to": "src.models.prod_models_dir"}, {"from": "src.models.calibrator_paths", "to": "src.models.prod_models_dir"}, {"from": "src.predictions._load_model_pair", "to": "src.models.model_pickle_path"}, {"from": "src.predictions.preload_models", "to": "src.predictions._load_model_pair"}, {"from": "src.predictions.preload_models", "to": "src.models.calibrator_paths"}, {"from": "src.predictions.run_classification_model", "to": "src.preprocessing.common.prepare_matrix"}, {"from": "src.predictions.run_classification_model", "to": "src.predictions._classification_proba_and_labels"}, {"from": "src.predictions.run_regression_model", "to": "src.preprocessing.common.prepare_matrix"}, {"from": "src.predictions.run_regression_model", "to": "src.predictions._round_numbers"}, {"from": "src.predictions.score_main", "to": "src.predictions._load_model_pair"}, {"from": "src.predictions.score_main", "to": "src.preprocessing.common.preprocess_input_vector"}, {"from": "src.predictions.score_main", "to": "src.preprocessing.common.resolve_threshold"}, {"from": "src.predictions.score_main", "to": "src.preprocessing.common.require_columns"}, {"from": "src.predictions.score_main", "to": "src.predictions.run_classification_model"}, {"from": "src.predictions.score_main", "to": "src.explain.shap_top_features_comment"}, {"from": "src.predictions.score_main", "to": "src.predictions.run_regression_model"}, {"from": "src.predictions.score_main", "to": "src.is_lawyer.masked_predictions"}, {"from": "src.predictions.score_main", "to": "src.predictions._round_numbers"}, {"from": "src.predictions.score_main", "to": "src.preprocessing.common.df_to_records"}, {"from": "src.predictions.score_second", "to": "src.predictions._load_model_pair"}, {"from": "src.predictions.score_second", "to": "src.preprocessing.second.preprocess.preprocess_second_vector"}, {"from": "src.predictions.score_second", "to": "src.preprocessing.common.resolve_threshold"}, {"from": "src.predictions.score_second", "to": "src.models.feature_names_from_model_result"}, {"from": "src.predictions.score_second", "to": "src.preprocessing.common.require_columns"}, {"from": "src.predictions.score_second", "to": "src.preprocessing.common.prepare_matrix"}, {"from": "src.predictions.score_second", "to": "src.predictions._raw_classification_scores"}, {"from": "src.predictions.score_second", "to": "src.models.calibrator_paths"}, {"from": "src.predictions.score_second", "to": "src.calibration.apply_cf_calibrator"}, {"from": "src.predictions.score_second", "to": "src.calibration.apply_rg_calibrator"}, {"from": "src.predictions.score_second", "to": "src.is_lawyer.masked_predictions"}, {"from": "src.predictions.score_second", "to": "src.explain.shap_top_features_comment"}, {"from": "src.predictions.score_second", "to": "src.predictions._round_numbers"}, {"from": "src.predictions.score_second", "to": "src.preprocessing.common.df_to_records"}, {"from": "src.preprocessing.common.validate_preprocessed_vector", "to": "src.preprocessing.common.validate_no_duplicate_columns"}, {"from": "src.preprocessing.common.validate_preprocessed_vector", "to": "src.preprocessing.common.validate_derived_dates_strict"}, {"from": "src.preprocessing.common.validate_input_vector", "to": "src.preprocessing.common.require_columns"}, {"from": "src.preprocessing.common.validate_input_vector", "to": "src.preprocessing.common.validate_preprocessed_vector"}, {"from": "src.preprocessing.common.preprocess_input_vector", "to": "src.preprocessing.common.coerce_and_enrich"}, {"from": "src.preprocessing.common.preprocess_input_vector", "to": "src.preprocessing.common.prepare_vector_upper"}, {"from": "src.preprocessing.common.preprocess_input_vector", "to": "src.preprocessing.common.validate_input_vector"}, {"from": "src.preprocessing.common.validate_model_features", "to": "src.preprocessing.common.require_columns"}, {"from": "src.preprocessing.cpi.cpi.deflate_to_base_year", "to": "src.preprocessing.cpi.cpi.resolve_cpi_year"}, {"from": "src.preprocessing.cpi.cpi.add_real_monetary_columns", "to": "src.preprocessing.cpi.cpi.real_feature_name"}, {"from": "src.preprocessing.cpi.cpi.add_real_monetary_columns", "to": "src.preprocessing.cpi.cpi.deflate_to_base_year"}, {"from": "src.preprocessing.second.features.add_second_model_features", "to": "src.preprocessing.cpi.cpi.add_real_monetary_columns"}, {"from": "src.preprocessing.second.features.add_second_model_features", "to": "src.preprocessing.second.features._safe_div"}, {"from": "src.preprocessing.second.features.add_second_model_features", "to": "src.preprocessing.cpi.cpi.real_feature_name"}, {"from": "src.preprocessing.second.features.add_second_model_features", "to": "src.preprocessing.second.features._amount_bins"}, {"from": "src.preprocessing.second.preprocess.preprocess_second_vector", "to": "src.preprocessing.common.preprocess_input_vector"}, {"from": "src.preprocessing.second.preprocess.preprocess_second_vector", "to": "src.preprocessing.second.features.add_second_model_features"}, {"from": "src.preprocessing.second.preprocess.preprocess_second_vector", "to": "src.preprocessing.common.validate_model_features"}, {"from": "src.shim.install_mldataworker_shim", "to": "src.shim._ensure_pkg"}, {"from": "src.shim.install_mldataworker_shim", "to": "src.shim._alias_models"}, {"from": "src.startup_check.assert_startup_scores", "to": "src.models.prod_models_dir"}, {"from": "src.startup_check.assert_startup_scores", "to": "src.startup_check._check_result"}, {"from": "src.startup_check.assert_startup_scores", "to": "src.predictions.score_main"}, {"from": "src.startup_check.assert_startup_scores", "to": "src.predictions.score_second"}], "entries": ["main.predict_route", "main.main_predict", "main.lifespan", "main._startup", "src.predictions.score_main", "src.predictions.score_second", "src.predictions.preload_models", "src.preprocessing.second.preprocess.preprocess_second_vector", "src.preprocessing.common.preprocess_input_vector", "src.preprocessing.common.coerce_and_enrich", "src.preprocessing.common.prepare_vector_upper", "src.preprocessing.second.features.add_second_model_features", "main.health_route"]};
+  const byId = Object.fromEntries(DATA.nodes.map(n => [n.id, n]));
+  const out = {};
+  DATA.nodes.forEach(n => { out[n.id] = []; });
+  DATA.edges.forEach(e => {
+    if (out[e.from] && !out[e.from].includes(e.to)) out[e.from].push(e.to);
+  });
+
+  const ENTRIES = (DATA.entries || []).filter(id => byId[id]);
+  let entry = ENTRIES[0] || null;
+  let query = '';
+  const collapsed = new Set();
+  const $box = document.getElementById('box');
+  const $tree = document.getElementById('tree');
+  const $wires = document.getElementById('wires');
+  const $entries = document.getElementById('entries');
+  const $stats = document.getElementById('stats');
+
+  function esc(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function matchNode(n) {
+    if (!query) return true;
+    const q = query.toLowerCase();
+    return n.name.toLowerCase().includes(q)
+      || n.module.toLowerCase().includes(q)
+      || (n.summary || '').toLowerCase().includes(q)
+      || n.id.toLowerCase().includes(q);
+  }
+
+  function subtreeMatches(id, stack) {
+    const n = byId[id];
+    if (!n) return false;
+    if (matchNode(n)) return true;
+    if (stack.has(id)) return false;
+    const next = new Set(stack);
+    next.add(id);
+    return (out[id] || []).some(cid => subtreeMatches(cid, next));
+  }
+
+  function reaches(fromId, targetId, seen) {
+    if (fromId === targetId) return true;
+    if (seen.has(fromId)) return false;
+    seen.add(fromId);
+    return (out[fromId] || []).some(cid => reaches(cid, targetId, seen));
+  }
+
+  function visibleKids(id) {
+    const kids = out[id] || [];
+    const kept = [];
+    kids.forEach(kid => {
+      if (!kept.some(other => reaches(other, kid, new Set([id])))) kept.push(kid);
+    });
+    return kept;
+  }
+
+  const SPINE = new Set(['predict_route', 'main_predict', 'score_main', 'score_second']);
+  // 1 ребёнок → цепочка вправо; 2+ → ветви столбиком (и score_*/main_predict всегда столбик).
+  function kidsClass(name, count) {
+    if (name === 'main_predict' || name === 'score_main' || name === 'score_second') {
+      return 'kids-col';
+    }
+    return count >= 2 ? 'kids-col' : 'kids-row';
+  }
+
+  function cardHtml(n, looping, toggle, nid) {
+    const tip = `#${n.tag} · ${n.file}:${n.lineno}`;
+    const desc = (n.summary || '').trim() || tip;
+    const priv = n.name.startsWith('_') ? ' priv' : '';
+    return `<div class="card ${esc(n.tag)}${priv}" data-nid="${esc(nid)}" title="${esc(tip)}">
+      ${toggle || ''}
+      <span class="name">${esc(n.name)}${looping ? ' <span class="loop">↻</span>' : ''}</span>
+      <div class="meta">${esc(desc)}</div>
+    </div>`;
+  }
+
+  function renderNode(id, stack) {
+    const n = byId[id];
+    if (!n) return '';
+    if (query && !subtreeMatches(id, new Set(stack))) return '';
+
+    const kids = visibleKids(id);
+    const looping = stack.has(id);
+    const key = [...stack].join('>') + '>' + id;
+    const isCollapsed = collapsed.has(key);
+    const hasKids = kids.length > 0 && !looping;
+    const toggle = hasKids
+      ? `<button type="button" class="toggle" data-key="${esc(key)}">${isCollapsed ? '+' : '−'}</button>`
+      : '';
+
+    let kidsHtml = '';
+    if (hasKids && !isCollapsed) {
+      const next = new Set(stack);
+      next.add(id);
+      const items = kids.map(cid => renderNode(cid, next)).filter(Boolean);
+      if (items.length) {
+        kidsHtml = `<div class="${kidsClass(n.name, items.length)}" data-from="${esc(id)}">${items.join('')}</div>`;
+      }
+    }
+
+    const spine = SPINE.has(n.name) ? ' spine' : '';
+    return `<div class="unit${spine}">${cardHtml(n, looping, toggle, id)}${kidsHtml}</div>`;
+  }
+
+  function drawWires() {
+    const boxRect = $box.getBoundingClientRect();
+    const scrollX = $box.scrollLeft;
+    const scrollY = $box.scrollTop;
+    const width = Math.max($box.clientWidth, $tree.scrollWidth + 40);
+    const height = Math.max($box.clientHeight, $tree.scrollHeight + 40);
+    $wires.setAttribute('width', width);
+    $wires.setAttribute('height', height);
+    $wires.style.width = width + 'px';
+    $wires.style.height = height + 'px';
+
+    const pairs = [];
+    $tree.querySelectorAll('.kids-row[data-from], .kids-col[data-from]').forEach(group => {
+      const parentCard = group.parentElement
+        && group.parentElement.querySelector(':scope > .card[data-nid]');
+      if (!parentCard) return;
+      // прямые дети: .unit > .card (включая leaf)
+      group.querySelectorAll(':scope > .unit > .card[data-nid]').forEach(childCard => {
+        pairs.push([parentCard, childCard]);
+      });
+    });
+
+    const ns = 'http://www.w3.org/2000/svg';
+    while ($wires.firstChild) $wires.removeChild($wires.firstChild);
+    const marker = document.createElementNS(ns, 'defs');
+    marker.innerHTML = `<marker id="arrowHead" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#7a8fa3" />
+    </marker>`;
+    $wires.appendChild(marker);
+
+    pairs.forEach(([parentCard, childCard]) => {
+      const pr = parentCard.getBoundingClientRect();
+      const cr = childCard.getBoundingClientRect();
+      // всегда справа от родителя: правый край → левый край ребёнка
+      const x1 = pr.right - boxRect.left + scrollX;
+      const y1 = pr.top - boxRect.top + scrollY + pr.height / 2;
+      const x2 = cr.left - boxRect.left + scrollX;
+      const y2 = cr.top - boxRect.top + scrollY + cr.height / 2;
+      const midX = x1 + Math.max(12, (x2 - x1) / 2);
+      const path = document.createElementNS(ns, 'path');
+      path.setAttribute('d', `M ${x1} ${y1} H ${midX} V ${y2} H ${x2 - 4}`);
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', '#7a8fa3');
+      path.setAttribute('stroke-width', '1.5');
+      path.setAttribute('marker-end', 'url(#arrowHead)');
+      $wires.appendChild(path);
+    });
+  }
+
+  function renderEntries() {
+    $entries.innerHTML = ENTRIES.map(id =>
+      `<button type="button" class="${entry === id ? 'on' : ''}" data-id="${esc(id)}">${esc(byId[id].name)}</button>`
+    ).join('');
+    $entries.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        entry = btn.dataset.id;
+        collapsed.clear();
+        render();
+      });
+    });
+  }
+
+  function render() {
+    renderEntries();
+    if (!entry) {
+      $tree.innerHTML = '<div style="color:var(--muted)">нет entry-point</div>';
+      $wires.innerHTML = '';
+      return;
+    }
+    $tree.innerHTML = renderNode(entry, new Set());
+    $stats.textContent = DATA.nodes.length + ' fn · ' + DATA.edges.length + ' edges';
+    $tree.querySelectorAll('.toggle[data-key]').forEach(el => {
+      el.addEventListener('click', () => {
+        const key = el.dataset.key;
+        if (collapsed.has(key)) collapsed.delete(key);
+        else collapsed.add(key);
+        render();
+      });
+    });
+    requestAnimationFrame(() => requestAnimationFrame(drawWires));
+  }
+
+  document.getElementById('q').addEventListener('input', e => {
+    query = e.target.value.trim();
+    render();
+  });
+  $box.addEventListener('scroll', () => drawWires());
+  window.addEventListener('resize', () => drawWires());
+
+  render();
+  </script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 {
-  "source": "Rosstat ipc_mes_06-2026.xlsx sheet 01 (https://rosstat.gov.ru/storage/mediabank/ipc_mes_06-2026.xlsx)",
+  "source": "Rosstat",
   "normalized_to": "2020-12",
   "note_2026": "Jan–Jun 2026 cumulative CPI vs Dec 2025 (footnote in source file)",
   "base_year_for_model": 2022,

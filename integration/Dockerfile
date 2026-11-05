@@ -19,13 +19,11 @@ RUN chown -R model_user:model_user /home/model_user
 # 5. Переключаемся на непривилегированного пользователя
 USER model_user
 
-# 6. Копируем модели и исходный код (пакеты service/features/scoring + root entry)
+# 6. Копируем модели и исходный код (src/ + root entry)
 COPY --chown=model_user:model_user results/ /home/model_user/model/results/
 COPY --chown=model_user:model_user config.py /home/model_user/model/config.py
 COPY --chown=model_user:model_user main.py /home/model_user/model/main.py
-COPY --chown=model_user:model_user service/ /home/model_user/model/service/
-COPY --chown=model_user:model_user features/ /home/model_user/model/features/
-COPY --chown=model_user:model_user scoring/ /home/model_user/model/scoring/
+COPY --chown=model_user:model_user src/ /home/model_user/model/src/
 
 # 7. Рабочая директория и точка входа
 WORKDIR /home/model_user/model

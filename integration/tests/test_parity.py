@@ -20,6 +20,7 @@ from typing import Callable, Iterator
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 try:
     from tqdm import tqdm
@@ -31,13 +32,13 @@ _QUERULUS = _INTEGRATION.parent
 if str(_QUERULUS) not in sys.path:
     sys.path.insert(0, str(_QUERULUS))
 
-from integration.service.mldataworker_shim import install_mldataworker_shim
+from integration.src.shim import install_mldataworker_shim
 
 install_mldataworker_shim()
 
 import integration.config as config  # noqa: E402
-from integration.scoring.second import score_second  # noqa: E402
-from integration.service.main import main_predict  # noqa: E402
+from integration.main import main_predict  # noqa: E402
+from integration.src.predictions import score_second  # noqa: E402
 from integration.tests.artifacts import (  # noqa: E402
     ART,
     batch_size,
@@ -47,7 +48,7 @@ from integration.tests.artifacts import (  # noqa: E402
 from loguru import logger as _loguru_logger  # noqa: E402
 
 
-#new
+# new
 def _quiet_service_logs() -> None:
     """Parity гоняет десятки тысяч строк — INFO/DEBUG и warning-спам рвут tqdm."""
     _loguru_logger.remove()
@@ -60,7 +61,7 @@ def _quiet_service_logs() -> None:
     warnings.filterwarnings("ignore", message=r".*set_under.*")
 
 
-#new
+# new
 def _print_loaded_artifacts(lane: str) -> None:
     """В stdout теста: какие pickle / parquet / cal подхватил ART."""
     meta_path = ART.results_dir / "metadata.json"
@@ -97,8 +98,6 @@ def _print_loaded_artifacts(lane: str) -> None:
         if not path.is_file():
             continue
         try:
-            import pyarrow.parquet as pq
-
             pf = pq.ParquetFile(path)
             n_rows = pf.metadata.num_rows if pf.metadata is not None else None
             cols = list(pf.schema_arrow.names)
@@ -116,23 +115,21 @@ def _print_loaded_artifacts(lane: str) -> None:
     print("\n".join(lines), flush=True)
 
 
-#new
+# new
 def _patch_models_dir() -> None:
     config.prod_models_path = str(ART.results_dir.resolve())
     config.base_path = _INTEGRATION
-    config.shadow_models_subdir = ""
     config.second_cf_calibrator_filename = ART.cf_calibrator.name
     config.second_rg_calibrator_filename = ART.rg_calibrator.name
     if "config" in sys.modules and sys.modules["config"] is not config:
         top = sys.modules["config"]
         top.prod_models_path = config.prod_models_path
         top.base_path = config.base_path
-        top.shadow_models_subdir = ""
         top.second_cf_calibrator_filename = ART.cf_calibrator.name
         top.second_rg_calibrator_filename = ART.rg_calibrator.name
 
 
-#new
+# new
 def _cell_is_na(v: object) -> bool:
     """pd.isna на array/list даёт ValueError — только скаляры."""
     if v is None:
@@ -147,7 +144,7 @@ def _cell_is_na(v: object) -> bool:
         return False
 
 
-#new
+# new
 def _row_to_request(row: pd.Series) -> list[dict]:
     d = row.to_dict()
     for k in (ART.preds_cf_col, ART.preds_rg_col, ART.preds_label_col, ART.split_col):
@@ -171,7 +168,7 @@ def _row_to_request(row: pd.Series) -> list[dict]:
     return [clean]
 
 
-#new
+# new
 def _frame_to_request(df: pd.DataFrame) -> list[dict]:
     """Multi-row vector для сервиса (без эталонных preds / split)."""
     drop = [
@@ -188,14 +185,14 @@ def _frame_to_request(df: pd.DataFrame) -> list[dict]:
     return json.loads(part.to_json(orient="records", force_ascii=False, date_format="iso"))
 
 
-#new
+# new
 def _lane_threshold(title: str) -> float:
     if title == "second":
         return float(config.default_second_threshold)
     return float(config.default_main_threshold)
 
 
-#new
+# new
 def _expected_labels(chunk: pd.DataFrame, title: str) -> np.ndarray:
     """preds_label из parquet или (preds_cf >= τ_lane)."""
     if ART.preds_label_col in chunk.columns:
@@ -207,7 +204,7 @@ def _expected_labels(chunk: pd.DataFrame, title: str) -> np.ndarray:
     )
 
 
-#new
+# new
 def _parity_frame(df: pd.DataFrame) -> pd.DataFrame:
     """train/test по split + лимит INTEGRATION_TEST_MAX_ROWS."""
     limit = max_rows_limit()
@@ -226,14 +223,14 @@ def _parity_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df if limit is None else df.head(limit)
 
 
-#new
+# new
 def _iter_batches(df: pd.DataFrame, size: int) -> Iterator[pd.DataFrame]:
     n = len(df)
     for start in range(0, n, size):
         yield df.iloc[start : start + size]
 
 
-#new
+# new
 @dataclass(frozen=True)
 class _Mismatch:
     kind: str  # CF | LABEL | RG
@@ -246,7 +243,7 @@ class _Mismatch:
         return abs(self.got - self.expected)
 
 
-#new
+# new
 def _format_top(kind: str, mismatches: list[_Mismatch], top_n: int) -> list[str]:
     subset = [m for m in mismatches if m.kind == kind]
     if not subset:
@@ -260,7 +257,7 @@ def _format_top(kind: str, mismatches: list[_Mismatch], top_n: int) -> list[str]
     return lines
 
 
-#new
+# new
 def _report_parity(
     title: str,
     n: int,
@@ -289,7 +286,7 @@ def _report_parity(
     print("\n".join(lines), flush=True)
 
 
-#new
+# new
 def _collect_batch_mismatches(
     *,
     lane: str,
@@ -343,7 +340,7 @@ def _collect_batch_mismatches(
     )
 
 
-#new
+# new
 def _run_parity_batches(
     *,
     title: str,
@@ -424,7 +421,7 @@ def _run_parity_batches(
     return n, full_ok, cf_ok, label_ok, rg_ok, mismatches
 
 
-#new
+# new
 class TestParityMain(unittest.TestCase):
     """main_predict vs df_for_service_main — multi-row батчи + сводка."""
 
@@ -461,7 +458,7 @@ class TestParityMain(unittest.TestCase):
         _report_parity("main", n, full_ok, cf_ok, label_ok, rg_ok, mismatches)
 
 
-#new
+# new
 class TestParitySecond(unittest.TestCase):
     """score_second vs df_for_service_second — multi-row батчи + сводка."""
 
@@ -500,7 +497,7 @@ class TestParitySecond(unittest.TestCase):
         _report_parity("second", n, full_ok, cf_ok, label_ok, rg_ok, mismatches)
 
 
-#new
+# new
 class TestDualPredict(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

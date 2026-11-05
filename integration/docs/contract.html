@@ -188,7 +188,7 @@
       <h1>Контракт HTTP API</h1>
       <p>
         Запрос и полный ответ <code>POST /api/predict</code> (dual-track):
-        <code>main_response</code> (legacy) + <code>second_response</code> (2.0.0).
+        <code>main_response</code> + <code>second_response</code>.
         Блок <code>oisuu_responce</code> убран; <code>version</code> и <code>CPMComment</code> —
         внутри каждого трека.
         <a href="architecture.html">архитектура</a> ·
@@ -236,7 +236,7 @@
           <td><code>main_model</code></td>
           <td>string</td>
           <td>да</td>
-          <td>stem файла <code>&lt;stem&gt;.pickle</code> legacy-ансамбля (clf+rg)</td>
+          <td>stem файла <code>&lt;stem&gt;.pickle</code> ансамбля main_ (clf+rg)</td>
         </tr>
         <tr>
           <td><code>main_request</code></td>
@@ -275,22 +275,28 @@
           <code>VICTIM_VEHICLE_COUNTRY</code>, <code>APPLY_DELAY</code>
         </p>
         <p class="note"><code>THRESHOLD</code> во входе (опционально) → порог CF; иначе default <code>0.6</code>.
-          <code>IS_LAWYER</code> влияет на маску итога.</p>
+          <code>IS_LAWYER</code> влияет на маску итога.
+          После UPPER remap <code>APPLICANT_FORM</code>:
+          «скрытый юрист» → «юрист с потерпевшим»,
+          «представитель (автоюрист)» → «по доверенности»,
+          «представитель (не автоюрист)» → «выгодоприобретатель»
+          (общий словарь с second_).</p>
       </div>
       <div class="card second-lane">
         <h3>second_ — отличия</h3>
         <ul class="note" style="margin:0;padding-left:1.1rem">
           <li>Список фич берётся из <code>model_config</code> pickle 2.0.0</li>
-          <li>В запросе <strong>нет</strong> готовых FE_* — их строит сервис (CPI REAL_2022, SHARE_WORK tier, …)</li>
+          <li>В запросе <strong>нет</strong> готовых FE_* — сервис отбрасывает входные FE_* и считает сам (CPI REAL_2022, SHARE_WORK tier, …)</li>
           <li>CF/RG калибраторы; τ из <code>THRESHOLD</code> в векторе, иначе config fallback</li>
           <li>Clip — из <code>feature.clip</code> в pickle, не отдельный dq_bounds</li>
+          <li>Тот же remap <code>APPLICANT_FORM</code>, что у main_</li>
         </ul>
       </div>
     </div>
 
     <h2 id="response">Ответ <span class="tag">200 OK</span></h2>
     <div class="prewrap">{
-  <span class="k">"main_response"</span>:  { … },   <span class="c">// legacy · version из MAIN_VERSION</span>
+  <span class="k">"main_response"</span>:  { … },   <span class="c">// version из MAIN_VERSION</span>
   <span class="k">"second_response"</span>: { … }    <span class="c">// 2.0.0 или {}</span>
 }</div>
 
@@ -349,7 +355,7 @@
 Content-Type: application/json
 
 {
-  <span class="k">"main_model"</span>: <span class="s">"querulus_ansamble_legacy"</span>,
+  <span class="k">"main_model"</span>: <span class="s">"querulus_ansamble_2026_04_18_v1"</span>,
   <span class="k">"main_request"</span>: [
     {
       <span class="k">"EVENT_DATE"</span>: <span class="s">"2024-06-01T10:00:00"</span>,
@@ -387,7 +393,7 @@ Content-Type: application/json
       <span class="k">"GUILTY_CAPACITY_ENGINE"</span>: <span class="n">100</span>
     }
   ],
-  <span class="k">"second_model"</span>: <span class="s">"UU_querulus_2026_10_09_16_51_20"</span>,
+  <span class="k">"second_model"</span>: <span class="s">"UU_querulus_2026_10_27_20_12_44"</span>,
   <span class="k">"second_request"</span>: [
     {
       <span class="k">"EVENT_DATE"</span>: <span class="s">"2024-06-01T10:00:00"</span>,
@@ -429,7 +435,7 @@ Content-Type: application/json
     <h3>Response 200</h3>
     <div class="prewrap">{
   <span class="k">"main_response"</span>: {
-    <span class="k">"usage_model"</span>: <span class="s">"querulus_ansamble_legacy"</span>,
+    <span class="k">"usage_model"</span>: <span class="s">"querulus_ansamble_2026_04_18_v1"</span>,
     <span class="k">"version"</span>: <span class="s">"1.4.0"</span>,
     <span class="k">"CPMComment"</span>: <span class="s">"shap_clf: FILIAL=0.12, APPLICANT_AGE=0.08 | shap_reg: AMOUNT_REPAIR=0.31"</span>,
     <span class="k">"result"</span>: {
@@ -461,7 +467,7 @@ Content-Type: application/json
     }
   },
   <span class="k">"second_response"</span>: {
-    <span class="k">"usage_model"</span>: <span class="s">"UU_querulus_2026_10_09_16_51_20"</span>,
+    <span class="k">"usage_model"</span>: <span class="s">"UU_querulus_2026_10_27_20_12_44"</span>,
     <span class="k">"version"</span>: <span class="s">"2.0.0"</span>,
     <span class="k">"CPMComment"</span>: <span class="s">"shap_clf: … | shap_reg: …"</span>,
     <span class="k">"result"</span>: {
@@ -488,10 +494,10 @@ Content-Type: application/json
   }
 }</div>
 
-    <h2 id="example-main-only">Пример только main_ <span class="tag">без shadow</span></h2>
+    <h2 id="example-main-only">Пример только main_ <span class="tag">без second_</span></h2>
     <h3>Request</h3>
     <div class="prewrap">{
-  <span class="k">"main_model"</span>: <span class="s">"querulus_ansamble_legacy"</span>,
+  <span class="k">"main_model"</span>: <span class="s">"querulus_ansamble_2026_04_18_v1"</span>,
   <span class="k">"main_request"</span>: [ { <span class="c">/* тот же вектор */</span> } ],
   <span class="k">"second_model"</span>: <span class="n">null</span>,
   <span class="k">"second_request"</span>: <span class="n">null</span>
@@ -525,7 +531,7 @@ Content-Type: application/json
 }</div>
 
     <footer>
-      examples/querulus/integration/contract.html · API 1.4.0 · dual-track, cutover не выполнен
+      examples/querulus/integration/docs/contract.html · API 1.4.0 · dual-track
     </footer>
   </div>
 </body>

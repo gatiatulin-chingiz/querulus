@@ -318,8 +318,10 @@
       <h1>Архитектура HTTP-сервиса скоринга</h1>
       <p>
         Один запрос <code style="font-family:var(--mono);color:var(--accent)">POST /api/predict</code>
-        гоняет две модели параллельно: боевой legacy в <strong>main_</strong>
-        и новый ансамбль 2.0.0 в <strong>second_</strong>. Ответ ОИСУУ всегда берётся из main_.
+        гоняет две модели параллельно: трек <strong>main_</strong>
+        и новый ансамбль 2.0.0 в <strong>second_</strong>.
+        В ответе два блока (<code>main_response</code> / <code>second_response</code>);
+        клиент ОИСУУ обычно читает main_.
         Карта вызовов: <a href="functions.html" style="color:var(--main)">functions.html</a>.
         Контракт: <a href="contract.html" style="color:var(--main)">contract.html</a>.
         Тесты: <a href="tests.html" style="color:var(--main)">tests.html</a>.
@@ -343,14 +345,14 @@
 
         <rect x="210" y="70" width="160" height="72" rx="6" fill="#222b36" stroke="#3a4654"/>
         <text x="290" y="98" text-anchor="middle" fill="#e8eef4" font-family="IBM Plex Sans,sans-serif" font-size="13" font-weight="600">FastAPI</text>
-        <text x="290" y="116" text-anchor="middle" fill="#9aabbc" font-family="IBM Plex Mono,monospace" font-size="10">service/main.py</text>
+        <text x="290" y="116" text-anchor="middle" fill="#9aabbc" font-family="IBM Plex Mono,monospace" font-size="10">main.py</text>
         <text x="290" y="130" text-anchor="middle" fill="#3db88a" font-family="IBM Plex Mono,monospace" font-size="9">/api/predict</text>
 
         <line x1="370" y1="90" x2="430" y2="50" stroke="#4a9fd8" stroke-width="1.5" marker-end="url(#arr)"/>
         <line x1="370" y1="122" x2="430" y2="170" stroke="#e0a04a" stroke-width="1.5" marker-end="url(#arr)"/>
 
         <rect x="430" y="18" width="280" height="70" rx="6" fill="#1a2834" stroke="#4a9fd8"/>
-        <text x="445" y="40" fill="#8ec5eb" font-family="IBM Plex Sans,sans-serif" font-size="12" font-weight="600">main_ · legacy</text>
+        <text x="445" y="40" fill="#8ec5eb" font-family="IBM Plex Sans,sans-serif" font-size="12" font-weight="600">main_</text>
         <text x="445" y="58" fill="#9aabbc" font-family="IBM Plex Mono,monospace" font-size="10">preprocess → CF+RG → IS_LAWYER</text>
         <text x="445" y="74" fill="#6a8aa0" font-family="IBM Plex Mono,monospace" font-size="9">→ main_response (version + CPMComment)</text>
 
@@ -383,41 +385,41 @@
 
       <div class="dual">
         <div class="lane main">
-          <div class="lane-head"><span class="dot"></span> main_ — legacy ансамбль</div>
+          <div class="lane-head"><span class="dot"></span> main_ — ансамбль clf+rg</div>
           <ol class="steps">
             <li>
               <span class="n">01</span>
               <div>
                 <strong>Загрузка pickle</strong>
-                <span class="hint">results/{main_model}.pickle → [CF, RG]</span>
+                <span class="hint">src/models → results/{main_model}.pickle → [CF, RG]</span>
               </div>
             </li>
             <li>
               <span class="n">02</span>
               <div>
                 <strong>Предобработка</strong>
-                <span class="hint">"" → NaN, UPPER, EVENT_YEAR / APPLY_DELAY, валидация дат</span>
+                <span class="hint">src/preprocessing/main + common · UPPER, даты, APPLICANT_FORM</span>
               </div>
             </li>
             <li>
               <span class="n">03</span>
               <div>
                 <strong>prepare_dataset + predict</strong>
-                <span class="hint">фиксированные списки CLASSIFICATION / REGRESSION_FEATURES</span>
+                <span class="hint">src/predictions.score_main · CLASSIFICATION / REGRESSION_FEATURES</span>
               </div>
             </li>
             <li>
               <span class="n">04</span>
               <div>
                 <strong>Порог + маска IS_LAWYER</strong>
-                <span class="hint">THRESHOLD из вектора или 0.6; класс 1 или юрист → RG, иначе 0</span>
+                <span class="hint">src/is_lawyer · THRESHOLD из вектора или config; класс 1 или юрист → RG</span>
               </div>
             </li>
             <li>
               <span class="n">05</span>
               <div>
                 <strong>main_response</strong>
-                <span class="hint">version + CPMComment (SHAP) + result + df</span>
+                <span class="hint">src/explain (SHAP) · version + CPMComment + result + df</span>
               </div>
             </li>
           </ol>
@@ -430,35 +432,35 @@
               <span class="n">01</span>
               <div>
                 <strong>Загрузка артефактов</strong>
-                <span class="hint">UU_querulus_….pickle + metadata + cf/rg_calibrator</span>
+                <span class="hint">src/models · UU_….pickle + cf/rg_calibrator (рядом в results/)</span>
               </div>
             </li>
             <li>
               <span class="n">02</span>
               <div>
                 <strong>UPPER + даты + формы</strong>
-                <span class="hint">scoring/second.py · preprocess_second_vector</span>
+                <span class="hint">src/preprocessing/second.preprocess_second_vector</span>
               </div>
             </li>
             <li>
               <span class="n">03</span>
               <div>
                 <strong>FE_* в сервисе</strong>
-                <span class="hint">CPI REAL_2022, SHARE_WORK tier, ratio/diff/days/power</span>
+                <span class="hint">preprocessing/second + cpi · REAL_2022, tier, days, power</span>
               </div>
             </li>
             <li>
               <span class="n">04</span>
               <div>
                 <strong>predict → калибраторы</strong>
-                <span class="hint">CF proba cal, RG severity cal; clip из feature.clip в pickle</span>
+                <span class="hint">src/predictions + src/calibration · clip из feature.clip в pickle</span>
               </div>
             </li>
             <li>
               <span class="n">05</span>
               <div>
                 <strong>τ из THRESHOLD + IS_LAWYER</strong>
-                <span class="hint">THRESHOLD в векторе, иначе config default; та же маска, что у main_</span>
+                <span class="hint">src/is_lawyer · THRESHOLD или config default</span>
               </div>
             </li>
           </ol>
@@ -471,7 +473,7 @@
         <div class="label">Выход</div>
         <div class="title">Два блока JSON</div>
         <div class="meta">
-          <code>main_response</code> — legacy (<code>version</code>, <code>CPMComment</code>, result, df);
+          <code>main_response</code> — (<code>version</code>, <code>CPMComment</code>, result, df);
           <code>second_response</code> — 2.0.0 или <code>{}</code>, если second_* не переданы.
         </div>
       </div>
@@ -480,61 +482,66 @@
     <h2>Пакеты кода <span class="tag">integration/</span></h2>
     <div class="pkgs">
       <div class="pkg">
-        <h3>service/</h3>
+        <h3>src/preprocessing/</h3>
         <ul>
-          <li><b>main.py</b> — FastAPI, health/predict, скоринг main_</li>
-          <li><b>masking.py</b> — общая маска IS_LAWYER</li>
-          <li><b>shap_comment.py</b> — SHAP → CPMComment</li>
-          <li><b>mldataworker_shim.py</b> — alias на outboxml локально</li>
+          <li><b>common.py</b> — UPPER, даты, APPLICANT_FORM, prepare_matrix, τ, ModelGroupLoader</li>
+          <li><b>main/</b> — fail-fast валидации вектора</li>
+          <li><b>second/</b> — FE_* из сырого second_request</li>
+          <li><b>cpi/</b> — дефляция REAL_2022 + cpi_levels.json</li>
         </ul>
       </div>
       <div class="pkg">
-        <h3>features/</h3>
+        <h3>src/ (этапы)</h3>
         <ul>
-          <li><b>cpi.py</b> — дефляция в рубли 2022</li>
-          <li><b>derived.py</b> — FE_* из сырого second_request</li>
-        </ul>
-      </div>
-      <div class="pkg">
-        <h3>scoring/</h3>
-        <ul>
-          <li><b>second.py</b> — полный пайплайн second_</li>
-          <li><b>profiles.py</b> — пути к pickle / калибраторам</li>
+          <li><b>predictions.py</b> — score_main + score_second</li>
+          <li><b>models.py</b> — пути pickle / калибраторов</li>
+          <li><b>calibration.py</b> — CF/RG калибраторы second_</li>
+          <li><b>is_lawyer.py</b> — маска IS_LAWYER</li>
+          <li><b>explain.py</b> — SHAP → CPMComment</li>
+          <li><b>shim.py</b> — mldataworker → outboxml локально</li>
         </ul>
       </div>
     </div>
 
     <p style="color:var(--muted);font-size:0.88rem;margin:1rem 0 0;">
-      Корень: <code style="font-family:var(--mono);font-size:0.85em">main.py</code> (Docker entry),
-      <code style="font-family:var(--mono);font-size:0.85em">config.py</code>,
-      Dockerfile / compose / gitlab-ci / requirements.
-      Точка локального запуска: <code style="font-family:var(--mono);font-size:0.85em">python -m integration</code>.
+      Единственный entry: <code style="font-family:var(--mono);font-size:0.85em">main.py</code>
+      (Docker <code>ENTRYPOINT</code> / <code>python main.py</code>).
+      Рядом: <code style="font-family:var(--mono);font-size:0.85em">config.py</code>,
+      Dockerfile / compose / gitlab-ci / requirements, <code style="font-family:var(--mono);font-size:0.85em">docs/</code>.
     </p>
 
     <h2>Артефакты на диске <span class="tag">results/</span></h2>
+    <p style="color:var(--muted);font-size:0.88rem;margin:0 0 1rem;">
+      Каталог моделей (<code style="font-family:var(--mono);font-size:0.85em">config.prod_models_path</code>).
+      Docker: <code style="font-family:var(--mono);font-size:0.85em">COPY results/</code> рядом с
+      <code style="font-family:var(--mono);font-size:0.85em">main.py</code> и <code style="font-family:var(--mono);font-size:0.85em">src/</code>.
+      Пути в <code style="font-family:var(--mono);font-size:0.85em">metadata.json</code> — относительные.
+    </p>
     <div class="artifacts">
       <div class="art">
-        <h3>main_</h3>
+        <h3>main_ (корень results/)</h3>
         <ul>
-          <li><code>{legacy_stem}.pickle</code> — [классификация, регрессия]</li>
+          <li><code>{main_stem}.pickle</code> — [классификация, регрессия]</li>
         </ul>
       </div>
       <div class="art">
-        <h3>second_</h3>
+        <h3>second_ / synth</h3>
         <ul>
-          <li><code>UU_querulus_2026_10_09_16_51_20.pickle</code></li>
-          <li><code>cf_calibrator.pickle</code>, <code>rg_calibrator.pickle</code></li>
-          <li><code>metadata.json</code> — аудит экспорта (сервис не читает; τ в векторе)</li>
+          <li><code>test_synth/</code> — pickle 2.0.0, cf/rg калибраторы, df_for_service_*</li>
+          <li><code>metadata.json</code> — аудит (сервис τ не читает; только THRESHOLD / config)</li>
+          <li><code>model_features.json</code> — справочник фич export</li>
         </ul>
       </div>
     </div>
 
     <div class="note">
-      <strong>Важно.</strong> В <code>second_request</code> нет готовых FE_* — их считает сервис.
-      Отдельный <code>dq_bounds.json</code> не используется: клип числовых фич уже в
-      <code>feature.clip</code> внутри model_config pickle (<code>prepare_dataset</code>).
-      Порог second_ переотбирается в <code>example_final</code> после калибровки CF/RG.
-      CPI: <code>features/cpi_levels.json</code> (уезжает в образ вместе с <code>COPY features/</code>).
+      <strong>Важно.</strong> В <code>second_request</code> нет готовых FE_* — их считает сервис
+      (входные FE_* / <code>VICTIM_OBJECT_AGE_MONTHS</code> отбрасываются).
+      <code>APPLICANT_FORM</code>: после UPPER три старых ярлыка
+      («скрытый юрист» / «представитель (автоюрист)» / «…не автоюрист»)
+      переименовываются одинаково на main_ и second_.
+      Клип числовых фич — в <code>feature.clip</code> pickle (<code>prepare_dataset</code>).
+      CPI: <code>src/preprocessing/cpi/cpi_levels.json</code> (уезжает в образ вместе с <code>COPY src/</code>).
     </div>
 
     <h2>Тесты <span class="tag">tests/</span></h2>
@@ -561,7 +568,7 @@
     </div>
 
     <footer>
-      examples/querulus/integration/architecture.html · dual-track, cutover не выполнен
+      examples/querulus/integration/docs/architecture.html · dual-track
     </footer>
   </div>
 </body>

@@ -30,7 +30,7 @@ _SRC = PROJECT_ROOT / "src"
 if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from integration.service.mldataworker_shim import install_mldataworker_shim  # noqa: E402
+from integration.src.shim import install_mldataworker_shim  # noqa: E402
 
 install_mldataworker_shim()
 
@@ -39,21 +39,23 @@ import pandas as pd  # noqa: E402
 from catboost import CatBoostClassifier, CatBoostRegressor  # noqa: E402
 from sklearn.isotonic import IsotonicRegression  # noqa: E402
 
-from integration.features.derived import add_second_model_features  # noqa: E402
-from integration.scoring.second import (  # noqa: E402
+from integration.src.calibration import (  # noqa: E402
     apply_cf_calibrator,
     apply_rg_calibrator,
-    enrich_dates_and_forms,
-    prepare_vector_upper,
 )
-from integration.service.main import (  # noqa: E402
+from integration.src.is_lawyer import masked_predictions  # noqa: E402
+from integration.src.predictions import (  # noqa: E402
     CLASSIFICATION_FEATURES,
     REGRESSION_FEATURES,
     _classification_proba_and_labels,
-    _prepare_matrix,
-    _require_columns,
 )
-from integration.service.masking import masked_predictions  # noqa: E402
+from integration.src.preprocessing.common import (  # noqa: E402
+    coerce_and_enrich,
+    prepare_matrix,
+    prepare_vector_upper,
+    require_columns,
+)
+from integration.src.preprocessing.second import add_second_model_features  # noqa: E402
 from querulus.synthetic_dataset import build_synthetic_final_dataset  # noqa: E402
 
 OUT_DIR = INTEGRATION / "results" / "test_synth"
@@ -101,7 +103,7 @@ SECOND_RG_FEATURES = [
 ]
 
 
-#new
+# new
 def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     if "EVENT_DATE" not in out.columns:
@@ -157,7 +159,7 @@ def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-#new
+# new
 def _encode_frame(
     frame: pd.DataFrame, cols: list[str]
 ) -> tuple[pd.DataFrame, list[dict]]:
@@ -203,7 +205,7 @@ def _encode_frame(
     return x, specs
 
 
-#new
+# new
 def _train_ensemble(
     df: pd.DataFrame,
     train_idx: pd.Index,
@@ -265,19 +267,19 @@ def _train_ensemble(
     ]
 
 
-#new
+# new
 def _score_legacy(group: list[dict], df_row: pd.DataFrame, thr: float) -> tuple[float, float]:
-    clf_df = _require_columns(df_row, CLASSIFICATION_FEATURES, "clf")
-    rg_df = _require_columns(df_row, REGRESSION_FEATURES, "rg")
-    model_c, t_c = _prepare_matrix(group[0], clf_df)
+    clf_df = require_columns(df_row, CLASSIFICATION_FEATURES, "clf")
+    rg_df = require_columns(df_row, REGRESSION_FEATURES, "rg")
+    model_c, t_c = prepare_matrix(group[0], clf_df)
     proba, labels = _classification_proba_and_labels(model_c, t_c, thr)
-    model_r, t_r = _prepare_matrix(group[1], rg_df)
+    model_r, t_r = prepare_matrix(group[1], rg_df)
     raw_reg = [float(x) for x in np.asarray(model_r.predict(t_r)).ravel()]
     masked = masked_predictions(labels, raw_reg, df_row)
     return float(proba[0]), float(masked[0])
 
 
-#new
+# new
 def _score_second_ref(
     group: list[dict],
     df_fe: pd.DataFrame,
@@ -285,25 +287,25 @@ def _score_second_ref(
     cf_cal,
     rg_cal,
 ) -> tuple[float, float]:
-    from integration.scoring.profiles import feature_names_from_model_result
-    from integration.scoring.second import _raw_classification_scores
+    from integration.src.models import feature_names_from_model_result
+    from integration.src.predictions import _raw_classification_scores
 
     clf_feats = feature_names_from_model_result(group[0])
     rg_feats = feature_names_from_model_result(group[1])
     clf_df = df_fe.loc[:, clf_feats]
     rg_df = df_fe.loc[:, rg_feats]
-    model_c, t_c = _prepare_matrix(group[0], clf_df)
+    model_c, t_c = prepare_matrix(group[0], clf_df)
     raw_p = _raw_classification_scores(model_c, t_c)
-    proba = apply_cf_calibrator(cf_cal, raw_p, t_c)
+    proba = apply_cf_calibrator(cf_cal, raw_p)
     labels = [1.0 if s >= thr else 0.0 for s in proba]
-    model_r, t_r = _prepare_matrix(group[1], rg_df)
+    model_r, t_r = prepare_matrix(group[1], rg_df)
     raw_reg = [float(x) for x in np.asarray(model_r.predict(t_r)).ravel()]
     cal_reg = apply_rg_calibrator(rg_cal, raw_reg)
     masked = masked_predictions(labels, cal_reg, df_fe)
     return float(proba[0]), float(masked[0])
 
 
-#new
+# new
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     print("=== synthetic df ===")
@@ -319,9 +321,7 @@ def main() -> None:
     event_dt = pd.to_datetime(df["EVENT_DATE"], errors="coerce")
     loss_dt = pd.to_datetime(df["PAYMENT_ORDER_DATE_TIME"], errors="coerce")
     df["EVENT_YEAR"] = event_dt.dt.year
-    df["APPLY_DELAY"] = (
-        loss_dt.dt.normalize() - event_dt.dt.normalize()
-    ).dt.days.fillna(-1).astype(int)
+    df["APPLY_DELAY"] = (loss_dt - event_dt).dt.days
 
     legacy = _train_ensemble(
         df,
@@ -340,7 +340,7 @@ def main() -> None:
         )
     )
     df_fe = prepare_vector_upper(records)
-    df_fe = enrich_dates_and_forms(df_fe)
+    df_fe = coerce_and_enrich(df_fe)
     df_fe = add_second_model_features(df_fe)
     df_fe["TARGET_FREQ"] = df["TARGET_FREQ"].to_numpy()
     df_fe["TARGET_SEV"] = df["TARGET_SEV"].to_numpy()
@@ -365,15 +365,15 @@ def main() -> None:
     for i in train_idx:
         row = df_fe.loc[[i]]
         clf_df = row.loc[:, SECOND_CF_FEATURES]
-        model_c, t_c = _prepare_matrix(second[0], clf_df)
-        from integration.scoring.second import _raw_classification_scores
+        model_c, t_c = prepare_matrix(second[0], clf_df)
+        from integration.src.predictions import _raw_classification_scores
 
         s = _raw_classification_scores(model_c, t_c)[0]
         raw_cf_train.append(s)
         y_cf_train.append(int(row["TARGET_FREQ"].iloc[0]))
         if float(row["TARGET_SEV"].iloc[0]) > 0:
             rg_df = row.loc[:, SECOND_RG_FEATURES]
-            model_r, t_r = _prepare_matrix(second[1], rg_df)
+            model_r, t_r = prepare_matrix(second[1], rg_df)
             r = float(np.asarray(model_r.predict(t_r)).ravel()[0])
             raw_rg_train.append(r)
             y_rg_train.append(float(row["TARGET_SEV"].iloc[0]))
@@ -387,8 +387,8 @@ def main() -> None:
     with open(OUT_DIR / "rg_calibrator.pickle", "wb") as f:
         pickle.dump(rg_cal, f)
 
-    # Полная схема как у export_prod_service_artifacts (в т.ч. calibration.cf/rg).
-    meta = {
+    # Пути относительные (к каталогу metadata), без абсолютных machine paths.
+    meta_local = {
         "model_name": "querulus",
         "model_version": "2.0.0",
         "best_threshold": THRESHOLD,
@@ -396,30 +396,44 @@ def main() -> None:
         "threshold_scale": "calibrated",
         "threshold_source": "synthetic_test",
         "calibration": {
-            "cf": str((OUT_DIR / "cf_calibrator.pickle").resolve()),
-            "rg": str((OUT_DIR / "rg_calibrator.pickle").resolve()),
+            "cf": "cf_calibrator.pickle",
+            "rg": "rg_calibrator.pickle",
         },
         "artifacts": {
-            "ensemble": str((OUT_DIR / f"{SECOND_STEM}.pickle").resolve()),
-            "cf_calibrator": str((OUT_DIR / "cf_calibrator.pickle").resolve()),
-            "rg_calibrator": str((OUT_DIR / "rg_calibrator.pickle").resolve()),
-            "df_for_service": str(
-                (OUT_DIR / "df_for_service_second.parquet").resolve()
-            ),
+            "ensemble": f"{SECOND_STEM}.pickle",
+            "cf_calibrator": "cf_calibrator.pickle",
+            "rg_calibrator": "rg_calibrator.pickle",
+            "df_for_service": "df_for_service_second.parquet",
         },
         "preds_cf_col": "preds_cf",
         "preds_rg_col": "preds_rg",
         "note": (
             "preds_cf / preds_rg в df_for_service_* — после калибраторов "
-            "(isotonic); THRESHOLD записан в каждую строку."
+            "(isotonic); THRESHOLD записан в каждую строку. "
+            "Пути относительны к каталогу этого metadata.json."
         ),
     }
-    meta_text = json.dumps(meta, ensure_ascii=False, indent=2)
+    meta_text = json.dumps(meta_local, ensure_ascii=False, indent=2)
     (OUT_DIR / "metadata.json").write_text(meta_text, encoding="utf-8")
-    # Локальный results/ часто отстаёт от контура — обновляем schema meta и тут.
+    # Корень results/: те же ключи, пути относительно results/ → test_synth/…
+    meta_root = {
+        **meta_local,
+        "calibration": {
+            "cf": "test_synth/cf_calibrator.pickle",
+            "rg": "test_synth/rg_calibrator.pickle",
+        },
+        "artifacts": {
+            "ensemble": f"test_synth/{SECOND_STEM}.pickle",
+            "cf_calibrator": "test_synth/cf_calibrator.pickle",
+            "rg_calibrator": "test_synth/rg_calibrator.pickle",
+            "df_for_service": "test_synth/df_for_service_second.parquet",
+        },
+    }
     results_meta = INTEGRATION / "results" / "metadata.json"
     results_meta.parent.mkdir(parents=True, exist_ok=True)
-    results_meta.write_text(meta_text, encoding="utf-8")
+    results_meta.write_text(
+        json.dumps(meta_root, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     print("metadata ->", OUT_DIR / "metadata.json")
     print("metadata ->", results_meta)
 

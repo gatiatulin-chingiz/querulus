@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import pickle
 import sys
 from pathlib import Path
 from typing import Any
@@ -31,36 +30,35 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from integration.service.mldataworker_shim import install_mldataworker_shim  # noqa: E402
+from integration.src.shim import install_mldataworker_shim  # noqa: E402
 
 install_mldataworker_shim()
 
 import integration.config as config  # noqa: E402
-from integration.scoring.second import (  # noqa: E402
-    _align_dtypes_for_catboost,
-    _cf_predict_column_order,
-    _is_isotonic_1d,
-    _prepare_matrix,
+from integration.src.calibration import apply_cf_calibrator  # noqa: E402
+from integration.src.models import (  # noqa: E402
+    ArtifactCache,
+    calibrator_paths,
+    feature_names_from_model_result,
+    model_pickle_path,
+)
+from integration.src.predictions import (  # noqa: E402
     _raw_classification_scores,
-    apply_cf_calibrator,
-    enrich_dates_and_forms,
-    prepare_vector_upper,
-    preprocess_second_vector,
     score_second,
 )
-from integration.scoring.profiles import (  # noqa: E402
-    feature_names_from_model_result,
-    load_optional_pickle,
-    second_cf_calibrator_path,
-    second_pickle_path,
+from integration.src.preprocessing.common import (  # noqa: E402
+    coerce_and_enrich,
+    prepare_matrix,
+    prepare_vector_upper,
 )
+from integration.src.preprocessing.second import preprocess_second_vector  # noqa: E402
 from integration.tests.artifacts import load_artifacts  # noqa: E402
 
 
 _DROP_META = ("preds_cf", "preds_rg", "preds_label", "split")
 
 
-#new
+# new
 def _frame_to_request(df: pd.DataFrame) -> list[dict]:
     drop = [c for c in _DROP_META if c in df.columns]
     part = df.drop(columns=drop, errors="ignore")
@@ -69,7 +67,7 @@ def _frame_to_request(df: pd.DataFrame) -> list[dict]:
     )
 
 
-#new
+# new
 def _resolve_col(df: pd.DataFrame, name: str) -> str | None:
     """Имя колонки с учётом регистра."""
     if name in df.columns:
@@ -78,40 +76,35 @@ def _resolve_col(df: pd.DataFrame, name: str) -> str | None:
     return lowered.get(name.casefold())
 
 
-#new
+# new
 def _preprocess_keep_parquet_fe(features_values: list[dict]) -> pd.DataFrame:
     """UPPER + dates/forms, FE_* из parquet не трогаем (эталонный путь обучения)."""
-    df = prepare_vector_upper(features_values)
-    df = enrich_dates_and_forms(df)
-    return df
+    return coerce_and_enrich(prepare_vector_upper(features_values))
 
 
-#new
-def _load_second_group(stem: str) -> list[dict]:
-    path = second_pickle_path(stem)
-    with open(path, "rb") as f:
-        return pickle.load(f)
+_DIAG_CACHE = ArtifactCache()
 
 
-#new
+# new
 def _raw_and_cal_for_chunk(
     stem: str,
     chunk: pd.DataFrame,
 ) -> tuple[np.ndarray, np.ndarray]:
-    group = _load_second_group(stem)
+    group = _DIAG_CACHE.get(model_pickle_path(stem))
     clf_model = group[0]
     feats = feature_names_from_model_result(clf_model)
     req = _frame_to_request(chunk)
     df_common = preprocess_second_vector(req)
     clf_df = df_common.loc[:, feats]
-    model_c, t_c = _prepare_matrix(clf_model, clf_df)
+    model_c, t_c = prepare_matrix(clf_model, clf_df)
     raw = np.asarray(_raw_classification_scores(model_c, t_c), dtype=float)
-    cf_cal = load_optional_pickle(second_cf_calibrator_path())
-    cal = np.asarray(apply_cf_calibrator(cf_cal, list(raw), t_c), dtype=float)
+    cf_path, _ = calibrator_paths()
+    cf_cal = _DIAG_CACHE.get(cf_path) if cf_path.is_file() else None
+    cal = np.asarray(apply_cf_calibrator(cf_cal, list(raw)), dtype=float)
     return raw, cal
 
 
-#new
+# new
 def _density_table(series: pd.Series, name: str, bins: int = 20) -> pd.DataFrame:
     s = pd.to_numeric(series, errors="coerce").dropna()
     if s.empty:
@@ -121,7 +114,7 @@ def _density_table(series: pd.Series, name: str, bins: int = 20) -> pd.DataFrame
     return pd.DataFrame({"bin": labels, name: counts})
 
 
-#new
+# new
 def _fmt_cell(v: Any) -> str:
     if v is None:
         return "None"
@@ -155,7 +148,7 @@ _FEATURE_SOURCES: dict[str, tuple[str, ...]] = {
 }
 
 
-#new
+# new
 def _values_close(a: Any, b: Any) -> bool:
     try:
         if pd.isna(a) and pd.isna(b):
@@ -173,7 +166,7 @@ def _values_close(a: Any, b: Any) -> bool:
     return str(a) == str(b)
 
 
-#new
+# new
 def _resolve_row(df: pd.DataFrame, idx_arg: int) -> tuple[Any, pd.DataFrame]:
     """Вернуть (index_label, one-row DataFrame) из полного parquet."""
     if idx_arg in df.index:
@@ -186,15 +179,16 @@ def _resolve_row(df: pd.DataFrame, idx_arg: int) -> tuple[Any, pd.DataFrame]:
     )
 
 
-#new
+# new
 def _print_drilldown(stem: str, row: pd.DataFrame, idx_label: Any) -> None:
     """Разбор одной строки: scores / фичи модели / prepared matrix / cal order."""
-    group = _load_second_group(stem)
+    group = _DIAG_CACHE.get(model_pickle_path(stem))
     clf_model = group[0]
     rg_model = group[1]
     feats = feature_names_from_model_result(clf_model)
     rg_feats = feature_names_from_model_result(rg_model)
-    cf_cal = load_optional_pickle(second_cf_calibrator_path())
+    cf_path, _ = calibrator_paths()
+    cf_cal = _DIAG_CACHE.get(cf_path) if cf_path.is_file() else None
 
     parquet_s = row.iloc[0]
     thr = float(parquet_s["THRESHOLD"]) if "THRESHOLD" in row.columns else float("nan")
@@ -213,7 +207,7 @@ def _print_drilldown(stem: str, row: pd.DataFrame, idx_label: Any) -> None:
         use = frame.copy()
         for c in missing:
             use[c] = np.nan
-        return _prepare_matrix(model_result, use.loc[:, names])
+        return prepare_matrix(model_result, use.loc[:, names])
 
     model_c, t_cf_svc = _prepared(clf_model, df_svc, feats)
     _, t_cf_ref = _prepared(clf_model, df_ref, feats)
@@ -221,7 +215,7 @@ def _print_drilldown(stem: str, row: pd.DataFrame, idx_label: Any) -> None:
     _, t_rg_ref = _prepared(rg_model, df_ref, rg_feats)
 
     raw = float(_raw_classification_scores(model_c, t_cf_svc)[0])
-    cal = float(apply_cf_calibrator(cf_cal, [raw], t_cf_svc)[0])
+    cal = float(apply_cf_calibrator(cf_cal, [raw])[0])
     one = score_second(stem, req)
     svc_cf = float(one["result"]["classification_proba"][0])
     svc_label = float(one["result"]["classification_predictions"][0])
@@ -268,24 +262,7 @@ def _print_drilldown(stem: str, row: pd.DataFrame, idx_label: Any) -> None:
     if cf_cal is None:
         print("cf_calibrator: MISSING")
     else:
-        print(f"type: {type(cf_cal).__name__}")
-        print(f"isotonic_1d: {_is_isotonic_1d(cf_cal)}")
-        print(f"has predict_proba: {hasattr(cf_cal, 'predict_proba')}")
-        order = None
-        try:
-            order = _cf_predict_column_order(cf_cal, t_cf_svc)
-        except Exception as exc:  # noqa: BLE001
-            print(f"column order error: {exc}")
-        sklearn_in = getattr(cf_cal, "feature_names_in_", None)
-        if sklearn_in is not None:
-            print(f"feature_names_in_ ({len(sklearn_in)}): {list(sklearn_in)[:20]}...")
-        if order is not None:
-            print(f"cal predict order ({len(order)}): {order}")
-            if list(t_cf_svc.columns) != order:
-                print(
-                    "WARN: prepared matrix column order != cal order "
-                    f"(prepared={list(t_cf_svc.columns)[:8]}...)"
-                )
+        print(f"type: {type(cf_cal).__name__} (isotonic 1D)")
 
     id_names = (
         "LOSS_NUMBER",
@@ -407,24 +384,12 @@ def _print_drilldown(stem: str, row: pd.DataFrame, idx_label: Any) -> None:
     n_cf_diff = _print_prepared_compare("CF", feats, t_cf_ref, t_cf_svc, clf_model)
     n_rg_diff = _print_prepared_compare("RG", rg_feats, t_rg_ref, t_rg_svc, rg_model)
 
-    print("\n--- CF prepared dtypes (service) + cal align ---")
+    print("\n--- CF prepared dtypes (service) ---")
     prep = t_cf_svc.iloc[0]
-    t_aligned = t_cf_svc
-    if cf_cal is not None and hasattr(cf_cal, "predict_proba") and not _is_isotonic_1d(cf_cal):
-        order = _cf_predict_column_order(cf_cal, t_cf_svc)
-        if order is not None:
-            t_aligned = t_cf_svc.loc[:, order]
-        t_aligned = _align_dtypes_for_catboost(t_aligned, cf_cal)
-    aligned = t_aligned.iloc[0]
-    print(
-        f"{'feature':<42} {'prepared':<18} {'dtype_prep':<12} "
-        f"{'aligned':<18} {'dtype_aln':<12}"
-    )
-    for c in t_aligned.columns:
+    print(f"{'feature':<42} {'prepared':<18} {'dtype_prep':<12}")
+    for c in t_cf_svc.columns:
         print(
-            f"{c:<42} {_fmt_cell(prep[c] if c in prep.index else '—'):<18} "
-            f"{str(t_cf_svc[c].dtype if c in t_cf_svc.columns else '—'):<12} "
-            f"{_fmt_cell(aligned[c]):<18} {str(t_aligned[c].dtype):<12}"
+            f"{c:<42} {_fmt_cell(prep[c]):<18} {str(t_cf_svc[c].dtype):<12}"
         )
 
     print("\n--- hypothesis ---")
@@ -447,13 +412,13 @@ def _print_drilldown(stem: str, row: pd.DataFrame, idx_label: Any) -> None:
         )
     else:
         print(
-            "Prepared-фичи совпали, а cal другой — смотри порядок/dtype CCCV "
+            "Prepared-фичи совпали, а cal другой — смотри isotonic CF "
             "или эталон через DSM prepare_dsm_features."
         )
     print(f"{'=' * 72}\n")
 
 
-#new
+# new
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -480,7 +445,6 @@ def main() -> None:
         art = load_artifacts()
 
     config.prod_models_path = str(art.results_dir.resolve())
-    config.shadow_models_subdir = ""
     config.second_cf_calibrator_filename = art.cf_calibrator.name
     config.second_rg_calibrator_filename = art.rg_calibrator.name
 

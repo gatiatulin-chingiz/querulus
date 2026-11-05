@@ -18,7 +18,7 @@ _RESULTS = _INTEGRATION_ROOT / "results"
 
 
 @dataclass(frozen=True)
-#new
+# new
 class TestArtifacts:
     """Пути к pickle / калибраторам / эталонным df."""
 
@@ -37,15 +37,16 @@ class TestArtifacts:
     split_col: str = "split"  # опционально: train | test
 
 
-#new
+# new
 def _env_path(name: str, default: Path) -> Path:
     raw = os.environ.get(name, "").strip()
     return Path(raw) if raw else default
 
 
-#new
+# new
 def load_artifacts() -> TestArtifacts:
     # По умолчанию — prod results/; синтетика: INTEGRATION_TEST_RESULTS_DIR=.../test_synth
+    # Stem ниже — имена файлов в test_synth, не модели сервиса из config.py.
     results = _env_path("INTEGRATION_TEST_RESULTS_DIR", _RESULTS)
     main_stem = os.environ.get("INTEGRATION_TEST_MAIN_STEM", "querulus_ansamble_legacy")
     second_stem = os.environ.get(
@@ -78,7 +79,7 @@ def load_artifacts() -> TestArtifacts:
     )
 
 
-#new
+# new
 def require_file(path: Path, label: str) -> Path:
     if not path.is_file():
         raise FileNotFoundError(
@@ -89,7 +90,7 @@ def require_file(path: Path, label: str) -> Path:
     return path
 
 
-#new
+# new
 def max_rows_limit() -> int | None:
     """Опциональный лимит строк для parity (INTEGRATION_TEST_MAX_ROWS).
 
@@ -101,7 +102,7 @@ def max_rows_limit() -> int | None:
     return max(1, int(raw))
 
 
-#new
+# new
 def batch_size() -> int:
     """Размер батча для multi-row predict в parity (INTEGRATION_TEST_BATCH_SIZE)."""
     raw = os.environ.get("INTEGRATION_TEST_BATCH_SIZE", "").strip()

@@ -11,6 +11,7 @@
       "VICTIM_VEHICLE_AGE": 13,
       "LOSS_UNIT_ZONE": "Зона ф-ла Алтайский",
       "EVENT_DATE": "2022-11-05T07:15:00",
+      "LOSS_DATE_TIME": "2022-11-06T00:00:00",
       "LOSS_NUMBER": 8940869,
       "AMOUNT_REPAIR": 242542,
       "VICTIM_VEHICLE_BRAND": "Toyota",
@@ -52,7 +53,7 @@
       "VIC_TS_COUNTRY": "РОССИЯ"
     }
   ],
-  "second_model": "UU_querulus_2026_10_09_16_51_20",
+  "second_model": "UU_querulus_2026_10_27_20_12_44",
   "second_request": [
     {
       "RECIEVE_METHOD": "Партнер",
@@ -64,6 +65,7 @@
       "VICTIM_VEHICLE_AGE": 13,
       "LOSS_UNIT_ZONE": "Зона ф-ла Алтайский",
       "EVENT_DATE": "2022-11-05T07:15:00",
+      "LOSS_DATE_TIME": "2022-11-06T00:00:00",
       "LOSS_NUMBER": 8940869,
       "AMOUNT_REPAIR": 242542,
       "VICTIM_VEHICLE_BRAND": "Toyota",

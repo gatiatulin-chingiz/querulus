@@ -105,6 +105,30 @@ li { margin:.18rem 0; }
 .legend ul { margin:.15rem 0 .15rem 1.1rem; }
 .legend li { margin:.12rem 0; color:var(--muted); }
 .legend code { font-size:.82rem; }
+.scenario-stack { display:grid; gap:.75rem; margin:.55rem 0; }
+.scenario-card {
+  background:#fbfbf9; border:1px solid var(--line); border-radius:9px;
+  padding:.7rem .85rem; border-top:3px solid var(--accent);
+}
+.scenario-card.alt { border-top-color:#9b7100; }
+.scenario-card h4 { margin:0 0 .35rem; color:#244f53; font-size:.98rem; }
+.scenario-card .why { color:var(--muted); font-size:.86rem; margin:0 0 .5rem; }
+.scenario-card table.kv { margin:.2rem 0; width:100%; border-collapse:collapse; font-size:.86rem; }
+.scenario-card table.kv th, .scenario-card table.kv td {
+  border:1px solid var(--line); padding:.35rem .45rem; text-align:left; vertical-align:top;
+}
+.scenario-card table.kv th { background:var(--soft); color:var(--accent); }
+.scenario-card .diff-note {
+  background:#fff8e6; border:1px solid #e5c66e; border-left:3px solid #9b7100;
+  border-radius:0 6px 6px 0; padding:.45rem .6rem; margin:.45rem 0 0; font-size:.86rem;
+}
+mark.mark-new,
+.mark-new {
+  background: #fff3bf;
+  box-shadow: inset 0 0 0 2px #e6b800;
+  border-radius: 4px;
+}
+
 .fx-tree { margin:.4rem 0; }
 .fx-node {
   border:1px solid var(--line); border-radius:8px; background:#fff;
@@ -1892,61 +1916,77 @@ li { margin:.18rem 0; }
     </tr>
   </tbody>
 </table></div><div class="legend"><h4>Колонки</h4><ul><li><code>month</code> → <b>месяц</b> — Календарный месяц 1–12</li><li><code>retro_share</code> → <b>s_m</b> — Средняя доля месяца в годовом pilot-потоке ретро<div class="eq">доля строк месяца m в ретро-пилоте</div></li><li><code>observed_coverage</code> → <b>coverage</b> — Покрытие месяца текущим окном (0–1+)<div class="eq">доля дней месяца m в окне мониторинга</div></li><li><code>exposure_contribution</code> → <b>вклад</b> — Вклад месяца в seasonal_exposure<div class="eq">coverage_m × s_m</div></li></ul><h4>Строки</h4><ul><li>Одна строка на календарный месяц.</li></ul></div>
+    
     <h3>Сценарии годового эффекта</h3>
-    <div class="scroll"><table class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th>H</th>
-      <th>ITT</th>
-      <th>ITT_100</th>
-      <th>exposure</th>
-      <th>N_year</th>
-      <th>N_model cur</th>
-      <th>N_model весь</th>
-      <th>vol_NP</th>
-      <th>risk_NP</th>
-      <th>net mult</th>
-      <th>год пилот cur</th>
-      <th>год пилот весь</th>
-      <th>год пилот CI↓</th>
-      <th>год пилот CI↑</th>
-      <th>ITT_NP</th>
-      <th>год сеть</th>
-      <th>год сеть CI↓</th>
-      <th>год сеть CI↑</th>
-      <th>год сеть 100%</th>
-      <th>annual_window</th>
-      <th>annual_window_ci_low</th>
-      <th>annual_window_ci_high</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>ult</td>
-      <td>-3 132.73</td>
-      <td>-15 772.28</td>
-      <td>0.66666667</td>
-      <td>300.00</td>
-      <td>151.50</td>
-      <td>300.00</td>
-      <td>0.1</td>
-      <td>1.21</td>
-      <td>1.12</td>
-      <td>-474 608.54</td>
-      <td>-939 818.90</td>
-      <td>-8 395 897.15</td>
-      <td>6 002 167.38</td>
-      <td>-3 779.91</td>
-      <td>-1 053 216.31</td>
-      <td>-9 408 935.91</td>
-      <td>6 726 381.60</td>
-      <td>-5 302 602.72</td>
-      <td>-626 545.93</td>
-      <td>-5 597 264.77</td>
-      <td>4 001 444.92</td>
-    </tr>
-  </tbody>
-</table></div><div class="legend"><h4>Колонки</h4><ul><li><code>horizon</code> → <b>H</b> — Горизонт</li><li><code>effect_per_case</code> → <b>ITT</b> — ITT на инцидент, ₽</li><li><code>effect_100_compliance</code> → <b>ITT_100</b> — Сценарный ITT 100% compliance на инцидент, ₽</li><li><code>seasonal_exposure</code> → <b>exposure</b> — Доля типичного года, уже увиденная в окне<div class="eq">Σ_m coverage_m × s_m,P</div></li><li><code>N_pilot_eligible_year</code> → <b>N_year</b> — Ожидаемый годовой поток eligible пилота<div class="eq">N_obs / seasonal_exposure</div></li><li><code>N_pilot_model_year_current</code> → <b>N_model cur</b> — Годовой поток model при текущей доле model</li><li><code>N_pilot_model_year_full</code> → <b>N_model весь</b> — Годовой поток model, если весь eligible идёт в модель<div class="eq">= N_pilot_eligible_year</div></li><li><code>volume_ratio_nonpilot</code> → <b>vol_NP</b> — Годовой поток nonpilot / pilot (ретро)</li><li><code>risk_ratio_nonpilot</code> → <b>risk_NP</b> — Средний ПСР nonpilot / pilot (ретро)</li><li><code>network_multiplier</code> → <b>net mult</b> — Множитель сети<div class="eq">1 + volume_ratio_nonpilot × risk_ratio_nonpilot</div></li><li><code>annual_pilot_current</code> → <b>год пилот cur</b> — Годовой эффект пилота при текущей доле model, ₽/год<div class="eq">effect_per_case × N_pilot_model_year_current</div></li><li><code>annual_pilot_full</code> → <b>год пилот весь</b> — Годовой эффект пилота при всём потоке в модель, ₽/год<div class="eq">effect_per_case × N_pilot_eligible_year</div></li><li><code>annual_pilot_full_ci_low</code> → <b>год пилот CI↓</b> — Нижняя граница CI годового эффекта пилота, ₽/год<div class="eq">ci_low × N_pilot_eligible_year</div></li><li><code>annual_pilot_full_ci_high</code> → <b>год пилот CI↑</b> — Верхняя граница CI годового эффекта пилота, ₽/год<div class="eq">ci_high × N_pilot_eligible_year</div></li><li><code>effect_per_case_nonpilot</code> → <b>ITT_NP</b> — Эффект на инцидент × risk_ratio, ₽<div class="eq">effect_per_case × risk_ratio_nonpilot</div></li><li><code>annual_network_full</code> → <b>год сеть</b> — Годовой эффект сети при всём потоке в модель, ₽/год<div class="eq">annual_pilot_full × network_multiplier</div></li><li><code>annual_network_full_ci_low</code> → <b>год сеть CI↓</b> — Нижняя граница CI годового эффекта сети, ₽/год<div class="eq">ci_low × N_pilot_eligible_year × network_multiplier</div></li><li><code>annual_network_full_ci_high</code> → <b>год сеть CI↑</b> — Верхняя граница CI годового эффекта сети, ₽/год<div class="eq">ci_high × N_pilot_eligible_year × network_multiplier</div></li><li><code>annual_network_full_compliance</code> → <b>год сеть 100%</b> — Годовой эффект сети при 100% compliance, ₽/год<div class="eq">effect_100_compliance × N_pilot_eligible_year × network_multiplier</div></li><li><code>annual_window</code> — (нет описания в легенде)</li><li><code>annual_window_ci_low</code> — (нет описания в легенде)</li><li><code>annual_window_ci_high</code> — (нет описания в легенде)</li></ul><h4>Строки</h4><ul><li>Одна строка на горизонт ult.</li></ul><h4>Пояснения</h4><ul><li>Весь поток в модель = все eligible идут в model-поток; это сценарий, не факт.</li></ul></div>
+    <p class="muted">Каждый блок — один сценарий. Сравнивайте ключевые строки
+    друг под другом. <b>NP</b> = nonpilot (остальная сеть), <b>P</b> = pilot.</p>
+    <div class="scenario-stack mark-new">
+      <div class="scenario-card">
+        <h4>0. Общие множители объёма</h4>
+        <p class="why">Одинаковы для сценариев ниже (кроме периода работы модели,
+        где берётся N_obs окна, а не N_year).</p>
+        <table class="kv">
+          <tr><th>Метрика</th><th>Значение</th><th>Как читать</th></tr>
+          <tr><td>exposure (сезонность убытков)</td><td>0.667</td><td>доля типичного года, уже увиденная; по числу дел, не по ПСР</td></tr>
+          <tr><td>N_year (eligible пилота)</td><td>300</td><td>N_obs / exposure</td></tr>
+          <tr><td>N_model при текущей доле</td><td>151.5</td><td>доля model × N_year</td></tr>
+          <tr><td>vol_NP</td><td>0.10</td><td>поток дел nonpilot / pilot (ретро)</td></tr>
+          <tr><td>risk_NP</td><td>1.21</td><td>средний ПСР nonpilot / pilot (ретро)</td></tr>
+          <tr><td>множитель сети</td><td>1.12</td><td>1 + vol_NP × risk_NP</td></tr>
+        </table>
+      </div>
+      <div class="scenario-card">
+        <h4>1. Период работы модели (факт на выгрузке)</h4>
+        <p class="why">ITT as-is × число инцидентов в текущем окне пилота.</p>
+        <table class="kv">
+          <tr><th>Метрика</th><th>Значение</th><th>Как читать</th></tr>
+          <tr><td>ITT на инцидент</td><td>−3 132.73 ₽</td><td>факт назначения (as-is)</td></tr>
+          <tr><td>Эффект на период работы модели</td><td>−626 545.93 ₽</td><td>ITT × N_obs окна</td></tr>
+          <tr><td>CI периода ↓ / ↑</td><td>−5 597 264.77 … 4 001 444.92 ₽</td><td>линейный перенос CI с /инцидент</td></tr>
+        </table>
+      </div>
+      <div class="scenario-card">
+        <h4>2. Год на пилотных филиалах</h4>
+        <p class="why">Тот же ITT as-is × годовой поток eligible
+        (с поправкой на сезонность убытков).</p>
+        <table class="kv">
+          <tr><th>Метрика</th><th>Значение</th><th>Как читать</th></tr>
+          <tr><td>ITT на инцидент</td><td>−3 132.73 ₽</td><td>тот же ITT as-is</td></tr>
+          <tr><td>Год пилот, текущая доля model</td><td>−474 608.54 ₽</td><td>ITT × N_model_cur</td></tr>
+          <tr><td>Год пилот, весь поток в модель</td><td>−939 818.90 ₽</td><td>ITT × N_year</td></tr>
+          <tr><td>CI года пилота ↓ / ↑</td><td>−8 395 897.15 … 6 002 167.38 ₽</td><td>для сценария «весь поток»</td></tr>
+        </table>
+      </div>
+      <div class="scenario-card">
+        <h4>3. Год на всю сеть (as-is ITT)</h4>
+        <p class="why">Год пилота «весь поток» × множитель сети
+        (vol_NP × risk_NP). Сценарий масштаба, не рандомизация на nonpilot.</p>
+        <table class="kv">
+          <tr><th>Метрика</th><th>Значение</th><th>Как читать</th></tr>
+          <tr><td>ITT на инцидент</td><td>−3 132.73 ₽</td><td>as-is</td></tr>
+          <tr><td>Год сеть (весь поток в модель)</td><td>−1 053 216.31 ₽</td><td>ITT × N_year × множитель сети</td></tr>
+          <tr><td>CI года сети ↓ / ↑</td><td>−9 408 935.91 … 6 726 381.60 ₽</td><td>тот же масштаб к CI</td></tr>
+        </table>
+      </div>
+      <div class="scenario-card alt">
+        <h4>4. Год на всю сеть при 100% исполнения</h4>
+        <p class="why">Тот же объём, что в п.3, но эффект на кейс = ITT_100
+        (механически «доначислили» рекомендации). Не ITT.</p>
+        <table class="kv">
+          <tr><th>Метрика</th><th>Значение</th><th>Как читать</th></tr>
+          <tr><td>ITT_100 на инцидент</td><td>−15 772.28 ₽</td><td>сценарий 100% исполнения рекомендации</td></tr>
+          <tr><td>Год сеть 100% compliance</td><td>−5 302 602.72 ₽</td><td>ITT_100 × N_year × множитель сети</td></tr>
+          <tr><td>Δ к «год сеть» (as-is)</td><td>−4 249 386.41 ₽</td><td>только из-за разницы ITT_100 vs ITT; объём тот же</td></tr>
+        </table>
+        <div class="diff-note"><b>Почему «год сеть 100%» ниже «год сеть»:</b>
+        масштаб один и тот же (N_year × множитель сети), меняется только эффект на кейс.
+        ITT_100 = −15 772.28 ₽ vs ITT = −3 132.73 ₽ (Δ −12 639.55 ₽/кейс).
+        В сценарии 100% исполнения «доначисляем» рекомендованные доплаты и жёстче режем хвост ПСР —
+        если доплаты дороже выигрыша по хвосту, годовой эффект падает
+        (Δ года сети −4 249 386.41 ₽).</div>
+      </div>
+    </div>
+
   </div>
 
   <h2>12. Ограничения</h2>
