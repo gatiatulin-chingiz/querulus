@@ -137,6 +137,12 @@ class TestCommonPreprocess(unittest.TestCase):
         masked = masked_predictions(labels, raw, df)
         self.assertEqual(masked, [0.0, 200.0, 300.0])
 
+    def test_is_lawyer_missing_column_treated_as_zero(self):
+        labels = [0.0, 1.0]
+        raw = [100.0, 200.0]
+        masked = masked_predictions(labels, raw, pd.DataFrame({"X": [1, 2]}))
+        self.assertEqual(masked, [0.0, 200.0])
+
 
 if __name__ == "__main__":
     unittest.main()

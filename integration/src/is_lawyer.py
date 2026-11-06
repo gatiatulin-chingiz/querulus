@@ -26,13 +26,19 @@ def masked_predictions(
     Args:
         labels: бинарные метки классификации (0/1) после порога.
         raw_reg: значения регрессии той же длины.
-        df_common: кадр с обязательной колонкой ``IS_LAWYER``.
+        df_common: кадр после preprocess; ``IS_LAWYER`` опционален
+            (нет колонки → как 0, старые запросы ОИСУУ).
 
     Returns:
         Список маскированных float для полей
         ``regression_predictions`` / ``prediction``.
     """
-    is_lawyer = df_common["IS_LAWYER"].eq(1).tolist()
+    if "IS_LAWYER" in df_common.columns:
+        is_lawyer = (
+            pd.to_numeric(df_common["IS_LAWYER"], errors="coerce").fillna(0).eq(1)
+        ).tolist()
+    else:
+        is_lawyer = [False] * len(labels)
 
     # Класс 0 и не юрист — регрессию обнуляем.
     # raw_reg уже list[float] из run_regression_model / калибратора.
