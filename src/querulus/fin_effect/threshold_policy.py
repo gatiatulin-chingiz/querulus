@@ -14,16 +14,15 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
 from querulus import PROJECT_ROOT
-from querulus.fin_effect.calculator import (
-    FinEffectResult,
-    run_fin_effect_from_training,
-    run_fin_effect_pipeline,
-)
 from querulus.fin_effect.config import FinEffectConfig
+
+if TYPE_CHECKING:
+    from querulus.fin_effect.calculator import FinEffectResult
 
 logger = logging.getLogger("querulus.fin_effect.threshold_policy")
 
@@ -53,6 +52,9 @@ def pick_threshold_on_val(
     config: FinEffectConfig | None = None,
 ) -> ValThresholdResult:
     """Подбор порога на Val; поиск max net_effect внутри ``run_fin_effect_pipeline``."""
+    # Lazy: иначе цикл fin_effect ↔ training при import excel_monitoring.
+    from querulus.fin_effect.calculator import run_fin_effect_pipeline
+
     index = pd.Index(val_index).intersection(df.index)
     if len(index) == 0:
         raise ValueError("val_index пуст или не пересекается с df.index")
@@ -88,6 +90,8 @@ def pick_threshold_on_val_from_training(
     frequency_target_column: str | None = None,
 ) -> ValThresholdResult:
     """Подбор порога на Val для ``TrainingArtifacts`` (freq + severity из training)."""
+    from querulus.fin_effect.calculator import run_fin_effect_from_training
+
     fe_val = run_fin_effect_from_training(
         df,
         training,
