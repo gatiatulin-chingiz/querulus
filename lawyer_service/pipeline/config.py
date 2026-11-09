@@ -58,7 +58,7 @@ MAIN_MODEL = os.environ.get(
 )
 SECOND_MODEL = os.environ.get(
     "LAWYER_SECOND_MODEL",
-    "UU_querulus_2026_10_27_20_12_44",
+    "UU_querulus_2026_11_05_12_44_24",
 )
 
 REQUEST_DELAY_SEC = float(os.environ.get("LAWYER_REQUEST_DELAY", "1.0"))

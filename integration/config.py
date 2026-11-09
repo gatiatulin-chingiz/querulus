@@ -35,7 +35,7 @@ default_second_threshold = env_reader.float("DEFAULT_SECOND_THRESHOLD", 0.37)
 # В каждом файле пара [классификация, регрессия] — четыре модели.
 # Файлы лежат в prod_models_path рядом с калибраторами.
 main_model_stem = env_reader.str("MAIN_MODEL_STEM", "querulus_ansamble_2026_04_18_v1")
-second_model_stem = env_reader.str("SECOND_MODEL_STEM", "UU_querulus_2026_10_27_20_12_44")
+second_model_stem = env_reader.str("SECOND_MODEL_STEM", "UU_querulus_2026_11_05_12_44_24")
 
 second_cf_calibrator_filename = env_reader.str(
     "SECOND_CF_CALIBRATOR_FILENAME", "cf_calibrator.pickle"
