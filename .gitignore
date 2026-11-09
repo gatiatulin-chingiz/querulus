@@ -58,6 +58,7 @@ mlruns/
 **/results/**
 !**/results/.gitkeep
 !**/results/startup_check.json
+!**/results/Other_dicts.json
 **/prod_models/
 
 # Локальные дампы / черновики / текстовые заметки

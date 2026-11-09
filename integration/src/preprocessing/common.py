@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
@@ -13,12 +14,39 @@ from loguru import logger
 from mldataworker.core.data_prepare import prepare_dataset
 from mldataworker.core.pydantic_models import ModelConfig
 
+try:
+    from integration import config as _service_config
+except ImportError:  # pragma: no cover — Docker /home/model_user/model
+    import config as _service_config
+
 # Ключи уже в UPPER: remap вызывается после нормализации строк.
 APPLICANT_FORM_REMAP: Dict[str, str] = {
     "СКРЫТЫЙ ЮРИСТ": "ЮРИСТ С ПОТЕРПЕВШИМ",
     "ПРЕДСТАВИТЕЛЬ (АВТОЮРИСТ)": "ПРЕДСТАВИТЕЛЬ (ПО ДОВЕРЕННОСТИ)",
     "ПРЕДСТАВИТЕЛЬ (НЕ АВТОЮРИСТ)": "ВЫГОДОПРИОБРЕТАТЕЛЬ",
 }
+
+# Brand → страна ТС (levels модели: JAPAN/RUSSIA/OTHER/…).
+# Файл — плоский Other_dicts (или обёртка {"Other_dicts": {...}}).
+_OTHER_DICTS_PATH: Path = (
+    Path(_service_config.base_path) / "results" / "Other_dicts.json"
+).resolve()
+
+
+# reviewed
+def _load_ts_country_by_brand(path: Path) -> Dict[str, str]:
+    """Загрузить ``dict_ts_country``: ключи/значения в UPPER под B2 и replace модели."""
+    if not path.is_file():
+        raise FileNotFoundError(f"Нет Other_dicts.json: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    other = payload.get("Other_dicts", payload)
+    raw = other.get("dict_ts_country") if isinstance(other, dict) else None
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError(f"Нет dict_ts_country в {path}")
+    return {str(k).upper(): str(v).upper() for k, v in raw.items()}
+
+
+TS_COUNTRY_BY_BRAND: Dict[str, str] = _load_ts_country_by_brand(_OTHER_DICTS_PATH)
 
 # Каст только здесь; CPI/FE берут уже готовые dtype.
 DATE_INPUT_COLUMNS: tuple[str, ...] = (
@@ -42,8 +70,8 @@ NUMERIC_INPUT_COLUMNS: tuple[str, ...] = (
 )
 
 # Общий входной контракт main_ и second_: все колонки должны прийти разом.
-# Серые VICTIM_TS_REGION / VIC_TS_COUNTRY / VICTIM_VEHICLE_COUNTRY сервис не
-# собирает из REG_NUM/BRAND — клиент отдаёт уже готовые колонки.
+# VIC_TS_COUNTRY сервис считает из VICTIM_VEHICLE_BRAND (Other_dicts.dict_ts_country).
+# Серые VICTIM_TS_REGION / VICTIM_VEHICLE_COUNTRY клиент отдаёт готовыми.
 INPUT_REQUIRED_COLUMNS: List[str] = [
     "INCIDENT_NUMBER",
     "LOSS_NUMBER",
@@ -64,7 +92,7 @@ INPUT_REQUIRED_COLUMNS: List[str] = [
     "VICTIM_VEHICLE_AGE",
     "REGION",
     "VICTIM_TS_REGION",
-    "VIC_TS_COUNTRY",
+    "VICTIM_VEHICLE_BRAND",
     "VICTIM_VEHICLE_COUNTRY",
     "EVENT_DATE",
     "PAYMENT_ORDER_DATE_TIME",
@@ -91,7 +119,11 @@ ENGINEERED_FEATURES: List[str] = [
     "FE_VALUE_BEFORE_DIFF",
     "VICTIM_OBJECT_AGE_MONTHS",
 ]
-MODEL_FEATURES: List[str] = INPUT_REQUIRED_COLUMNS + ENGINEERED_FEATURES
+# Матрица модели: brand → VIC_TS_COUNTRY в coerce_and_enrich; brand в pickle не идёт.
+MODEL_FEATURES: List[str] = [
+    *(c for c in INPUT_REQUIRED_COLUMNS if c != "VICTIM_VEHICLE_BRAND"),
+    "VIC_TS_COUNTRY",
+] + ENGINEERED_FEATURES
 
 
 
@@ -136,7 +168,9 @@ def coerce_and_enrich(df: pd.DataFrame) -> pd.DataFrame:
     * числа из ``NUMERIC_INPUT_COLUMNS`` → numeric;
     * ``EVENT_YEAR``, ``PAYMENT_ORDER_YEAR``, ``APPLY_DELAY`` из уже datetime-колонок;
     * remap ``APPLICANT_FORM`` по ``APPLICANT_FORM_REMAP``;
-    * ``NOT_NOTIFICATION``: «Не уведомлять» → 0, иначе → 1.
+    * ``NOT_NOTIFICATION``: «Не уведомлять» → 0, иначе → 1;
+    * ``VIC_TS_COUNTRY`` ← ``VICTIM_VEHICLE_BRAND`` через ``TS_COUNTRY_BY_BRAND``
+      (нет бренда в словаре → ``OTHER``; клиентский ``VIC_TS_COUNTRY`` перезаписывается).
 
     Args:
         df: кадр после ``prepare_vector_upper`` (или эквивалент).
@@ -164,6 +198,11 @@ def coerce_and_enrich(df: pd.DataFrame) -> pd.DataFrame:
         out["NOT_NOTIFICATION"] = out["NOT_NOTIFICATION"].map(
             lambda v: 0 if v == "НЕ УВЕДОМЛЯТЬ" else 1
         )
+    if "VICTIM_VEHICLE_BRAND" not in out.columns:
+        raise ValueError("Нет VICTIM_VEHICLE_BRAND для VIC_TS_COUNTRY")
+    out["VIC_TS_COUNTRY"] = out["VICTIM_VEHICLE_BRAND"].map(
+        lambda x: TS_COUNTRY_BY_BRAND.get(x, "OTHER") if isinstance(x, str) else "OTHER"
+    )
     return out
 
 

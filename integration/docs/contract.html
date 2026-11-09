@@ -280,13 +280,15 @@
           «скрытый юрист» → «юрист с потерпевшим»,
           «представитель (автоюрист)» → «по доверенности»,
           «представитель (не автоюрист)» → «выгодоприобретатель»
-          (общий словарь с second_).</p>
+          (общий словарь с second_).
+          <code>VIC_TS_COUNTRY</code> из <code>VICTIM_VEHICLE_BRAND</code> (не из запроса).</p>
       </div>
       <div class="card second-lane">
         <h3>second_ — отличия</h3>
         <ul class="note" style="margin:0;padding-left:1.1rem">
           <li>Список фич берётся из <code>model_config</code> pickle 2.0.0</li>
           <li>В запросе <strong>нет</strong> готовых FE_* — сервис отбрасывает входные FE_* и считает сам (CPI REAL_2022, SHARE_WORK tier, …)</li>
+          <li><code>VIC_TS_COUNTRY</code> сервис считает из <code>VICTIM_VEHICLE_BRAND</code> (<code>results/Other_dicts.json</code> → <code>dict_ts_country</code>; неизвестный бренд → <code>OTHER</code>)</li>
           <li>CF/RG калибраторы; τ из <code>THRESHOLD</code> в векторе, иначе config fallback</li>
           <li>Clip — из <code>feature.clip</code> в pickle, не отдельный dq_bounds</li>
           <li>Тот же remap <code>APPLICANT_FORM</code>, что у main_</li>
@@ -380,7 +382,7 @@ Content-Type: application/json
       <span class="k">"VICTIM_TS_REGION"</span>: <span class="s">"москва"</span>,
       <span class="k">"LOSS_UNIT_TYPE"</span>: <span class="s">"филиал"</span>,
       <span class="k">"VICTIM_VEHICLE_CATEGORY"</span>: <span class="s">"эконом"</span>,
-      <span class="k">"VIC_TS_COUNTRY"</span>: <span class="s">"россия"</span>,
+      <span class="k">"VICTIM_VEHICLE_BRAND"</span>: <span class="s">"toyota"</span>,
       <span class="k">"APPLICANT_AGE"</span>: <span class="n">40</span>,
       <span class="k">"VICTIM_AGE"</span>: <span class="n">40</span>,
       <span class="k">"NOT_NOTIFICATION"</span>: <span class="n">0</span>,
@@ -417,7 +419,7 @@ Content-Type: application/json
       <span class="k">"VICTIM_TS_REGION"</span>: <span class="s">"москва"</span>,
       <span class="k">"LOSS_UNIT_TYPE"</span>: <span class="s">"филиал"</span>,
       <span class="k">"VICTIM_VEHICLE_CATEGORY"</span>: <span class="s">"эконом"</span>,
-      <span class="k">"VIC_TS_COUNTRY"</span>: <span class="s">"россия"</span>,
+      <span class="k">"VICTIM_VEHICLE_BRAND"</span>: <span class="s">"toyota"</span>,
       <span class="k">"APPLICANT_AGE"</span>: <span class="n">40</span>,
       <span class="k">"VICTIM_AGE"</span>: <span class="n">40</span>,
       <span class="k">"NOT_NOTIFICATION"</span>: <span class="n">0</span>,

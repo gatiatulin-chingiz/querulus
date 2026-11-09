@@ -56,7 +56,7 @@ def _base_vector(**overrides) -> list[dict]:
         "VICTIM_TS_REGION": "москва",
         "LOSS_UNIT_TYPE": "филиал",
         "VICTIM_VEHICLE_CATEGORY": "эконом",
-        "VIC_TS_COUNTRY": "россия",
+        "VICTIM_VEHICLE_BRAND": "toyota",
         "APPLICANT_AGE": 40,
         "VICTIM_AGE": 40,
         "NOT_NOTIFICATION": 0,
@@ -102,6 +102,24 @@ class TestCommonPreprocess(unittest.TestCase):
         self.assertIn("EVENT_YEAR", df.columns)
         self.assertIn("PAYMENT_ORDER_YEAR", df.columns)
         self.assertIn("APPLY_DELAY", df.columns)
+
+    def test_vic_ts_country_from_brand(self):
+        df = coerce_and_enrich(prepare_vector_upper(_base_vector()))
+        self.assertEqual(df["VIC_TS_COUNTRY"].iloc[0], "JAPAN")
+
+    def test_vic_ts_country_unknown_brand(self):
+        df = coerce_and_enrich(
+            prepare_vector_upper(_base_vector(VICTIM_VEHICLE_BRAND="нет_такой_марки"))
+        )
+        self.assertEqual(df["VIC_TS_COUNTRY"].iloc[0], "OTHER")
+
+    def test_vic_ts_country_overwrites_client(self):
+        df = coerce_and_enrich(
+            prepare_vector_upper(
+                _base_vector(VICTIM_VEHICLE_BRAND="toyota", VIC_TS_COUNTRY="россия")
+            )
+        )
+        self.assertEqual(df["VIC_TS_COUNTRY"].iloc[0], "JAPAN")
 
     def test_dates_strict_second(self):
         df = preprocess_second_vector(_base_vector())

@@ -141,7 +141,7 @@ def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         "PAYMENT_RECIPIENT_TYPE": "ИНОЕ",
         "VICTIM_TS_REGION": "МОСКВА",
         "LOSS_UNIT_TYPE": "Филиал",
-        "VIC_TS_COUNTRY": "РОССИЯ",
+        "VICTIM_VEHICLE_BRAND": "Toyota",
         "VICTIM_AGE": 40,
         "NOT_NOTIFICATION": 0,
         "IS_TOTAL": 0,

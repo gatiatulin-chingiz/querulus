@@ -14,8 +14,11 @@
     * VICTIM_OBJECT_AGE_MONTHS ← VICTIM_OBJECT_YEAR + EVENT_DATE.
 
 Не собираются здесь (ожидаются во входе уже готовыми):
-    * VICTIM_TS_REGION, VIC_TS_COUNTRY, VICTIM_VEHICLE_COUNTRY
-      (на схеме рядом REG_NUM / BRAND — upstream ETL, не сервис).
+    * VICTIM_TS_REGION, VICTIM_VEHICLE_COUNTRY
+      (на схеме рядом REG_NUM — upstream ETL, не сервис).
+
+VIC_TS_COUNTRY считается в ``coerce_and_enrich`` из ``VICTIM_VEHICLE_BRAND``
+(``results/Other_dicts.json`` → ``dict_ts_country``).
 
 Clip числовых FE делает ``prepare_dataset`` по ``model_config``, не здесь.
 """
