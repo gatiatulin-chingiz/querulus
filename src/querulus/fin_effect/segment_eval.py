@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -16,14 +17,14 @@ from querulus.fin_effect.calculator import (
 from querulus.fin_effect.compare_report import plain_floats
 from querulus.fin_effect.config import FinEffectConfig
 from querulus.fin_effect.threshold_policy import resolve_val_threshold
-from querulus.training.config import TrainingConfig
-from querulus.training.pipeline import TrainingArtifacts
-from querulus.training.severity_training import (
-    SeveritySampleWeight,
-    SeverityTargetTransform,
-    fit_severity_model,
-    severity_predict,
-)
+
+if TYPE_CHECKING:
+    from querulus.training.config import TrainingConfig
+    from querulus.training.pipeline import TrainingArtifacts
+    from querulus.training.severity_training import (
+        SeveritySampleWeight,
+        SeverityTargetTransform,
+    )
 
 def fin_effect_penalty_table(
     result: FinEffectResult,
@@ -200,6 +201,10 @@ def compare_severity_fin_effect_variants(
     threshold: float | None = None,
 ) -> SeverityVariantsCompare:
     """Обучить raw / log1p / weighted severity и сравнить fin-effect + MAE."""
+    # Lazy: иначе цикл segment_eval ↔ training ↔ severity_zoo.
+    from querulus.training.config import TrainingConfig
+    from querulus.training.severity_training import fit_severity_model, severity_predict
+
     training_config = training_config or TrainingConfig()
     effect_index, _ = _effect_index_and_freq(training, split)
 
@@ -303,6 +308,9 @@ def compare_value_before_segment_strategies(
 
     Один и тот же freq + один порог → сравнение 1:1.
     """
+    from querulus.training.config import TrainingConfig
+    from querulus.training.severity_training import fit_severity_model, severity_predict
+
     training_config = training_config or TrainingConfig()
     if training.severity_split is None:
         raise ValueError("severity_split отсутствует")
