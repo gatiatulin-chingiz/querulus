@@ -36,9 +36,6 @@ from querulus.fin_effect.signed_effects import (
     recompute_fin_effect_model,
 )
 from querulus.fin_effect.summary import create_summary_table
-from querulus.training.calibration import apply_severity_calibrator
-from querulus.training.catboost_runtime import stringify_categorical_columns
-from querulus.training.severity_training import severity_predict
 
 SplitName = Literal["train", "test", "all"]
 logger = logging.getLogger("querulus.fin_effect")
@@ -536,6 +533,9 @@ def feature_rows_for_predict(
     effect_frame: pd.DataFrame,
 ) -> pd.DataFrame:
     """Строки с признаками после AutoMVP (как при обучении CatBoost)."""
+    # Lazy: иначе calculator ↔ training при import excel_monitoring.
+    from querulus.training.catboost_runtime import stringify_categorical_columns
+
     feature_frame = getattr(training, "feature_frame", None)
     if feature_frame is not None:
         return feature_frame.loc[effect_index]
@@ -650,7 +650,8 @@ def run_fin_effect_from_training(
         frequency_proba_from_training(training, predict_frame[freq_features]),
         index=effect_index,
     )
-    # Lazy: training.__init__ тянет outboxml_metrics → threshold_policy → calculator.
+    from querulus.training.calibration import apply_severity_calibrator
+    from querulus.training.severity_training import severity_predict
 
     sev_raw = severity_predict(
         training.severity_model,
@@ -660,7 +661,6 @@ def run_fin_effect_from_training(
     )
     sev_calibrator = getattr(training, "severity_calibrator", None)
     if sev_calibrator is not None:
-
         sev_raw = apply_severity_calibrator(sev_calibrator, sev_raw)
     sev_pred = pd.Series(np.asarray(sev_raw, dtype=float), index=effect_index)
 

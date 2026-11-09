@@ -5,14 +5,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from html import escape
 from pathlib import Path
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 import numpy as np
 import pandas as pd
 
 from querulus import PROJECT_ROOT
-from querulus.fin_effect.calculator import FinEffectResult
 from querulus.training.config import TrainingConfig
+
+if TYPE_CHECKING:
+    from querulus.fin_effect.calculator import FinEffectResult
 from querulus.training.feature_labels import feature_ru_name
 from querulus.training.pipeline import TrainingArtifacts
 from querulus.training.selected_features import (
