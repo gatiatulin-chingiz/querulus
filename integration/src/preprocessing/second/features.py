@@ -27,16 +27,10 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-try:
-    from integration.src.preprocessing.cpi import (
-        add_real_monetary_columns,
-        real_feature_name,
-    )
-except ImportError:
-    from src.preprocessing.cpi import (
-        add_real_monetary_columns,
-        real_feature_name,
-    )
+from src.preprocessing.cpi import (
+    add_real_monetary_columns,
+    real_feature_name,
+)
 
 SHARE_WORK_BINS: tuple[float, ...] = (0.3, 0.6)
 SHARE_WORK_LABELS: tuple[str, ...] = ("low", "mid", "high")

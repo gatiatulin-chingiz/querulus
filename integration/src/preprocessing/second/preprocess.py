@@ -5,18 +5,11 @@ from typing import Dict, List
 
 import pandas as pd
 
-try:
-    from integration.src.preprocessing.common import (
-        preprocess_input_vector,
-        validate_model_features,
-    )
-    from integration.src.preprocessing.second.features import add_second_model_features
-except ImportError:
-    from src.preprocessing.common import (
-        preprocess_input_vector,
-        validate_model_features,
-    )
-    from src.preprocessing.second.features import add_second_model_features
+from src.preprocessing.common import (
+    preprocess_input_vector,
+    validate_model_features,
+)
+from src.preprocessing.second.features import add_second_model_features
 
 
 # reviewed

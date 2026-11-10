@@ -6,26 +6,25 @@ import unittest
 from pathlib import Path
 
 _INTEGRATION = Path(__file__).resolve().parents[1]
-_QUERULUS = _INTEGRATION.parent
-if str(_QUERULUS) not in sys.path:
-    sys.path.insert(0, str(_QUERULUS))
+if str(_INTEGRATION) not in sys.path:
+    sys.path.insert(0, str(_INTEGRATION))
 
-from integration.src.shim import install_mldataworker_shim
+from src.shim import install_mldataworker_shim
 
 install_mldataworker_shim()
 
 import numpy as np
 import pandas as pd
 
-from integration.src.is_lawyer import masked_predictions
-from integration.src.preprocessing.common import (
+from src.is_lawyer import masked_predictions
+from src.preprocessing.common import (
     coerce_and_enrich,
     prepare_vector_upper,
     validate_derived_dates_strict,
     validate_no_duplicate_columns,
     validate_preprocessed_vector,
 )
-from integration.src.preprocessing.second import preprocess_second_vector
+from src.preprocessing.second import preprocess_second_vector
 
 
 # new

@@ -28,18 +28,17 @@ except ImportError:  # pragma: no cover
     tqdm = None  # type: ignore[assignment]
 
 _INTEGRATION = Path(__file__).resolve().parents[1]
-_QUERULUS = _INTEGRATION.parent
-if str(_QUERULUS) not in sys.path:
-    sys.path.insert(0, str(_QUERULUS))
+if str(_INTEGRATION) not in sys.path:
+    sys.path.insert(0, str(_INTEGRATION))
 
-from integration.src.shim import install_mldataworker_shim
+from src.shim import install_mldataworker_shim
 
 install_mldataworker_shim()
 
-import integration.config as config  # noqa: E402
-from integration.main import main_predict  # noqa: E402
-from integration.src.predictions import score_second  # noqa: E402
-from integration.tests.artifacts import (  # noqa: E402
+import config  # noqa: E402
+from main import main_predict  # noqa: E402
+from src.predictions import score_second  # noqa: E402
+from tests.artifacts import (  # noqa: E402
     ART,
     batch_size,
     max_rows_limit,

@@ -7,34 +7,33 @@ import unittest
 from pathlib import Path
 
 _INTEGRATION = Path(__file__).resolve().parents[1]
-_QUERULUS = _INTEGRATION.parent
-if str(_QUERULUS) not in sys.path:
-    sys.path.insert(0, str(_QUERULUS))
+if str(_INTEGRATION) not in sys.path:
+    sys.path.insert(0, str(_INTEGRATION))
 
-from integration.src.shim import install_mldataworker_shim
+from src.shim import install_mldataworker_shim
 
 install_mldataworker_shim()
 
 import pandas as pd
 
-from integration import config
-from integration.src.calibration import (
+import config
+from src.calibration import (
     apply_cf_calibrator,
     apply_rg_calibrator,
 )
-from integration.src.preprocessing.common import resolve_threshold
-from integration.src.preprocessing.common import coerce_and_enrich
-from integration.src.preprocessing.cpi import (
+from src.preprocessing.common import resolve_threshold
+from src.preprocessing.common import coerce_and_enrich
+from src.preprocessing.cpi import (
     MONETARY_COLUMNS_FOR_REAL,
     RU_CPI_LEVEL_VS_BASE,
     deflate_to_base_year,
     resolve_cpi_year,
 )
-from integration.src.preprocessing.second import (
+from src.preprocessing.second import (
     add_second_model_features,
     validate_input_vector,
 )
-from integration.tests.artifacts import ART, require_file
+from tests.artifacts import ART, require_file
 
 
 # new
@@ -82,6 +81,7 @@ class TestDerivedFe(unittest.TestCase):
                     "VICTIM_CAPACITY_ENGINE": [100.0],
                     "VICTIM_MAX_WEIGHT": [1500.0],
                     "VICTIM_OBJECT_YEAR": [2018],
+                    "VICTIM_VEHICLE_BRAND": ["Toyota"],
                     "LOSS_DATE_TIME": ["2022-01-20"],
                     "POLICYHOLDER_CONTRACT_END_DATE": ["2022-08-01"],
                 }
@@ -111,6 +111,7 @@ class TestDerivedFe(unittest.TestCase):
                     "VICTIM_CAPACITY_ENGINE": [1.0],
                     "VICTIM_MAX_WEIGHT": [1.0],
                     "VICTIM_OBJECT_YEAR": [2015],
+                    "VICTIM_VEHICLE_BRAND": ["Toyota"],
                     "LOSS_DATE_TIME": ["2019-12-06"],
                     "POLICYHOLDER_CONTRACT_END_DATE": ["2020-01-01"],
                 }

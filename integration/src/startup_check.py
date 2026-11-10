@@ -12,14 +12,9 @@ from typing import Any
 
 from loguru import logger
 
-try:
-    from integration import config
-    from integration.src.models import prod_models_dir
-    from integration.src.predictions import score_main, score_second
-except ImportError:
-    import config
-    from src.models import prod_models_dir
-    from src.predictions import score_main, score_second
+import config
+from src.models import prod_models_dir
+from src.predictions import score_main, score_second
 
 _CHECK_NAME = "startup_check.json"
 _FIELDS = ("classification_proba", "prediction", "threshold")

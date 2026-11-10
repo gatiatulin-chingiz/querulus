@@ -10,44 +10,24 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-try:
-    from integration import config
-    from integration.src.calibration import apply_cf_calibrator, apply_rg_calibrator
-    from integration.src.explain import shap_top_features_comment
-    from integration.src.is_lawyer import masked_predictions
-    from integration.src.models import (
-        ArtifactCache,
-        calibrator_paths,
-        feature_names_from_model_result,
-        model_pickle_path,
-    )
-    from integration.src.preprocessing.common import (
-        df_to_records,
-        prepare_matrix,
-        preprocess_input_vector,
-        require_columns,
-        resolve_threshold,
-    )
-    from integration.src.preprocessing.second import preprocess_second_vector
-except ImportError:
-    import config
-    from src.calibration import apply_cf_calibrator, apply_rg_calibrator
-    from src.explain import shap_top_features_comment
-    from src.is_lawyer import masked_predictions
-    from src.models import (
-        ArtifactCache,
-        calibrator_paths,
-        feature_names_from_model_result,
-        model_pickle_path,
-    )
-    from src.preprocessing.common import (
-        df_to_records,
-        prepare_matrix,
-        preprocess_input_vector,
-        require_columns,
-        resolve_threshold,
-    )
-    from src.preprocessing.second import preprocess_second_vector
+import config
+from src.calibration import apply_cf_calibrator, apply_rg_calibrator
+from src.explain import shap_top_features_comment
+from src.is_lawyer import masked_predictions
+from src.models import (
+    ArtifactCache,
+    calibrator_paths,
+    feature_names_from_model_result,
+    model_pickle_path,
+)
+from src.preprocessing.common import (
+    df_to_records,
+    prepare_matrix,
+    preprocess_input_vector,
+    require_columns,
+    resolve_threshold,
+)
+from src.preprocessing.second import preprocess_second_vector
 
 # Состав и порядок колонок main_ (не берём из pickle).
 CLASSIFICATION_FEATURES: List[str] = [

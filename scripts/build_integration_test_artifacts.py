@@ -24,13 +24,13 @@ warnings.filterwarnings("ignore")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INTEGRATION = PROJECT_ROOT / "integration"
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-_SRC = PROJECT_ROOT / "src"
-if _SRC.is_dir() and str(_SRC) not in sys.path:
-    sys.path.insert(0, str(_SRC))
+_MODEL_SRC = PROJECT_ROOT / "src"
+# Docker-style: config/src от integration/; querulus — от отдельного src/
+for _p in (_MODEL_SRC, INTEGRATION):
+    if _p.is_dir() and str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
-from integration.src.shim import install_mldataworker_shim  # noqa: E402
+from src.shim import install_mldataworker_shim  # noqa: E402
 
 install_mldataworker_shim()
 
@@ -39,23 +39,23 @@ import pandas as pd  # noqa: E402
 from catboost import CatBoostClassifier, CatBoostRegressor  # noqa: E402
 from sklearn.isotonic import IsotonicRegression  # noqa: E402
 
-from integration.src.calibration import (  # noqa: E402
+from src.calibration import (  # noqa: E402
     apply_cf_calibrator,
     apply_rg_calibrator,
 )
-from integration.src.is_lawyer import masked_predictions  # noqa: E402
-from integration.src.predictions import (  # noqa: E402
+from src.is_lawyer import masked_predictions  # noqa: E402
+from src.predictions import (  # noqa: E402
     CLASSIFICATION_FEATURES,
     REGRESSION_FEATURES,
     _classification_proba_and_labels,
 )
-from integration.src.preprocessing.common import (  # noqa: E402
+from src.preprocessing.common import (  # noqa: E402
     coerce_and_enrich,
     prepare_matrix,
     prepare_vector_upper,
     require_columns,
 )
-from integration.src.preprocessing.second import add_second_model_features  # noqa: E402
+from src.preprocessing.second import add_second_model_features  # noqa: E402
 from querulus.synthetic_dataset import build_synthetic_final_dataset  # noqa: E402
 
 OUT_DIR = INTEGRATION / "results" / "test_synth"
@@ -297,8 +297,8 @@ def _score_second_ref(
     cf_cal,
     rg_cal,
 ) -> tuple[float, float]:
-    from integration.src.models import feature_names_from_model_result
-    from integration.src.predictions import _raw_classification_scores
+    from src.models import feature_names_from_model_result
+    from src.predictions import _raw_classification_scores
 
     clf_feats = feature_names_from_model_result(group[0])
     rg_feats = feature_names_from_model_result(group[1])
@@ -376,7 +376,7 @@ def main() -> None:
         row = df_fe.loc[[i]]
         clf_df = row.loc[:, SECOND_CF_FEATURES]
         model_c, t_c = prepare_matrix(second[0], clf_df)
-        from integration.src.predictions import _raw_classification_scores
+        from src.predictions import _raw_classification_scores
 
         s = _raw_classification_scores(model_c, t_c)[0]
         raw_cf_train.append(s)

@@ -26,8 +26,8 @@ for p in (SRC, OUTBOXML_ROOT, PROJECT_ROOT, INTEGRATION):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-# Shim до импорта integration.main / shadow_v2
-from integration.src.shim import install_mldataworker_shim  # noqa: E402
+# Shim до импорта main / shadow_v2 (INTEGRATION уже первым в sys.path)
+from src.shim import install_mldataworker_shim  # noqa: E402
 
 install_mldataworker_shim()
 
@@ -214,7 +214,7 @@ def _serve() -> None:
     import os
 
     os.chdir(INTEGRATION)
-    from integration.main import app
+    from main import app
 
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
 

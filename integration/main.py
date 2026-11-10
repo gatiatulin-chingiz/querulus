@@ -19,16 +19,10 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from mldataworker.core.pydantic_models import ServiceRequest
 
-try:
-    from integration import config
-    from integration.src.models import prod_models_dir
-    from integration.src.predictions import preload_models, score_main, score_second
-    from integration.src.startup_check import assert_startup_scores
-except ImportError:
-    import config
-    from src.models import prod_models_dir
-    from src.predictions import preload_models, score_main, score_second
-    from src.startup_check import assert_startup_scores
+import config
+from src.models import prod_models_dir
+from src.predictions import preload_models, score_main, score_second
+from src.startup_check import assert_startup_scores
 
 
 # reviewed

@@ -14,10 +14,7 @@ from loguru import logger
 from mldataworker.core.data_prepare import prepare_dataset
 from mldataworker.core.pydantic_models import ModelConfig
 
-try:
-    from integration import config as _service_config
-except ImportError:  # pragma: no cover — Docker /home/model_user/model
-    import config as _service_config
+import config as _service_config
 
 # Ключи уже в UPPER: remap вызывается после нормализации строк.
 APPLICANT_FORM_REMAP: Dict[str, str] = {

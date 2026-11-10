@@ -27,32 +27,35 @@ import numpy as np
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+INTEGRATION = PROJECT_ROOT / "integration"
+_MODEL_SRC = PROJECT_ROOT / "src"
+for _p in (_MODEL_SRC, INTEGRATION):
+    if _p.is_dir() and str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
-from integration.src.shim import install_mldataworker_shim  # noqa: E402
+from src.shim import install_mldataworker_shim  # noqa: E402
 
 install_mldataworker_shim()
 
-import integration.config as config  # noqa: E402
-from integration.src.calibration import apply_cf_calibrator  # noqa: E402
-from integration.src.models import (  # noqa: E402
+import config  # noqa: E402
+from src.calibration import apply_cf_calibrator  # noqa: E402
+from src.models import (  # noqa: E402
     ArtifactCache,
     calibrator_paths,
     feature_names_from_model_result,
     model_pickle_path,
 )
-from integration.src.predictions import (  # noqa: E402
+from src.predictions import (  # noqa: E402
     _raw_classification_scores,
     score_second,
 )
-from integration.src.preprocessing.common import (  # noqa: E402
+from src.preprocessing.common import (  # noqa: E402
     coerce_and_enrich,
     prepare_matrix,
     prepare_vector_upper,
 )
-from integration.src.preprocessing.second import preprocess_second_vector  # noqa: E402
-from integration.tests.artifacts import load_artifacts  # noqa: E402
+from src.preprocessing.second import preprocess_second_vector  # noqa: E402
+from tests.artifacts import load_artifacts  # noqa: E402
 
 
 _DROP_META = ("preds_cf", "preds_rg", "preds_label", "split")

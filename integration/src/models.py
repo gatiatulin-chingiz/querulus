@@ -11,10 +11,7 @@ from typing import Any
 
 from loguru import logger
 
-try:
-    from integration import config
-except ImportError:
-    import config
+import config
 
 
 # reviewed
