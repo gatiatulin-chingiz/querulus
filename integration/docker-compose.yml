@@ -18,14 +18,15 @@ services:
           memory: 1024M
     networks:
       - rtdm-network
-    # volumes: ### Если нужно видеть папку на сервере - пробрасываем её здесь (раскомменчиваем)
-      # - /opt/models/osago_fl_automl_v2/:/home/model_user/list_models/ ### Путь на сервере:Путь внутри контейнера
+    volumes:
+      - /opt/models/querulus-registry/models/:/home/model_user/list_models/
     ports:
-      - 10637:8080
+      - "PLACEHOLDER:8080"
     logging:
       driver: loki
       options:
         loki-url: "http://perf-pydsp-master2.vsk.ru:3100/loki/api/v1/push"
+
 networks:
   rtdm-network:
     external: true

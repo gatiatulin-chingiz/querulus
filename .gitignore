@@ -53,12 +53,11 @@ catboost_info/
 mlruns/
 **/mlruns/**
 *.tfevents
-# Содержимое results игнорируем; .gitkeep и startup_check оставляем —
-# Docker COPY results/ в CI; контрольный вектор нужен на старте сервиса.
+# Содержимое results игнорируем; в git только registry-метаданные сервиса.
 **/results/**
 !**/results/.gitkeep
-!**/results/startup_check.json
 !**/results/Other_dicts.json
+!**/results/models.json
 **/prod_models/
 
 # Локальные дампы / черновики / текстовые заметки

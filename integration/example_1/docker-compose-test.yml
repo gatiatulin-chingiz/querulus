@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  kasko-fl-automl-v3:
+    image: repo.vsk.ru:5018/rtdm/kasko-fl-automl-v3:1.0.12
+    environment:
+      - SPRING_PROFILE=test
+    deploy:
+      placement:
+        constraints: [node.labels.type == service]
+      mode: replicated
+      replicas: 6
+      restart_policy:
+        delay: 10s
+        max_attempts: 3
+        window: 60s
+      resources:
+        limits:
+          cpus: '12'
+          memory: 8064M
+    networks:
+      - rtdm-network
+    volumes:
+      - /opt/models/kasko-fl-automl-v2-registry/models/:/home/model_user/list_models/
+    ports:
+      - 10609:8080
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://perf-pydsp-master2.vsk.ru:3100/loki/api/v1/push"
+
+networks:
+  rtdm-network:
+    external: true
+
