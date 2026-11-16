@@ -10,76 +10,66 @@ from pathlib import Path
 INTEGRATION = Path(__file__).resolve().parents[1] / "integration"
 ROOT = INTEGRATION
 OUT_PATH = INTEGRATION / "functions_map.html"
-SKIP = {"__init__.py", "config.py"}
-AMBIGUOUS = {"prepare_matrix", "require_columns", "_round_numbers"}
+SKIP = {"__init__.py", "config.py", "tests.py", "_smoke_make_artifacts.py"}
+SKIP_DIR_PARTS = {"example_1", "example_2", "__pycache__"}
+AMBIGUOUS = {"prepare_matrix", "require_columns", "_round_numbers", "preprocess", "postprocess"}
 
 ENTRIES = [
     "main.predict_route",
+    "main.predict_one_route",
     "main.main_predict",
+    "main.score_track",
+    "main.score_submodel",
     "main.lifespan",
-    "main._startup",
-    "src.predictions.score_main",
-    "src.predictions.score_second",
-    "src.predictions.preload_models",
-    "src.preprocessing.second.preprocess.preprocess_second_vector",
-    "src.preprocessing.common.preprocess_input_vector",
-    "src.preprocessing.common.coerce_and_enrich",
-    "src.preprocessing.common.prepare_vector_upper",
-    "src.preprocessing.second.features.add_second_model_features",
+    "main._watch_registry",
+    "main.load_registry",
     "main.health_route",
+    "results.pipelines.main_pipeline.preprocess",
+    "results.pipelines.main_pipeline.postprocess",
+    "results.pipelines.second_pipeline.preprocess",
+    "results.pipelines.second_pipeline.postprocess",
+    "results.pipelines.shap_comment.shap_top_features_comment",
 ]
 
 # Короткие описания для карты (человеческий язык). Ключ — имя функции.
 HUMAN: dict[str, str] = {
-    "predict_route": "Принимает HTTP-запрос на скоринг и отдаёт ответ",
-    "main_predict": "Считает основной трек и при необходимости второй",
-    "lifespan": "При старте сервиса поднимает модели в память",
-    "_startup": "Пишет лог, грузит модели и гоняет контрольный пример",
-    "health_route": "Отвечает, что сервис жив, и какие версии треков",
-    "score_main": "Полный скоринг основной модели: от входа до ответа",
-    "score_second": "Полный скоринг второй модели в том же формате ответа",
-    "preload_models": "Заранее загружает модели и калибраторы в память",
-    "_load_model_pair": "Достаёт из файла пару моделей классификации и регрессии",
-    "_classification_proba_and_labels": "Считает вероятности и метки 0/1 по порогу",
-    "_raw_classification_scores": "Сырой скор классификации до калибровки",
-    "_round_numbers": "Округляет числа в ответе до двух знаков",
-    "run_classification_model": "Прогоняет классификацию и возвращает метки",
-    "run_regression_model": "Прогоняет регрессию и возвращает суммы",
-    "preprocess_second_vector": "Готовит вход и считает фичи для второй модели",
-    "preprocess_input_vector": "Общий вход main_/second_: UPPER → касты → validate",
-    "coerce_and_enrich": "Приводит типы, даты, форму заявителя и NOT_NOTIFICATION к нужному виду",
-    "prepare_vector_upper": "Собирает таблицу из JSON и поднимает строки в UPPER",
-    "prepare_matrix": "Подгоняет таблицу под то, что ждала модель при обучении",
-    "require_columns": "Проверяет наличие колонок и режет кадр в нужном порядке",
-    "resolve_threshold": "Берёт порог классификации из запроса или из настроек",
-    "df_to_records": "Переводит таблицу в список словарей для JSON",
-    "validate_input_vector": "Проверяет полный входной контракт и preprocess-инварианты",
-    "validate_model_features": "После FE проверяет только engineered-колонки",
-    "validate_preprocessed_vector": "UPPER / дубли колонок / даты после enrich",
-    "_amount_bins": "Режет сумму на три денежных бакета",
-    "validate_derived_dates_strict": "Проверяет, что даты после подготовки выглядят корректно",
-    "validate_no_duplicate_columns": "Запрещает повторяющиеся имена колонок",
-    "add_second_model_features": "Считает дополнительные признаки для второй модели",
-    "_safe_div": "Делит числа и подставляет пустоту при делении на ноль",
-    "add_real_monetary_columns": "Пересчитывает суммы в цены базового года",
-    "deflate_to_base_year": "Убирает инфляцию из денежных сумм по готовому году",
-    "resolve_cpi_year": "Подбирает год, по которому искать индекс цен",
-    "real_feature_name": "Собирает имя колонки для суммы без инфляции",
-    "apply_cf_calibrator": "Isotonic-калибровка вероятностей классификации",
-    "apply_rg_calibrator": "Isotonic-калибровка сумм регрессии (clip ≥ 0)",
-    "shap_top_features_comment": "Короткий текст, какие признаки сильнее всего повлияли",
-    "unwrap_mldataworker_model": "Снимает служебные обёртки вокруг модели",
-    "_catboost_shap_values": "SHAP через CatBoost get_feature_importance",
-    "masked_predictions": "Накладывает бизнес-правила на суммы регрессии",
-    "calibrator_paths": "Пути к файлам калибраторов второго трека",
-    "feature_names_from_model_result": "Читает список признаков из сохранённой модели",
-    "model_pickle_path": "Строит путь к файлу модели",
-    "prod_models_dir": "Папка, где лежат модели и калибраторы",
-    "assert_startup_scores": "Прогоняет контрольный пример при старте сервиса",
-    "_check_result": "Проверяет результат контрольного скоринга",
-    "install_mldataworker_shim": "Подставляет заглушку, если нет настоящего mldataworker",
-    "_alias_models": "Подменяет модуль моделей на outboxml при необходимости",
-    "_ensure_pkg": "Гарантирует, что пакет виден в sys.modules",
+    "predict_route": "Dual-track HTTP: зовёт predict_one для main и second",
+    "predict_one_route": "HTTP скоринг одного stem через main_predict",
+    "main_predict": "Выбирает score_track или score_submodel по submodel",
+    "score_track": "Полный скоринг stem: preprocess → predict → postprocess → SHAP",
+    "score_submodel": "Сырой predict одной clf/rg без postprocess/SHAP",
+    "lifespan": "Старт: load_registry + фоновый watcher models.json",
+    "_watch_registry": "Следит за mtime models.json и атомарно перезагружает registry",
+    "load_registry": "Читает models.json, пайплайны, pickle, калибраторы в Registry",
+    "health_route": "Health + версии/пороги/submodels/loaded_at",
+    "_registry": "Возвращает загруженный Registry или ошибку",
+    "_models_dir": "Резолвит каталог volume и проверяет, что он есть",
+    "_set_registry": "Подставляет новый Registry в cnfg",
+    "_load_pickle": "Грузит объект из pickle",
+    "_load_model_pair": "Достаёт из файла пару clf/rg",
+    "_load_module": "Динамически импортирует .py пайплайна",
+    "_load_pipeline_module": "Грузит pipelines/{name}.py для stem",
+    "_preprocess": "Вызывает preprocess модуля пайплайна stem",
+    "_http_500": "Логирует и отдаёт HTTP 500",
+    "_preds_from_result": "Достаёт список preds из ответа ensemble_predict",
+    "_df_from_result": "Достаёт DataFrame фич из ответа ensemble_predict",
+    "_combine_output_matrices": "Склеивает матрицы clf и rg для output_outboxml",
+    "_round2": "Округляет числа до двух знаков",
+    "_fetch_predict_one": "HTTP-клиент к /api/predict_one",
+    "read_json_object": "Читает непустой JSON-object из файла",
+    "resolve_threshold": "Берёт порог из колонки THRESHOLD или default",
+    "df_to_records": "DataFrame → list[dict] для JSON",
+    "preprocess": "Готовит входной вектор под модель (пайплайн)",
+    "postprocess": "Калибровка/порог/маска IS_LAWYER → proba, labels, regression",
+    "load_ts_country_by_brand": "Словарь бренд → страна из Other_dicts.json",
+    "shap_top_features_comment": "Текст топ-фич по SHAP для CPMComment",
+    "_apply_cf_calibrator": "Isotonic CF на сырых clf-скорах",
+    "_apply_rg_calibrator": "Isotonic RG на сырых rg (clip ≥ 0)",
+    "_masked_predictions": "Маска regression по label и IS_LAWYER",
+    "_add_second_features": "Engineered-фичи второго пайплайна",
+    "resolve_cpi_year": "Год для CPI/deflate",
+    "_safe_div": "Деление с защитой от нуля",
+    "_amount_bins": "Бакеты по сумме",
 }
 
 
@@ -107,6 +97,8 @@ def collect() -> tuple[list[dict], list[dict]]:
 
     for path in sorted(ROOT.rglob("*.py")):
         if path.name in SKIP or "tests" in path.parts:
+            continue
+        if SKIP_DIR_PARTS.intersection(path.parts):
             continue
         rel = path.relative_to(ROOT).as_posix()
         mod = rel[:-3].replace("/", ".")

@@ -5,3 +5,4 @@ pandas>=2.0.0
 numpy>=1.24.0
 loguru>=0.7.0
 catboost
+aiohttp>=3.9

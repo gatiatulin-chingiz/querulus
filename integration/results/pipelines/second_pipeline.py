@@ -1,22 +1,14 @@
-"""Препроцессинг Querulus: legacy / v2 + CPI.
-
-``dict_ts_country`` читается из ``{prod_models_path}/Other_dicts.json``.
-CPI levels зашиты в модуль.
-"""
+"""Second-пайплайн: базовые шаги main + FE/CPI; postprocess с калибровкой."""
 from __future__ import annotations
 
 import json
 import warnings
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from loguru import logger
-
-# ---------------------------------------------------------------------------
-# Константы входа / remap
-# ---------------------------------------------------------------------------
 
 APPLICANT_FORM_REMAP: Dict[str, str] = {
     "СКРЫТЫЙ ЮРИСТ": "ЮРИСТ С ПОТЕРПЕВШИМ",
@@ -91,10 +83,6 @@ ENGINEERED_FEATURES: List[str] = [
     "VICTIM_OBJECT_AGE_MONTHS",
 ]
 
-# ---------------------------------------------------------------------------
-# CPI (зашито; base year 2022)
-# ---------------------------------------------------------------------------
-
 INFLATION_BASE_YEAR: int = 2022
 
 RU_CPI_LEVEL_VS_BASE: Dict[int, float] = {
@@ -125,39 +113,28 @@ SHARE_WORK_BINS: tuple[float, ...] = (0.3, 0.6)
 SHARE_WORK_LABELS: tuple[str, ...] = ("low", "mid", "high")
 AMOUNT_REPAIR_BINS: tuple[float, ...] = (120_000.0, 365_000.0)
 
-
-# ---------------------------------------------------------------------------
-# Loaders
-# ---------------------------------------------------------------------------
-
 # reviewed
-def read_json_object(models_dir: Path, filename: str) -> Dict[str, Any]:
-    """Прочитать непустой JSON-object из ``models_dir / filename``."""
-    path = models_dir / filename
-    if not path.is_file():
-        raise FileNotFoundError(f"Нет {filename}: {path}")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or not payload:
-        raise ValueError(f"Пустой {filename}: {path}")
-    return payload
-
-
 def load_ts_country_by_brand(models_dir: Path) -> Dict[str, str]:
     """Бренд ТС → страна из ``Other_dicts.json`` (ключи и значения UPPER)."""
-    brands_raw = read_json_object(models_dir, "Other_dicts.json").get("dict_ts_country")
+    path = Path(models_dir) / "Other_dicts.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"Нет Other_dicts.json: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not payload:
+        raise ValueError(f"Пустой Other_dicts.json: {path}")
+    brands_raw = payload.get("dict_ts_country")
     if not brands_raw:
-        raise ValueError(f"Нет dict_ts_country в {models_dir / 'Other_dicts.json'}")
-    # UPPER — контракт match с prepare_vector_upper, не «на всякий случай».
+        raise ValueError(f"Нет dict_ts_country в {path}")
     return {k.upper(): v.upper() for k, v in brands_raw.items()}
 
+# reviewed
+def _require_columns(df: pd.DataFrame, columns: List[str], role: str) -> None:
+    missing = [c for c in columns if c not in df.columns]
+    if missing:
+        raise ValueError(f"Нет обязательных колонок для {role}: {missing}")
 
-# ---------------------------------------------------------------------------
-# Common steps
-# ---------------------------------------------------------------------------
-
-
-def prepare_vector_upper(features_values: List[Dict]) -> pd.DataFrame:
-    """Список JSON-объектов → DataFrame: ``""→NaN``, строки → UPPER."""
+# reviewed
+def _prepare_vector_upper(features_values: List[Dict]) -> pd.DataFrame:
     df = pd.DataFrame(features_values)
     for column in df.columns:
         if df[column].dtype == object:
@@ -168,12 +145,11 @@ def prepare_vector_upper(features_values: List[Dict]) -> pd.DataFrame:
             )
     return df
 
-
-def coerce_and_enrich(
+# reviewed
+def _coerce_and_enrich(
     df: pd.DataFrame,
     ts_country_by_brand: Dict[str, str],
 ) -> pd.DataFrame:
-    """Каст dtype + derived-даты + remap формы/флагов + VIC_TS_COUNTRY."""
     out = df.copy()
     for col in DATE_INPUT_COLUMNS:
         if col in out.columns:
@@ -197,8 +173,8 @@ def coerce_and_enrich(
     )
     return out
 
-
-def validate_derived_dates_strict(df: pd.DataFrame) -> None:
+# reviewed
+def _validate_derived_dates_strict(df: pd.DataFrame) -> None:
     if df["EVENT_YEAR"].isna().any():
         raise ValueError("EVENT_DATE пустой")
     if df["APPLY_DELAY"].isna().any():
@@ -206,32 +182,7 @@ def validate_derived_dates_strict(df: pd.DataFrame) -> None:
     if (df["APPLY_DELAY"] < 0).any():
         raise ValueError("EVENT_DATE > PAYMENT_ORDER_DATE_TIME")
 
-
-def require_columns(df: pd.DataFrame, columns: List[str], role: str) -> None:
-    missing = [c for c in columns if c not in df.columns]
-    if missing:
-        raise ValueError(f"Нет обязательных колонок для {role}: {missing}")
-
-
-def resolve_threshold(df: pd.DataFrame, default: float) -> float:
-    if "THRESHOLD" not in df.columns:
-        return default
-    value = pd.to_numeric(df["THRESHOLD"].iloc[0], errors="coerce")
-    if pd.isna(value):
-        return default
-    return float(value)
-
-
-def df_to_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
-    rows = json.loads(df.to_json(orient="records", force_ascii=False))
-    return [{k: row[k] for k in sorted(row.keys())} for row in rows]
-
-
-# ---------------------------------------------------------------------------
-# CPI / FE (v2)
-# ---------------------------------------------------------------------------
-
-
+# reviewed
 def resolve_cpi_year(year: float | int) -> int:
     table = RU_CPI_LEVEL_VS_BASE
     known = sorted(table)
@@ -258,28 +209,15 @@ def resolve_cpi_year(year: float | int) -> int:
     logger.warning("CPI: год {} отсутствует в таблице; ближайший {}", y, nearest)
     return nearest
 
-
-def real_feature_name(column: str) -> str:
+# reviewed
+def _real_feature_name(column: str) -> str:
     return f"FE_{column}_REAL_{INFLATION_BASE_YEAR}"
 
-
-def deflate_to_base_year(amounts: pd.Series, years: pd.Series) -> pd.Series:
-    level = years.map(lambda y: _NORMALIZED_CPI[resolve_cpi_year(y)])
-    return amounts / level
-
-
-def add_real_monetary_columns(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    years = out["PAYMENT_ORDER_YEAR"]
-    for col in MONETARY_COLUMNS_FOR_REAL:
-        out[real_feature_name(col)] = deflate_to_base_year(out[col], years)
-    return out
-
-
+# reviewed
 def _safe_div(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     return numerator / denominator.where(denominator != 0)
 
-
+# reviewed
 def _amount_bins(amount: pd.Series, edges: tuple[float, ...]) -> pd.Series:
     low, high = edges
     labels = [f"<{int(low)}", f"{int(low)}-{int(high)}", f">{int(high)}"]
@@ -292,16 +230,19 @@ def _amount_bins(amount: pd.Series, edges: tuple[float, ...]) -> pd.Series:
     )
     return cut.astype(object).where(cut.notna(), np.nan)
 
-
-def add_v2_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Собрать FE_* / age months для pipeline v2."""
-    out = add_real_monetary_columns(df)
+# reviewed
+def _add_second_features(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    years = out["PAYMENT_ORDER_YEAR"]
+    for col in MONETARY_COLUMNS_FOR_REAL:
+        level = years.map(lambda y: _NORMALIZED_CPI[resolve_cpi_year(y)])
+        out[_real_feature_name(col)] = out[col] / level
 
     if "SHARE_WORK" not in out.columns:
         out["SHARE_WORK"] = _safe_div(out["WORK"], out["VALUE_BEFORE_WITHOUT"])
 
-    value_without_real = out[real_feature_name("VALUE_BEFORE_WITHOUT")]
-    value_with_real = out[real_feature_name("VALUE_BEFORE_WITH")]
+    value_without_real = out[_real_feature_name("VALUE_BEFORE_WITHOUT")]
+    value_with_real = out[_real_feature_name("VALUE_BEFORE_WITH")]
 
     both_ok = (value_without_real > 0) & (value_with_real >= 0)
     both_positive = (value_without_real > 0) & (value_with_real > 0)
@@ -342,41 +283,68 @@ def add_v2_features(df: pd.DataFrame) -> pd.DataFrame:
     out["FE_VALUE_BEFORE_DIFF"] = out["FE_VALUE_BEFORE_DIFF"].clip(lower=0)
     return out
 
-
-# ---------------------------------------------------------------------------
-# Pipelines
-# ---------------------------------------------------------------------------
-
-
-def preprocess_legacy(
-    features_values: List[Dict],
-    ts_country_by_brand: Dict[str, str],
-) -> pd.DataFrame:
-    """Legacy: UPPER → required columns → enrich → даты (без FE/CPI)."""
-    df = prepare_vector_upper(features_values)
-    require_columns(df, INPUT_REQUIRED_COLUMNS, "input")
-    df = coerce_and_enrich(df, ts_country_by_brand)
-    validate_derived_dates_strict(df)
-    return df
-
-
-def preprocess_v2(
-    features_values: List[Dict],
-    ts_country_by_brand: Dict[str, str],
-) -> pd.DataFrame:
-    """v2: legacy-вход + FE/CPI + проверка engineered."""
-    df = preprocess_legacy(features_values, ts_country_by_brand)
-    df = add_v2_features(df)
-    require_columns(df, ENGINEERED_FEATURES, "model")
-    return df
-
-
+# reviewed
 def preprocess(
     features_values: List[Dict],
     ts_country_by_brand: Dict[str, str],
-    kind: str,
 ) -> pd.DataFrame:
-    """Препроцессинг по ``kind`` (legacy | v2)."""
-    if kind == "v2":
-        return preprocess_v2(features_values, ts_country_by_brand)
-    return preprocess_legacy(features_values, ts_country_by_brand)
+    """Базовый вход + FE/CPI + проверка engineered."""
+    df = _prepare_vector_upper(features_values)
+    _require_columns(df, INPUT_REQUIRED_COLUMNS, "input")
+    df = _coerce_and_enrich(df, ts_country_by_brand)
+    _validate_derived_dates_strict(df)
+    df = _add_second_features(df)
+    _require_columns(df, ENGINEERED_FEATURES, "model")
+    return df
+
+# reviewed
+def _apply_cf_calibrator(calibrator: Any, raw_scores: List[float]) -> List[float]:
+    arr = np.asarray(
+        calibrator.predict(np.asarray(raw_scores, dtype=float)), dtype=float
+    )
+    return [float(x) for x in arr.ravel()]
+
+# reviewed
+def _apply_rg_calibrator(calibrator: Any, raw_reg: List[float]) -> List[float]:
+    arr = np.asarray(
+        calibrator.predict(np.asarray(raw_reg, dtype=float)), dtype=float
+    )
+    return [float(max(0.0, x)) for x in arr.ravel()]
+
+# reviewed
+def _masked_predictions(
+    labels: List[float],
+    raw_reg: List[float],
+    df_common: pd.DataFrame,
+) -> List[float]:
+    if "IS_LAWYER" in df_common.columns:
+        is_lawyer = (
+            pd.to_numeric(df_common["IS_LAWYER"], errors="coerce").fillna(0).eq(1)
+        ).tolist()
+    else:
+        is_lawyer = [False] * len(labels)
+    masked: List[float] = []
+    for c, r, lawyer in zip(labels, raw_reg, is_lawyer):
+        if c or lawyer:
+            masked.append(r)
+        else:
+            masked.append(0.0)
+    return masked
+
+# reviewed
+def postprocess(
+    df_pre: pd.DataFrame,
+    raw_clf: List[float],
+    raw_reg: List[float],
+    calibrators: Optional[Tuple[Any, Any]],
+    threshold: float,
+) -> Dict[str, Any]:
+    """Калибровка CF/RG + порог + маска IS_LAWYER."""
+    if not calibrators or calibrators[0] is None or calibrators[1] is None:
+        raise ValueError("second_pipeline требует cf и rg калибраторы")
+    cf_cal, rg_cal = calibrators
+    proba = _apply_cf_calibrator(cf_cal, raw_clf)
+    cal_reg = _apply_rg_calibrator(rg_cal, raw_reg)
+    labels = [1.0 if s >= threshold else 0.0 for s in proba]
+    regression = _masked_predictions(labels, cal_reg, df_pre)
+    return {"proba": proba, "labels": labels, "regression": regression}

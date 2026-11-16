@@ -1,4 +1,4 @@
-"""Тесты flat-сервиса: preprocess по stem, маска, CPI, dual-track smoke.
+"""Тесты flat-сервиса: пайплайны из volume, маска, CPI, dual-track smoke.
 
 Запуск: ``python tests.py`` из ``integration/``.
 Артефакты: ``./results`` или ``INTEGRATION_TEST_RESULTS_DIR``.
@@ -17,22 +17,26 @@ _INTEGRATION = Path(__file__).resolve().parent
 if str(_INTEGRATION) not in sys.path:
     sys.path.insert(0, str(_INTEGRATION))
 
-from preprocessing import (  # noqa: E402
-    RU_CPI_LEVEL_VS_BASE,
-    load_ts_country_by_brand,
-    prepare_vector_upper,
-    preprocess,
-    preprocess_legacy,
-    preprocess_v2,
-    resolve_cpi_year,
+from main import (  # noqa: E402
+    _load_module,
+    cnfg,
+    load_registry,
+    score_track,
 )
-
-from main import cnfg, load_registry, masked_predictions, score_track  # noqa: E402
 
 
 def _results_dir() -> Path:
     raw = os.environ.get("INTEGRATION_TEST_RESULTS_DIR", "").strip()
     return Path(raw) if raw else _INTEGRATION / "results"
+
+
+def _pipelines_dir() -> Path:
+    return _results_dir() / "pipelines"
+
+
+def _load_pipeline(name: str):
+    path = _pipelines_dir() / f"{name}.py"
+    return _load_module(path, f"test_pipeline_{name}")
 
 
 def _base_vector(**overrides) -> list[dict]:
@@ -79,54 +83,58 @@ def _base_vector(**overrides) -> list[dict]:
 
 
 class TestCpi(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.second = _load_pipeline("second_pipeline")
+
     def test_exact_year(self):
-        self.assertEqual(resolve_cpi_year(2022), 2022)
+        self.assertEqual(self.second.resolve_cpi_year(2022), 2022)
 
     def test_future_year_uses_max(self):
-        max_y = max(RU_CPI_LEVEL_VS_BASE)
-        self.assertEqual(resolve_cpi_year(max_y + 5), max_y)
+        max_y = max(self.second.RU_CPI_LEVEL_VS_BASE)
+        self.assertEqual(self.second.resolve_cpi_year(max_y + 5), max_y)
 
     def test_past_year_uses_min(self):
-        min_y = min(RU_CPI_LEVEL_VS_BASE)
-        self.assertEqual(resolve_cpi_year(min_y - 3), min_y)
+        min_y = min(self.second.RU_CPI_LEVEL_VS_BASE)
+        self.assertEqual(self.second.resolve_cpi_year(min_y - 3), min_y)
 
 
 class TestPreprocess(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.brands = load_ts_country_by_brand(_results_dir())
+        cls.main = _load_pipeline("main_pipeline")
+        cls.second = _load_pipeline("second_pipeline")
+        cls.brands = cls.main.load_ts_country_by_brand(_results_dir())
 
     def test_empty_string_to_nan(self):
-        df = prepare_vector_upper(_base_vector())
+        df = self.main._prepare_vector_upper(_base_vector())
         self.assertTrue(pd.isna(df["EMPTY_COL"].iloc[0]))
 
-    def test_legacy_no_fe_real(self):
-        df = preprocess_legacy(_base_vector(), self.brands)
+    def test_main_no_fe_real(self):
+        df = self.main.preprocess(_base_vector(), self.brands)
         self.assertNotIn("FE_VALUE_BEFORE_WITH_REAL_2022", df.columns)
         self.assertIn("VIC_TS_COUNTRY", df.columns)
 
-    def test_v2_has_fe(self):
-        df = preprocess_v2(_base_vector(), self.brands)
+    def test_second_has_fe(self):
+        df = self.second.preprocess(_base_vector(), self.brands)
         self.assertIn("FE_VALUE_BEFORE_WITH_REAL_2022", df.columns)
         self.assertIn("FE_SHARE_WORK_TIER", df.columns)
 
-    def test_preprocess_routes_by_kind(self):
-        df_l = preprocess(_base_vector(), self.brands, "legacy")
-        df_v = preprocess(_base_vector(), self.brands, "v2")
-        self.assertNotIn("FE_VALUE_BEFORE_WITH_REAL_2022", df_l.columns)
-        self.assertIn("FE_VALUE_BEFORE_WITH_REAL_2022", df_v.columns)
-
 
 class TestMaskAndCal(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.main = _load_pipeline("main_pipeline")
+
     def test_mask_zeros_when_not_lawyer(self):
         df = pd.DataFrame({"IS_LAWYER": [0, 1]})
-        out = masked_predictions([0.0, 0.0], [10.0, 20.0], df)
-        self.assertEqual(out, [0.0, 20.0])
+        out = self.main.postprocess(df, [0.0, 0.0], [10.0, 20.0], None, 0.5)
+        self.assertEqual(out["regression"], [0.0, 20.0])
 
     def test_mask_keeps_class_one(self):
         df = pd.DataFrame({"IS_LAWYER": [0]})
-        out = masked_predictions([1.0], [15.0], df)
-        self.assertEqual(out, [15.0])
+        out = self.main.postprocess(df, [1.0], [15.0], None, 0.5)
+        self.assertEqual(out["regression"], [15.0])
 
 
 class TestDualTrackSmoke(unittest.TestCase):
@@ -137,25 +145,32 @@ class TestDualTrackSmoke(unittest.TestCase):
         try:
             cnfg.registry = load_registry(_results_dir())
         except FileNotFoundError as exc:
-            raise unittest.SkipTest(f"нет pickle из models.json: {exc}")
+            raise unittest.SkipTest(f"нет pickle/models.json: {exc}")
         cls.registry = cnfg.registry
 
-    def _first_stem(self, kind: str) -> str:
-        return next(s for s, k in self.registry.pipelines.items() if k == kind)
+    def _first_stem(self, pipeline_name: str) -> str:
+        return next(
+            s for s, name in self.registry.pipelines.items() if name == pipeline_name
+        )
 
     def test_models_json_loaded(self):
-        legacy = "querulus_ansamble_2026_04_18_v1"
-        v2 = "UU_querulus_2026_11_05_12_44_24"
+        main_stem = "querulus_ansamble_2026_04_18_v1"
+        second_stem = "UU_querulus_2026_11_05_12_44_24"
         r = self.registry
-        self.assertEqual(r.pipelines, {legacy: "legacy", v2: "v2"})
-        self.assertEqual(r.thresholds, {legacy: 0.6, v2: 0.37})
-        self.assertEqual(r.versions, {legacy: "1.4.0", v2: "2.0.0"})
-        self.assertEqual(set(r.models), {legacy, v2})
-        self.assertEqual(set(r.calibrators), {v2})
+        self.assertEqual(
+            r.pipelines,
+            {main_stem: "main_pipeline", second_stem: "second_pipeline"},
+        )
+        self.assertEqual(r.thresholds, {main_stem: 0.6, second_stem: 0.37})
+        self.assertEqual(r.versions, {main_stem: "1.4.0", second_stem: "2.0.0"})
+        self.assertEqual(set(r.models), {main_stem, second_stem})
+        self.assertEqual(set(r.calibrators), {second_stem})
+        self.assertIn(main_stem, r.ts_country_by_brand)
+        self.assertIn(second_stem, r.ts_country_by_brand)
 
-    def test_score_legacy(self):
-        stem = self._first_stem("legacy")
-        resp = asyncio.run(score_track(stem, _base_vector()))
+    def test_score_main(self):
+        stem = self._first_stem("main_pipeline")
+        resp = asyncio.run(score_track(self.registry, stem, _base_vector()))
         self.assertEqual(resp["usage_model"], stem)
         self.assertIn("input_raw", resp["df"])
         self.assertIn("output_preprocessed", resp["df"])
@@ -164,9 +179,9 @@ class TestDualTrackSmoke(unittest.TestCase):
         self.assertIn("CPMComment", resp)
         self.assertIn("classification_proba", resp["result"])
 
-    def test_score_v2(self):
-        stem = self._first_stem("v2")
-        resp = asyncio.run(score_track(stem, _base_vector()))
+    def test_score_second(self):
+        stem = self._first_stem("second_pipeline")
+        resp = asyncio.run(score_track(self.registry, stem, _base_vector()))
         self.assertEqual(resp["usage_model"], stem)
         self.assertEqual(resp["version"], self.registry.versions[stem])
         self.assertIn("output_outboxml", resp["df"])

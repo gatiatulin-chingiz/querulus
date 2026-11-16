@@ -15,7 +15,6 @@ RUN chown -R model_user:model_user /home/model_user
 USER model_user
 
 COPY --chown=model_user:model_user main.py /home/model_user/model/main.py
-COPY --chown=model_user:model_user preprocessing.py /home/model_user/model/preprocessing.py
 COPY --chown=model_user:model_user make_service.sh /home/model_user/model/make_service.sh
 
 RUN chmod +x /home/model_user/model/make_service.sh

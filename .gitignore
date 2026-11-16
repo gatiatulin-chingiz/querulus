@@ -58,7 +58,15 @@ mlruns/
 !**/results/.gitkeep
 !**/results/Other_dicts.json
 !**/results/models.json
+!**/results/pipelines/
+!**/results/pipelines/*.py
+!**/results/.gitlab-ci.yml
 **/prod_models/
+
+# Локальный Docker / smoke (не в git)
+**/Dockerfile.local
+**/docker-compose.local.yml
+**/_smoke_make_artifacts.py
 
 # Локальные дампы / черновики / текстовые заметки
 *.txt
