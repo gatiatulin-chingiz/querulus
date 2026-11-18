@@ -1,8 +1,8 @@
 version: '3.8'
 
 services:
-  querulus:
-    image: repo.vsk.ru:5018/rtdm/querulus:2.0.0
+  querulus_2_0_0:
+    image: repo.vsk.ru:5018/rtdm/querulus_2_0_0:1.0.0
     deploy:
       placement:
         constraints: [node.labels.type == service]
@@ -21,7 +21,7 @@ services:
     volumes:
       - /opt/models/querulus-registry/:/home/model_user/list_models/
     ports:
-      - "PLACEHOLDER:8080"
+      - "10655:8080"
     logging:
       driver: loki
       options:

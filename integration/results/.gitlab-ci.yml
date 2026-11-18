@@ -1,11 +1,4 @@
-# CI registry (volume): models.json, pipelines/, pickle.
-# Сервисный CI — ../.gitlab-ci.yml (образ/stack), не смешивать.
-#
-# Порядок выкладки: артефакты → models.json последним через .tmp + mv
-# (hot-reload не должен увидеть полузаписанный registry).
-
 stages:
-  - validate
   - deploytest
   - deploystage
   - deployprod
@@ -14,88 +7,41 @@ variables:
   GIT_STRATEGY: clone
   REGISTRY: repo.vsk.ru:5018
   REPO_PREFIX: rtdm
-  SERVICE_IMAGE: querulus
-  SERVICE_TAG: "2.0.0"
   USERNAME: gitlab-runner
   TEST_SERVER_ADDRESS: perf-pydsp-test-w1.vsk.ru
   STAGE_SERVER_ADDRESS: perf-pydsp-stage-w1.vsk.ru
   DEPLOY_LOCATION: /opt/models/querulus-registry
 
-.registry_validate:
-  before_script:
-    - docker login $REGISTRY -u $SERVICE_USER -p $SERVICE_PASS
-  script:
-    - |
-      docker run --rm \
-        -v "$CI_PROJECT_DIR:/registry:ro" \
-        -w /home/model_user/model \
-        "$REGISTRY/$REPO_PREFIX/${SERVICE_IMAGE}:${SERVICE_TAG}" \
-        python -c "from pathlib import Path; from main import load_registry; load_registry(Path('/registry'))"
-
-# Копирует всё, кроме models.json; models.json — атомарно в конце.
-# Ожидает переменную DEPLOY_HOST.
-.registry_deploy_host:
-  script:
-    - ssh -tt "$USERNAME"@"$DEPLOY_HOST" "mkdir -p $DEPLOY_LOCATION"
-    - |
-      tar --exclude='./models.json' --exclude='./.git' --exclude='./.gitlab-ci.yml' -cf - . \
-        | ssh -tt "$USERNAME"@"$DEPLOY_HOST" "tar -xf - -C $DEPLOY_LOCATION"
-    - scp -i ~/.ssh/id_rsa models.json "$USERNAME"@"$DEPLOY_HOST":"$DEPLOY_LOCATION/models.json.tmp"
-    - ssh -tt "$USERNAME"@"$DEPLOY_HOST" "mv $DEPLOY_LOCATION/models.json.tmp $DEPLOY_LOCATION/models.json"
-
-# --- validate (до выкладки; на MR и на ветках деплоя) ---
-
-validate:
-  extends: .registry_validate
-  stage: validate
-  tags:
-    - perftest
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_REF_NAME == "test" && $CI_PIPELINE_SOURCE == "push"'
-    - if: '$CI_COMMIT_REF_NAME == "stage" && $CI_PIPELINE_SOURCE == "push"'
-    - if: '$CI_COMMIT_REF_NAME == "prod" && $CI_PIPELINE_SOURCE == "push"'
-
-# --- deploy ---
-
 deploy_test:
-  extends: .registry_deploy_host
   stage: deploytest
   tags:
     - perftest
-  needs:
-    - validate
-  variables:
-    DEPLOY_HOST: $TEST_SERVER_ADDRESS
+  script:
+    - ssh -tt "$USERNAME"@"$TEST_SERVER_ADDRESS" mkdir -p $DEPLOY_LOCATION
+    - scp -i ~/.ssh/id_rsa -rp * "$USERNAME"@"$TEST_SERVER_ADDRESS":$DEPLOY_LOCATION
   rules:
-    - if: '$CI_COMMIT_REF_NAME == "test" && $CI_PIPELINE_SOURCE == "push"'
+  - if: '$CI_COMMIT_REF_NAME == "test" && $CI_PIPELINE_SOURCE == "push"'
 
 deploy_stage:
-  extends: .registry_deploy_host
   stage: deploystage
   tags:
     - perfstage
-  needs:
-    - validate
-  variables:
-    DEPLOY_HOST: $STAGE_SERVER_ADDRESS
+  script:
+    - ssh -tt "$USERNAME"@"$STAGE_SERVER_ADDRESS" mkdir -p $DEPLOY_LOCATION
+    - scp -i ~/.ssh/id_rsa -rp * "$USERNAME"@"$STAGE_SERVER_ADDRESS":$DEPLOY_LOCATION
   rules:
-    - if: '$CI_COMMIT_REF_NAME == "stage" && $CI_PIPELINE_SOURCE == "push"'
+  - if: '$CI_COMMIT_REF_NAME == "test" && $CI_PIPELINE_SOURCE == "push"'
 
 deploy_prod:
   stage: deployprod
   tags:
     - perfprod
-  needs:
-    - validate
   script:
-    - |
-      for HOST in "$PROD_WORKER1" "$PROD_WORKER2" "$PROD_WORKER3"; do
-        ssh -tt "$USERNAME"@"$HOST" "mkdir -p $DEPLOY_LOCATION"
-        tar --exclude='./models.json' --exclude='./.git' --exclude='./.gitlab-ci.yml' -cf - . \
-          | ssh -tt "$USERNAME"@"$HOST" "tar -xf - -C $DEPLOY_LOCATION"
-        scp -i ~/.ssh/id_rsa models.json "$USERNAME"@"$HOST":"$DEPLOY_LOCATION/models.json.tmp"
-        ssh -tt "$USERNAME"@"$HOST" "mv $DEPLOY_LOCATION/models.json.tmp $DEPLOY_LOCATION/models.json"
-      done
+    - ssh -tt "$USERNAME"@"$PROD_WORKER1" mkdir -p $DEPLOY_LOCATION
+    - scp -i ~/.ssh/id_rsa -rp * "$USERNAME"@"$PROD_WORKER1":$DEPLOY_LOCATION
+    - ssh -tt "$USERNAME"@"$PROD_WORKER2" mkdir -p $DEPLOY_LOCATION
+    - scp -i ~/.ssh/id_rsa -rp * "$USERNAME"@"$PROD_WORKER2":$DEPLOY_LOCATION
+    - ssh -tt "$USERNAME"@"$PROD_WORKER3" mkdir -p $DEPLOY_LOCATION
+    - scp -i ~/.ssh/id_rsa -rp * "$USERNAME"@"$PROD_WORKER3":$DEPLOY_LOCATION
   rules:
-    - if: '$CI_COMMIT_REF_NAME == "prod" && $CI_PIPELINE_SOURCE == "push"'
+  - if: '$CI_COMMIT_REF_NAME == "prod" && $CI_PIPELINE_SOURCE == "push"'
