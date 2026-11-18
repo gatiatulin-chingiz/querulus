@@ -1,6 +1,5 @@
 stages:
   - deploytest
-  - deploystage
   - deployprod
 
 variables:
@@ -9,7 +8,6 @@ variables:
   REPO_PREFIX: rtdm
   USERNAME: gitlab-runner
   TEST_SERVER_ADDRESS: perf-pydsp-test-w1.vsk.ru
-  STAGE_SERVER_ADDRESS: perf-pydsp-stage-w1.vsk.ru
   DEPLOY_LOCATION: /opt/models/querulus-registry
 
 deploy_test:
@@ -19,16 +17,6 @@ deploy_test:
   script:
     - ssh -tt "$USERNAME"@"$TEST_SERVER_ADDRESS" mkdir -p $DEPLOY_LOCATION
     - scp -i ~/.ssh/id_rsa -rp * "$USERNAME"@"$TEST_SERVER_ADDRESS":$DEPLOY_LOCATION
-  rules:
-  - if: '$CI_COMMIT_REF_NAME == "test" && $CI_PIPELINE_SOURCE == "push"'
-
-deploy_stage:
-  stage: deploystage
-  tags:
-    - perfstage
-  script:
-    - ssh -tt "$USERNAME"@"$STAGE_SERVER_ADDRESS" mkdir -p $DEPLOY_LOCATION
-    - scp -i ~/.ssh/id_rsa -rp * "$USERNAME"@"$STAGE_SERVER_ADDRESS":$DEPLOY_LOCATION
   rules:
   - if: '$CI_COMMIT_REF_NAME == "test" && $CI_PIPELINE_SOURCE == "push"'
 
