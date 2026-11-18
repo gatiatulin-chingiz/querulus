@@ -29,6 +29,33 @@ from pydantic import BaseModel, Field
 from outboxml.core.predict import ensemble_predict
 from outboxml.core.pydantic_models import ModelConfig, ServiceRequest
 
+# Prod pickle часто сериализованы как mldataworker.*; в образе пакет — outboxml.
+import sys
+
+import outboxml
+import outboxml.core
+import outboxml.core.predict
+import outboxml.core.pydantic_models
+
+sys.modules.setdefault("mldataworker", outboxml)
+sys.modules.setdefault("mldataworker.core", outboxml.core)
+sys.modules.setdefault("mldataworker.core.predict", outboxml.core.predict)
+sys.modules.setdefault(
+    "mldataworker.core.pydantic_models", outboxml.core.pydantic_models
+)
+try:
+    import outboxml.core.utils as _outboxml_utils
+
+    sys.modules.setdefault("mldataworker.core.utils", _outboxml_utils)
+except ImportError:
+    pass
+try:
+    import outboxml.models as _outboxml_models
+
+    sys.modules.setdefault("mldataworker.models", _outboxml_models)
+except ImportError:
+    pass
+
 MODELS_JSON = "models.json"
 PIPELINES_DIR = "pipelines"
 SHAP_MODULE = "shap_comment"
