@@ -19,7 +19,7 @@ services:
     networks:
       - rtdm-network
     volumes:
-      - /opt/models/querulus-registry/models/:/home/model_user/list_models/
+      - /opt/models/querulus-registry/:/home/model_user/list_models/
     ports:
       - "PLACEHOLDER:8080"
     logging:

@@ -19,7 +19,7 @@ variables:
   USERNAME: gitlab-runner
   TEST_SERVER_ADDRESS: perf-pydsp-test-w1.vsk.ru
   STAGE_SERVER_ADDRESS: perf-pydsp-stage-w1.vsk.ru
-  DEPLOY_LOCATION: /opt/models/querulus-registry/models
+  DEPLOY_LOCATION: /opt/models/querulus-registry
 
 .registry_validate:
   before_script:
