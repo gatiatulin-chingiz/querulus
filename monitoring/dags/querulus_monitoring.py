@@ -4,7 +4,7 @@ Deploy:
   1) this file → Airflow dags folder (e.g. dags/BUU_projects/ or custom dags)
   2) ../pipeline → path available to workers (PIPELINE_DIR)
 
-Schedule: every day 10:00. Metrics always; email alert only Monday 10:00
+Schedule: every day 09:00. Metrics always; email alert only Monday 09:00
 (after metrics), ShortCircuit on weekday.
 
 Env (secrets via Airflow Connections / Variables / pod env, not in code):
@@ -58,8 +58,8 @@ default_args = {
 with DAG(
     dag_id="querulus_monitoring",
     default_args=default_args,
-    description="Querulus errors + datadrift + fin_effect → MSSQL; weekly email Mon 10:00",
-    schedule="0 10 * * *",
+    description="Querulus errors + datadrift + fin_effect → MSSQL; weekly email Mon 09:00",
+    schedule="0 9 * * *",
     start_date=datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,
