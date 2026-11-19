@@ -6,4 +6,5 @@ pyarrow>=14.0,<20
 # OutBoxML: в monorepo — PYTHONPATH на корень репо; в контуре VSK — pip из внутреннего индекса
 # outboxml>=0.10.1
 loguru>=0.7,<1
+pretty_html_table>=0.1,<1
 scikit-learn>=1.3,<2
