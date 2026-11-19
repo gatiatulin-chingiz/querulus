@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "MSSQL Motor.agrafana. Модель — main+second из логов (Oracle→Querulus_errors). Main — multi-select stem с slot=main для финэффекта/gap. Import JSON.",
+  "description": "MSSQL Motor.agrafana. Один фильтр Модель (multi): main_* и second_* из логов. Финэффект/gap только для stem в слоте main. Import JSON.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -21,7 +21,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "**Модель** — ошибки и датадрифт (main + second из логов)  \n**Main** — финэффект и gap (можно несколько stem, что были в main)  \n**Трек (cf|rg)** — только датадрифт  \n**Филиал** — доля потока + gap"
+        "content": "**Модель** — весь дашборд (multi: main_* и second_*)  \n**Трек (cf|rg)** — только датадрифт  \n**Филиал** — доля потока + gap  \nФинэффект считается только для stem в слоте main (second в списке есть, на графиках финэффекта пусто)"
       },
       "transparent": true
     },
@@ -295,7 +295,7 @@
     },
     {
       "type": "row",
-      "title": "3. Финэффект  ·  фильтр: Main  ·  «Доля потока» ещё Филиал",
+      "title": "3. Финэффект  ·  фильтр: Модель  ·  «Доля потока» ещё Филиал",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -324,7 +324,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(itt) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(itt) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -349,7 +349,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) + N' | ' + filial AS metric,\n  CAST(AVG(coverage) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial <> N'(все)'\n  AND (\n    '${filial}' = '__all__'\n    OR filial = '${filial}'\n  )\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem) + N' | ' + filial\nORDER BY 1",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) + N' | ' + filial AS metric,\n  CAST(AVG(coverage) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND filial <> N'(все)'\n  AND (\n    '${filial}' = '__all__'\n    OR filial = '${filial}'\n  )\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem) + N' | ' + filial\nORDER BY 1",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -374,7 +374,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_window_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_window_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -399,7 +399,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_pilot_current_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_pilot_current_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -424,7 +424,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_pilot_full_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_pilot_full_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -449,7 +449,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_network_current_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_network_current_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -474,7 +474,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_network_full_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_network_full_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -499,7 +499,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_network_full_compliance_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_network_full_compliance_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -523,7 +523,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT TOP 100 week_start AS [неделя],\n  model_label AS [модель],\n  n_incidents AS [убытков],\n  n_model AS [в model],\n  ROUND(CAST(itt AS FLOAT), 2) AS [эффект на 1 убыток],\n  ROUND(CAST(coverage AS FLOAT), 4) AS [доля в model],\n  ROUND(CAST(annual_window_yult AS FLOAT), 0) AS [эффект за период (50/50)],\n  ROUND(CAST(annual_pilot_current_yult AS FLOAT), 0) AS [год пилот 50/50],\n  ROUND(CAST(annual_pilot_full_yult AS FLOAT), 0) AS [год пилот (100%)],\n  ROUND(CAST(annual_network_current_yult AS FLOAT), 0) AS [год все филиалы (50/50)],\n  ROUND(CAST(annual_network_full_yult AS FLOAT), 0) AS [год все филиалы (100%)],\n  ROUND(CAST(annual_network_full_compliance_yult AS FLOAT), 0) AS [год без участия людей],\n  formula_version AS [версия формулы]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nORDER BY week_start DESC, stem",
+          "rawSql": "SELECT TOP 100 week_start AS [неделя],\n  model_label AS [модель],\n  n_incidents AS [убытков],\n  n_model AS [в model],\n  ROUND(CAST(itt AS FLOAT), 2) AS [эффект на 1 убыток],\n  ROUND(CAST(coverage AS FLOAT), 4) AS [доля в model],\n  ROUND(CAST(annual_window_yult AS FLOAT), 0) AS [эффект за период (50/50)],\n  ROUND(CAST(annual_pilot_current_yult AS FLOAT), 0) AS [год пилот 50/50],\n  ROUND(CAST(annual_pilot_full_yult AS FLOAT), 0) AS [год пилот (100%)],\n  ROUND(CAST(annual_network_current_yult AS FLOAT), 0) AS [год все филиалы (50/50)],\n  ROUND(CAST(annual_network_full_yult AS FLOAT), 0) AS [год все филиалы (100%)],\n  ROUND(CAST(annual_network_full_compliance_yult AS FLOAT), 0) AS [год без участия людей],\n  formula_version AS [версия формулы]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND filial = N'(все)'\nORDER BY week_start DESC, stem",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -532,7 +532,7 @@
     },
     {
       "type": "row",
-      "title": "4. Gap долей за весь период  ·  Main + Филиал",
+      "title": "4. Gap долей за весь период  ·  Модель + Филиал",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -561,7 +561,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT\n  ROUND(CAST(AVG(agreement_share_lift_pp) AS FLOAT), 1) AS [Соглашения],\n  ROUND(CAST(AVG(pretension_share_lift_pp) AS FLOAT), 1) AS [Претензии],\n  ROUND(CAST(AVG(fu_share_lift_pp) AS FLOAT), 1) AS [ФУ],\n  ROUND(CAST(AVG(court_share_lift_pp) AS FLOAT), 1) AS [Суд]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND (\n    ('${filial}' = '__all__' AND filial = N'(все)')\n    OR ('${filial}' <> '__all__' AND filial = '${filial}')\n  )",
+          "rawSql": "SELECT\n  ROUND(CAST(AVG(agreement_share_lift_pp) AS FLOAT), 1) AS [Соглашения],\n  ROUND(CAST(AVG(pretension_share_lift_pp) AS FLOAT), 1) AS [Претензии],\n  ROUND(CAST(AVG(fu_share_lift_pp) AS FLOAT), 1) AS [ФУ],\n  ROUND(CAST(AVG(court_share_lift_pp) AS FLOAT), 1) AS [Суд]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND (\n    ('${filial}' = '__all__' AND filial = N'(все)')\n    OR ('${filial}' <> '__all__' AND filial = '${filial}')\n  )",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -729,7 +729,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT\n  filial AS [filial],\n  ROUND(CAST(agr_control_pct AS FLOAT), 1) AS [agr control %],\n  ROUND(CAST(agr_model_pct AS FLOAT), 1) AS [agr model %],\n  ROUND(CAST(gap_pp AS FLOAT), 1) AS [gap п.п.]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND gap_pp IS NOT NULL\n  AND filial <> N'(все)'\n  AND (\n    '${filial}' = '__all__'\n    OR filial = '${filial}'\n  )\nORDER BY gap_pp DESC, filial",
+          "rawSql": "SELECT\n  filial AS [filial],\n  ROUND(CAST(agr_control_pct AS FLOAT), 1) AS [agr control %],\n  ROUND(CAST(agr_model_pct AS FLOAT), 1) AS [agr model %],\n  ROUND(CAST(gap_pp AS FLOAT), 1) AS [gap п.п.]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND gap_pp IS NOT NULL\n  AND filial <> N'(все)'\n  AND (\n    '${filial}' = '__all__'\n    OR filial = '${filial}'\n  )\nORDER BY gap_pp DESC, filial",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -751,7 +751,7 @@
           "type": "mssql",
           "uid": "querulus_mssql"
         },
-        "query": "SELECT DISTINCT COALESCE(NULLIF(model_label, ''), stem) AS __text, stem AS __value FROM [agrafana].[Querulus_errors] ORDER BY 1",
+        "query": "SELECT DISTINCT COALESCE(NULLIF(model_label, ''), stem) AS __text, stem AS __value FROM (\n  SELECT model_label, stem FROM [agrafana].[Querulus_errors]\n  UNION\n  SELECT model_label, stem FROM [agrafana].[Querulus_FinEffect]\n) t ORDER BY 1",
         "includeAll": true,
         "multi": true,
         "refresh": 2,
@@ -761,27 +761,7 @@
           "value": "$__all",
           "selected": true
         },
-        "description": "Ошибки + датадрифт: stem из логов (Oracle main/second)"
-      },
-      {
-        "name": "main",
-        "label": "Main",
-        "type": "query",
-        "datasource": {
-          "type": "mssql",
-          "uid": "querulus_mssql"
-        },
-        "query": "SELECT DISTINCT COALESCE(NULLIF(model_label, ''), stem) AS __text, stem AS __value FROM [agrafana].[Querulus_FinEffect] WHERE slot = N'main' ORDER BY 1",
-        "includeAll": true,
-        "multi": true,
-        "refresh": 2,
-        "sort": 1,
-        "current": {
-          "text": "Все",
-          "value": "$__all",
-          "selected": true
-        },
-        "description": "Финэффект/gap: несколько stem, которые были в слоте main"
+        "description": "Все секции: multi-select stem (main_* и second_* из логов)"
       },
       {
         "name": "track",
@@ -831,7 +811,7 @@
         },
         "refresh": 2,
         "sort": 1,
-        "description": "Доля потока + gap (финэффект только main)"
+        "description": "Доля потока + gap"
       }
     ]
   },
@@ -843,5 +823,5 @@
   "timezone": "browser",
   "title": "Мониторинг Querulus",
   "uid": "querulus_monitoring",
-  "version": 10
+  "version": 11
 }
