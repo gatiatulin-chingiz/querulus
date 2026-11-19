@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import TypeVar
 
 import pandas as pd
-import pymssql
 
 from querulus.dataset import config
 from querulus.dataset.paths import DataPaths
@@ -22,9 +21,9 @@ class LazyOisuuConnection:
     """Подключение к OISUU по требованию (без кредов, если SQL не нужен)."""
 
     def __init__(self) -> None:
-        self._conn: pymssql.Connection | None = None
+        self._conn: object | None = None
 
-    def get(self) -> pymssql.Connection:
+    def get(self):
         if self._conn is None:
             self._conn = connect_oisuu()
         return self._conn
@@ -174,8 +173,10 @@ def load_sql_artifact(
     return df
 
 
-def connect_oisuu() -> pymssql.Connection:
-    """Подключение к OISUU через pymssql."""
+def connect_oisuu():
+    """Подключение к OISUU через pymssql (ленивый import — monitoring без SQL)."""
+    import pymssql
+
     return pymssql.connect(
         server=config.oisuu_db_server,
         user=config.oisuu_db_user,

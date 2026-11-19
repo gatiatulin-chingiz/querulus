@@ -2157,6 +2157,7 @@ def _seasonal_scaling(
         raise ValueError("Сезонная экспозиция равна нулю")
 
     n_observed = len(current)
+    n_model_obs = int(current["_group"].eq("model").sum())
     share_model = float(current["_group"].eq("model").mean())
     n_pilot_eligible_year = n_observed / seasonal_exposure
     n_model_year_current = share_model * n_pilot_eligible_year
@@ -2215,9 +2216,12 @@ def _seasonal_scaling(
     for horizon in ("ult",):
         effect = float(effect_map[horizon])
         effect_100 = float(compliance_map[horizon])
-        scale_full = n_model_year_full * network_multiplier
-        scale_pilot_full = n_model_year_full
+        # Экономия от назначения в model: ITT × число model-кейсов (не N_obs).
+        scale_window = float(n_model_obs)
         scale_pilot_current = n_model_year_current
+        scale_pilot_full = n_model_year_full
+        scale_network_current = n_model_year_current * network_multiplier
+        scale_network_full = n_model_year_full * network_multiplier
         ci_low = float(ci_low_map.get(horizon, np.nan))
         ci_high = float(ci_high_map.get(horizon, np.nan))
         annual_rows.append(
@@ -2226,25 +2230,31 @@ def _seasonal_scaling(
                 "effect_per_case": effect,
                 "effect_100_compliance": effect_100,
                 "seasonal_exposure": seasonal_exposure,
+                "N_obs": float(n_observed),
+                "N_model_obs": float(n_model_obs),
+                "share_model": share_model,
                 "N_pilot_eligible_year": n_pilot_eligible_year,
                 "N_pilot_model_year_current": n_model_year_current,
                 "N_pilot_model_year_full": n_model_year_full,
                 "volume_ratio_nonpilot": volume_ratio,
                 "risk_ratio_nonpilot": risk_ratio,
                 "network_multiplier": network_multiplier,
-                "annual_window": effect * n_observed,
-                "annual_window_ci_low": ci_low * n_observed,
-                "annual_window_ci_high": ci_high * n_observed,
+                "annual_window": effect * scale_window,
+                "annual_window_ci_low": ci_low * scale_window,
+                "annual_window_ci_high": ci_high * scale_window,
                 "annual_pilot_current": effect * scale_pilot_current,
                 "annual_pilot_full": effect * scale_pilot_full,
                 "annual_pilot_full_ci_low": ci_low * scale_pilot_full,
                 "annual_pilot_full_ci_high": ci_high * scale_pilot_full,
                 "effect_per_case_nonpilot": effect * risk_ratio,
-                "annual_network_full": effect * scale_full,
-                "annual_network_full_ci_low": ci_low * scale_full,
-                "annual_network_full_ci_high": ci_high * scale_full,
+                "annual_network_current": effect * scale_network_current,
+                "annual_network_current_ci_low": ci_low * scale_network_current,
+                "annual_network_current_ci_high": ci_high * scale_network_current,
+                "annual_network_full": effect * scale_network_full,
+                "annual_network_full_ci_low": ci_low * scale_network_full,
+                "annual_network_full_ci_high": ci_high * scale_network_full,
                 "annual_network_full_compliance": (
-                    effect_100 * scale_full
+                    effect_100 * scale_network_full
                 ),
             }
         )

@@ -1,7 +1,7 @@
 """Лог снимков финэффекта и понедельный ряд с декомпозицией дельт."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -44,21 +44,137 @@ SNAPSHOT_COLUMNS = [
     "yult_ci_low",
     "yult_ci_high",
     "yult_unstratified",
+    "annual_window_yult",
+    "annual_pilot_current_yult",
     "annual_pilot_full_yult",
     "annual_pilot_full_yult_ci_low",
     "annual_pilot_full_yult_ci_high",
+    "annual_network_current_yult",
+    "annual_network_current_yult_ci_low",
+    "annual_network_current_yult_ci_high",
     "annual_network_full_yult",
     "annual_network_full_yult_ci_low",
     "annual_network_full_yult_ci_high",
+    "annual_network_full_compliance_yult",
+    "agreement_share_control",
+    "agreement_share_model",
+    "agreement_share_lift_pp",
+    "pretension_share_control",
+    "pretension_share_model",
+    "pretension_share_lift_pp",
+    "fu_share_control",
+    "fu_share_model",
+    "fu_share_lift_pp",
+    "court_share_control",
+    "court_share_model",
+    "court_share_lift_pp",
     "n_pilot_eligible_year",
+    "n_model_obs",
     "network_multiplier",
     "payment_to_pay_mismatch_rows",
     "note",
 ]
 
+_PATH_SHARE_METRICS = (
+    ("agreement_share", "agreement_share"),
+    ("pretension_share", "pretension_share"),
+    ("fu_incident_share", "fu_share"),
+    ("court_incident_share", "court_share"),
+)
+
 
 def _quality_map(result: MonitoringEffectResult) -> dict[str, Any]:
     return result.data_quality.set_index("metric")["value"].to_dict()
+
+
+def _path_share_from_segments(by_seg: pd.DataFrame) -> dict[str, float]:
+    """control / model / Δ п.п. из path_shares (index=segment)."""
+    out: dict[str, float] = {}
+    for src_col, prefix in _PATH_SHARE_METRICS:
+        out[f"{prefix}_control"] = np.nan
+        out[f"{prefix}_model"] = np.nan
+        out[f"{prefix}_lift_pp"] = np.nan
+        if src_col not in by_seg.columns:
+            continue
+        control = (
+            float(by_seg.loc["control", src_col])
+            if "control" in by_seg.index and pd.notna(by_seg.loc["control", src_col])
+            else np.nan
+        )
+        model = (
+            float(by_seg.loc["model", src_col])
+            if "model" in by_seg.index and pd.notna(by_seg.loc["model", src_col])
+            else np.nan
+        )
+        lift = np.nan
+        lift_keys = [
+            k for k in by_seg.index.astype(str) if str(k).startswith("lift_pp")
+        ]
+        if lift_keys and pd.notna(by_seg.loc[lift_keys[0], src_col]):
+            lift = float(by_seg.loc[lift_keys[0], src_col])
+        elif pd.notna(control) and pd.notna(model):
+            lift = model - control
+        out[f"{prefix}_control"] = control
+        out[f"{prefix}_model"] = model
+        out[f"{prefix}_lift_pp"] = lift
+    return out
+
+
+def _path_share_flat(result: MonitoringEffectResult) -> dict[str, float]:
+    """Доли соглашений/претензий/ФУ/суда: control, model и Δ п.п."""
+    paths = getattr(result, "path_shares", None)
+    if paths is None or paths.empty or "segment" not in paths.columns:
+        return _path_share_from_segments(pd.DataFrame())
+    return _path_share_from_segments(paths.set_index("segment"))
+
+
+def path_share_rows_from_result(
+    result: MonitoringEffectResult,
+    *,
+    week_end: str | pd.Timestamp,
+) -> list[dict[str, Any]]:
+    """Строки долей путей: филиал «(все)» + разрез по филиалам."""
+    week = pd.Timestamp(week_end).date().isoformat()
+    rows: list[dict[str, Any]] = []
+    overall = _path_share_flat(result)
+    quality = _quality_map(result)
+    rows.append(
+        {
+            "week_end": week,
+            "filial": "(все)",
+            "n_control": int(quality.get("n_control", 0)),
+            "n_model": int(quality.get("n_model", 0)),
+            **overall,
+        }
+    )
+    filial_paths = getattr(result, "filial_path_shares", None)
+    if filial_paths is None or filial_paths.empty:
+        return rows
+    if "filial" not in filial_paths.columns or "segment" not in filial_paths.columns:
+        return rows
+    for filial, part in filial_paths.groupby("filial", dropna=False):
+        by_seg = part.set_index("segment")
+        flat = _path_share_from_segments(by_seg)
+        n_control = (
+            int(by_seg.loc["control", "n"])
+            if "control" in by_seg.index and "n" in by_seg.columns
+            else 0
+        )
+        n_model = (
+            int(by_seg.loc["model", "n"])
+            if "model" in by_seg.index and "n" in by_seg.columns
+            else 0
+        )
+        rows.append(
+            {
+                "week_end": week,
+                "filial": str(filial) if pd.notna(filial) else "(пусто)",
+                "n_control": n_control,
+                "n_model": n_model,
+                **flat,
+            }
+        )
+    return rows
 
 
 def _effect_row(result: MonitoringEffectResult, horizon: str) -> dict[str, float]:
@@ -92,6 +208,7 @@ def snapshot_row_from_result(
     yult = _effect_row(result, "ult")
     annual = result.annual_summary.set_index("horizon")
     ann = annual.loc["ult"] if "ult" in annual.index else None
+    paths = _path_share_flat(result)
     return {
         "snapshot_at": snapshot_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "t_calc": result.t_calc.date().isoformat(),
@@ -108,6 +225,12 @@ def snapshot_row_from_result(
         "yult_ci_low": yult["ci_low"],
         "yult_ci_high": yult["ci_high"],
         "yult_unstratified": yult["unstratified"],
+        "annual_window_yult": (
+            float(ann["annual_window"]) if ann is not None else np.nan
+        ),
+        "annual_pilot_current_yult": (
+            float(ann["annual_pilot_current"]) if ann is not None else np.nan
+        ),
         "annual_pilot_full_yult": (
             float(ann["annual_pilot_full"]) if ann is not None else np.nan
         ),
@@ -116,6 +239,15 @@ def snapshot_row_from_result(
         ),
         "annual_pilot_full_yult_ci_high": (
             float(ann["annual_pilot_full_ci_high"]) if ann is not None else np.nan
+        ),
+        "annual_network_current_yult": (
+            float(ann["annual_network_current"]) if ann is not None else np.nan
+        ),
+        "annual_network_current_yult_ci_low": (
+            float(ann["annual_network_current_ci_low"]) if ann is not None else np.nan
+        ),
+        "annual_network_current_yult_ci_high": (
+            float(ann["annual_network_current_ci_high"]) if ann is not None else np.nan
         ),
         "annual_network_full_yult": (
             float(ann["annual_network_full"]) if ann is not None else np.nan
@@ -126,8 +258,18 @@ def snapshot_row_from_result(
         "annual_network_full_yult_ci_high": (
             float(ann["annual_network_full_ci_high"]) if ann is not None else np.nan
         ),
+        "annual_network_full_compliance_yult": (
+            float(ann["annual_network_full_compliance"])
+            if ann is not None and "annual_network_full_compliance" in ann.index
+            else np.nan
+        ),
+        **paths,
         "n_pilot_eligible_year": (
             float(ann["N_pilot_eligible_year"]) if ann is not None else np.nan
+        ),
+        "n_model_obs": (
+            float(ann["N_model_obs"]) if ann is not None and "N_model_obs" in ann.index
+            else int(quality.get("n_model", 0))
         ),
         "network_multiplier": (
             float(ann["network_multiplier"]) if ann is not None else np.nan
@@ -542,6 +684,12 @@ class WeeklySeriesResult:
     loss_drivers: pd.DataFrame
     week_ends: list[pd.Timestamp]
     note: str
+    # доли путей на последнем кумулятивном срезе (за весь период)
+    path_shares_latest: pd.DataFrame = field(default_factory=pd.DataFrame)
+    # филиалы: «без инструментов» model < control (последний срез)
+    instruments_attention_latest: pd.DataFrame = field(
+        default_factory=pd.DataFrame
+    )
 
 
 def run_weekly_monitoring_series(
@@ -577,6 +725,8 @@ def run_weekly_monitoring_series(
     paid_by_week: dict[str, pd.Series] = {}
     loss_by_week: dict[str, pd.DataFrame] = {}
     group_means_by_week: dict[str, dict[str, float]] = {}
+    path_shares_latest = pd.DataFrame()
+    instruments_attention_latest = pd.DataFrame()
 
     for week_end in ends:
         subset = filter_monitoring_by_application_date(
@@ -630,6 +780,15 @@ def run_weekly_monitoring_series(
         snap["status"] = "ok"
         snap["reason"] = ""
         weekly_rows.append(snap)
+        path_shares_latest = pd.DataFrame(
+            path_share_rows_from_result(result, week_end=week_end)
+        )
+        attn = getattr(result, "agreement_instruments_attention", None)
+        if attn is not None and not attn.empty:
+            instruments_attention_latest = attn.copy()
+            instruments_attention_latest["week_end"] = key
+        else:
+            instruments_attention_latest = pd.DataFrame()
 
         contrib_by_week[key] = _filial_contributions(result.filial_effects, "ult")
         loss_level = _unit_level_table(result.frame)
@@ -648,6 +807,8 @@ def run_weekly_monitoring_series(
         loss_drivers=pd.DataFrame(),
         week_ends=ends,
         note="Пустой ряд",
+        path_shares_latest=pd.DataFrame(),
+        instruments_attention_latest=pd.DataFrame(),
     )
     if weekly.empty:
         return empty
@@ -671,6 +832,8 @@ def run_weekly_monitoring_series(
         loss_drivers=loss_drivers,
         week_ends=ends,
         note=note,
+        path_shares_latest=path_shares_latest,
+        instruments_attention_latest=instruments_attention_latest,
     )
 
 
@@ -835,8 +998,11 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
             "ci_yult_includes_0",
             "n_new_losses",
             "shared_mean_paid_delta",
-            "annual_pilot_full_yult",
+            "annual_window_yult",
+            "annual_pilot_current_yult",
+            "annual_network_current_yult",
             "annual_network_full_yult",
+            "annual_network_full_compliance_yult",
             "why_moved",
             "reason",
         )
@@ -916,15 +1082,66 @@ def build_weekly_html(series: WeeklySeriesResult) -> str:
             "Среднее изменение оплаты по общим инцидентам",
             "mean_i∈shared (paid_i,week − paid_i,prev)",
         ),
-        "annual_pilot_full_yult": _c(
-            "год пилот Yult",
-            "Годовой эффект пилота при всём потоке в модель, Yult",
-            "yult_effect × N_pilot_eligible_year",
+        "annual_window_yult": _c(
+            "окно Yult",
+            "Эффект за период работы модели (50/50)",
+            "yult_effect × n_model",
+        ),
+        "annual_pilot_current_yult": _c(
+            "год пилот 50/50",
+            "Годовой эффект на пилоте 50/50",
+            "yult_effect × share_model × N_year",
+        ),
+        "annual_network_current_yult": _c(
+            "год все филиалы 50/50",
+            "Годовой эффект все филиалы (50/50)",
+            "yult_effect × N_model_cur × network_multiplier",
         ),
         "annual_network_full_yult": _c(
-            "год сеть Yult",
-            "Годовой эффект сети при всём потоке в модель, Yult",
+            "год все филиалы 100%",
+            "Годовой эффект все филиалы (100%)",
             "annual_pilot_full_yult × network_multiplier",
+        ),
+        "annual_network_full_compliance_yult": _c(
+            "год без людей",
+            "Годовой эффект без участия людей",
+            "ITT_100 × N_year × network_multiplier",
+        ),
+        "agreement_share_control": _c(
+            "согл. control %",
+            "Доля соглашений в control, %",
+        ),
+        "agreement_share_model": _c(
+            "согл. model %",
+            "Доля соглашений в model, %",
+        ),
+        "agreement_share_lift_pp": _c(
+            "Δ согл. п.п.",
+            "Изменение доли соглашений: model − control, п.п.",
+        ),
+        "pretension_share_control": _c(
+            "прет. control %",
+            "Доля претензий в control, %",
+        ),
+        "pretension_share_model": _c(
+            "прет. model %",
+            "Доля претензий в model, %",
+        ),
+        "pretension_share_lift_pp": _c(
+            "Δ прет. п.п.",
+            "Изменение доли претензий: model − control, п.п.",
+        ),
+        "fu_share_control": _c("ФУ control %", "Доля ФУ в control, %"),
+        "fu_share_model": _c("ФУ model %", "Доля ФУ в model, %"),
+        "fu_share_lift_pp": _c(
+            "Δ ФУ п.п.",
+            "Изменение доли ФУ: model − control, п.п.",
+        ),
+        "court_share_control": _c("суд control %", "Доля суда в control, %"),
+        "court_share_model": _c("суд model %", "Доля суда в model, %"),
+        "court_share_lift_pp": _c(
+            "Δ суд п.п.",
+            "Изменение доли суда: model − control, п.п.",
         ),
         "why_moved": _c("why", "Краткая сводка причин сдвига недели"),
         "reason": _c("reason", "Текст ошибки или причина skip"),

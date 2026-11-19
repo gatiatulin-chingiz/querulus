@@ -1,0 +1,847 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "MSSQL Motor.agrafana. Модель — main+second из логов (Oracle→Querulus_errors). Main — multi-select stem с slot=main для финэффекта/gap. Import JSON.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 200,
+      "type": "text",
+      "title": "Куда действуют фильтры",
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Модель** — ошибки и датадрифт (main + second из логов)  \n**Main** — финэффект и gap (можно несколько stem, что были в main)  \n**Трек (cf|rg)** — только датадрифт  \n**Филиал** — доля потока + gap"
+      },
+      "transparent": true
+    },
+    {
+      "type": "row",
+      "title": "1. Ошибки  ·  фильтр: Модель",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 2
+      },
+      "collapsed": false,
+      "id": 100
+    },
+    {
+      "id": 1,
+      "title": "Число ошибок по модели",
+      "description": "Фильтр: Модель. Число строк с РезультатПроверки=-1 по дням × модель",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 3
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  CAST(run_date AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(SUM([count]) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_errors]\nWHERE stem IN (${model:sqlstring})\nGROUP BY CAST(run_date AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "title": "Топ отпечатков traceback",
+      "description": "Фильтр: Модель. Группировка по нормализованному traceback (error_head)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 3
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  CAST(run_date AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) + N' | ' + LEFT(error_head, 80) AS metric,\n  CAST(SUM([count]) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_errors]\nWHERE stem IN (${model:sqlstring})\nGROUP BY CAST(run_date AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem) + N' | ' + LEFT(error_head, 80)\nORDER BY 1",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "title": "Сводка по отпечаткам",
+      "type": "table",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 11
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT TOP 50 model_label, model_kind, model_version, error_fingerprint,\n  LEFT(error_head, 120) AS error_head, SUM([count]) AS [всего]\nFROM [agrafana].[Querulus_errors]\nWHERE stem IN (${model:sqlstring})\nGROUP BY model_label, model_kind, model_version, error_fingerprint, LEFT(error_head, 120)\nORDER BY [всего] DESC",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ],
+      "description": "Фильтр: Модель."
+    },
+    {
+      "type": "row",
+      "title": "2. Датадрифт  ·  фильтры: Модель + Трек",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "collapsed": false,
+      "id": 101
+    },
+    {
+      "id": 5,
+      "title": "PSI > 0.3",
+      "type": "table",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 29
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT TOP 200 [date], model_name, model_version, track, col, [TYPE],\n  ROUND(CAST([PSI] AS FLOAT), 4) AS [PSI], ROUND(CAST([KL] AS FLOAT), 4) AS [KL],\n  ROUND(CAST([NaN_train] AS FLOAT), 4) AS [NaN_train], ROUND(CAST([NaN_test] AS FLOAT), 4) AS [NaN_test],\n  mode_train, mode_test, mean_train, mean_test,\n  dif_train AS [только в train],\n  dif_test AS [только в test]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND track IN (${track:sqlstring})\n  AND [PSI] > 0.3\nORDER BY [PSI] DESC",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ],
+      "description": "Фильтр: Модель + Трек."
+    },
+    {
+      "id": 6,
+      "title": "PSI по признакам",
+      "description": "Фильтр: Модель + Трек. Серии: модель | track | признак",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 29
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  CAST([date] AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_name, ''), stem) + N' | ' + track + N' | ' + col AS metric,\n  CAST(AVG([PSI]) AS FLOAT) AS [value]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND track IN (${track:sqlstring})\nGROUP BY CAST([date] AS DATETIME2), COALESCE(NULLIF(model_name, ''), stem) + N' | ' + track + N' | ' + col\nORDER BY 1",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 5
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.1
+              },
+              {
+                "color": "red",
+                "value": 0.3
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "title": "Макс. PSI: cf vs rg",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 38
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  CAST([date] AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_name, ''), stem) + N' | ' + track AS metric,\n  CAST(MAX([PSI]) AS FLOAT) AS [value]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND track IN (${track:sqlstring})\nGROUP BY CAST([date] AS DATETIME2), COALESCE(NULLIF(model_name, ''), stem) + N' | ' + track\nORDER BY 1",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.3
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Фильтр: Модель + Трек."
+    },
+    {
+      "id": 8,
+      "title": "Сводка дрифта (последний прогон)",
+      "type": "table",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 38
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT model_name, model_version, track,\n  COUNT(*) AS [признаков],\n  ROUND(CAST(MAX([PSI]) AS FLOAT), 4) AS [макс PSI],\n  SUM(CASE WHEN [PSI] > 0.3 THEN 1 ELSE 0 END) AS [PSI>0.3]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND track IN (${track:sqlstring})\n  AND [date] = (SELECT MAX([date]) FROM [agrafana].[querulus_DataDrift])\nGROUP BY model_name, model_version, track\nORDER BY model_name, track",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ],
+      "description": "Фильтр: Модель + Трек."
+    },
+    {
+      "type": "row",
+      "title": "3. Финэффект  ·  фильтр: Main  ·  «Доля потока» ещё Филиал",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "collapsed": false,
+      "id": 102
+    },
+    {
+      "id": 9,
+      "title": "Эффект на 1 убыток (ITT)",
+      "description": "Только модель в слоте main. Фильтр: Модель. Средняя экономия на один убыток (Yult ITT)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 46
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(itt) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Доля потока в модель",
+      "description": "Только модель в слоте main. Фильтр: Филиал. Какая доля eligible-потока ушла в рукав model.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 46
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) + N' | ' + filial AS metric,\n  CAST(AVG(coverage) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial <> N'(все)'\n  AND (\n    '${filial}' = '__all__'\n    OR filial = '${filial}'\n  )\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem) + N' | ' + filial\nORDER BY 1",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Эффект за период работы модели (50/50)",
+      "description": "Только модель в слоте main. Фильтр: Модель. ITT × число убытков в model за период наблюдения",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 53
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_window_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Годовой эффект на пилоте 50/50",
+      "description": "Только модель в слоте main. Фильтр: Модель. Если сохранить текущую долю model на пилотных филиалах на год",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 53
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_pilot_current_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Годовой эффект на пилоте (100%)",
+      "description": "Только модель в слоте main. Фильтр: Модель. Если на пилоте весь eligible-поток направить в model",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 53
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_pilot_full_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "Годовой эффект все филиалы (50/50)",
+      "description": "Только модель в слоте main. Фильтр: Модель. Экстраполяция на всю сеть при текущей доле model",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 60
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_network_current_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Годовой эффект все филиалы (100%)",
+      "description": "Только модель в слоте main. Фильтр: Модель. Экстраполяция на всю сеть, если весь eligible-поток в model",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 60
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_network_full_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "Годовой эффект без участия людей",
+      "description": "Только модель в слоте main. Фильтр: Модель. Вся сеть, 100% потока в model и всегда исполнять рекомендацию (ITT_100)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 60
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) AS metric,\n  CAST(AVG(annual_network_full_compliance_yult) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem)\nORDER BY 1",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Сводка финэффекта",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 67
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT TOP 100 week_start AS [неделя],\n  model_label AS [модель],\n  n_incidents AS [убытков],\n  n_model AS [в model],\n  ROUND(CAST(itt AS FLOAT), 2) AS [эффект на 1 убыток],\n  ROUND(CAST(coverage AS FLOAT), 4) AS [доля в model],\n  ROUND(CAST(annual_window_yult AS FLOAT), 0) AS [эффект за период (50/50)],\n  ROUND(CAST(annual_pilot_current_yult AS FLOAT), 0) AS [год пилот 50/50],\n  ROUND(CAST(annual_pilot_full_yult AS FLOAT), 0) AS [год пилот (100%)],\n  ROUND(CAST(annual_network_current_yult AS FLOAT), 0) AS [год все филиалы (50/50)],\n  ROUND(CAST(annual_network_full_yult AS FLOAT), 0) AS [год все филиалы (100%)],\n  ROUND(CAST(annual_network_full_compliance_yult AS FLOAT), 0) AS [год без участия людей],\n  formula_version AS [версия формулы]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND filial = N'(все)'\nORDER BY week_start DESC, stem",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ],
+      "description": "Только модель в слоте main. Фильтр: Модель."
+    },
+    {
+      "type": "row",
+      "title": "4. Gap долей за весь период  ·  Main + Филиал",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 75
+      },
+      "collapsed": false,
+      "id": 103
+    },
+    {
+      "id": 24,
+      "title": "Gap за весь период (model − control), п.п.",
+      "description": "Только модель в слоте main. Фильтр: Модель + Филиал. Кумулятив с старта пилота. Плюс у соглашений = в model доля выше; минус у претензий/ФУ/суда = в model доля ниже (снижение).",
+      "type": "stat",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 76
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  ROUND(CAST(AVG(agreement_share_lift_pp) AS FLOAT), 1) AS [Соглашения],\n  ROUND(CAST(AVG(pretension_share_lift_pp) AS FLOAT), 1) AS [Претензии],\n  ROUND(CAST(AVG(fu_share_lift_pp) AS FLOAT), 1) AS [ФУ],\n  ROUND(CAST(AVG(court_share_lift_pp) AS FLOAT), 1) AS [Суд]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND (\n    ('${filial}' = '__all__' AND filial = N'(все)')\n    OR ('${filial}' <> '__all__' AND filial = '${filial}')\n  )",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Соглашения"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Соглашения ↑, п.п."
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Претензии"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Претензии ↓, п.п."
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 0
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ФУ"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "ФУ ↓, п.п."
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 0
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Суд"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Суд ↓, п.п."
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 0
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 26,
+      "title": "Филиалы: «без инструментов» model < control",
+      "description": "Только модель в слоте main. Фильтр: Модель (+ Филиал). Доля соглашений без инструментов среди инцидентов: в model меньше, чем в control. gap = control − model, п.п.",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 82
+      },
+      "datasource": {
+        "type": "mssql",
+        "uid": "querulus_mssql"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT\n  filial AS [filial],\n  ROUND(CAST(agr_control_pct AS FLOAT), 1) AS [agr control %],\n  ROUND(CAST(agr_model_pct AS FLOAT), 1) AS [agr model %],\n  ROUND(CAST(gap_pp AS FLOAT), 1) AS [gap п.п.]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${main:sqlstring})\n  AND gap_pp IS NOT NULL\n  AND filial <> N'(все)'\n  AND (\n    '${filial}' = '__all__'\n    OR filial = '${filial}'\n  )\nORDER BY gap_pp DESC, filial",
+          "editorMode": "code",
+          "rawQuery": true
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [
+    "querulus",
+    "monitoring"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "model",
+        "label": "Модель",
+        "type": "query",
+        "datasource": {
+          "type": "mssql",
+          "uid": "querulus_mssql"
+        },
+        "query": "SELECT DISTINCT COALESCE(NULLIF(model_label, ''), stem) AS __text, stem AS __value FROM [agrafana].[Querulus_errors] ORDER BY 1",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "sort": 1,
+        "current": {
+          "text": "Все",
+          "value": "$__all",
+          "selected": true
+        },
+        "description": "Ошибки + датадрифт: stem из логов (Oracle main/second)"
+      },
+      {
+        "name": "main",
+        "label": "Main",
+        "type": "query",
+        "datasource": {
+          "type": "mssql",
+          "uid": "querulus_mssql"
+        },
+        "query": "SELECT DISTINCT COALESCE(NULLIF(model_label, ''), stem) AS __text, stem AS __value FROM [agrafana].[Querulus_FinEffect] WHERE slot = N'main' ORDER BY 1",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "sort": 1,
+        "current": {
+          "text": "Все",
+          "value": "$__all",
+          "selected": true
+        },
+        "description": "Финэффект/gap: несколько stem, которые были в слоте main"
+      },
+      {
+        "name": "track",
+        "label": "Трек (cf|rg)",
+        "type": "custom",
+        "query": "cf, rg",
+        "options": [
+          {
+            "text": "cf",
+            "value": "cf",
+            "selected": false
+          },
+          {
+            "text": "rg",
+            "value": "rg",
+            "selected": false
+          }
+        ],
+        "includeAll": true,
+        "allValue": "'cf','rg'",
+        "multi": true,
+        "current": {
+          "text": "Все",
+          "value": "$__all",
+          "selected": true
+        },
+        "refresh": 0,
+        "sort": 0,
+        "description": "Только секция «Датадрифт»"
+      },
+      {
+        "name": "filial",
+        "label": "Филиал",
+        "type": "query",
+        "datasource": {
+          "type": "mssql",
+          "uid": "querulus_mssql"
+        },
+        "query": "SELECT filial FROM (SELECT N'(все)' AS filial, 0 AS ord UNION ALL SELECT DISTINCT filial, 1 FROM [agrafana].[Querulus_FinEffect] WHERE filial <> N'(все)') t ORDER BY ord, filial",
+        "includeAll": true,
+        "allValue": "__all__",
+        "multi": false,
+        "current": {
+          "text": "Все",
+          "value": "__all__",
+          "selected": true
+        },
+        "refresh": 2,
+        "sort": 1,
+        "description": "Доля потока + gap (финэффект только main)"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-180d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Мониторинг Querulus",
+  "uid": "querulus_monitoring",
+  "version": 10
+}

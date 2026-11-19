@@ -11,7 +11,7 @@ from typing import Any, Iterable, Literal, Sequence
 
 import numpy as np
 import pandas as pd
-from querulus.dataset.load.io import _read_sql, connect_oisuu
+
 from querulus.fin_effect.excel_synthetic import build_synthetic_claims_excel
 
 DEFAULT_TOLERANCE = 1.0
@@ -226,6 +226,9 @@ def load_vitrina_mssql(
     По умолчанию: ``[OISUU_report].[dbo].[ВитринаСутяжность]``.
     Креды — ``OISUU_DB_*`` из ``.env`` / ``env_template`` (как у dataset).
     """
+
+    # Lazy: dataset/io → pymssql/environs; monitoring synthetic не нуждается в SQL.
+    from querulus.dataset.load.io import _read_sql, connect_oisuu
 
     own_conn = connection is None
     conn = connection if connection is not None else connect_oisuu()

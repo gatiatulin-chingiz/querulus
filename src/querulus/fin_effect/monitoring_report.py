@@ -993,9 +993,19 @@ def _plan_glossary() -> str:
         множитель сети (объём × относительная тяжесть ПСР).</td>
       </tr>
       <tr>
-        <th>Весь поток (не 50/50)</th>
-        <td>Сценарий: все eligible идут в поток модели, а не только текущая доля
-        ~половины. Это не факт пилота, а «если модель на весь поток».</td>
+        <th>~50% потока</th>
+        <td>Сохраняем текущую долю model (~ручеек/модель). Масштаб =
+        ITT × share_model × N_year (× множитель сети для всей сети).</td>
+      </tr>
+      <tr>
+        <th>100% потока в model</th>
+        <td>Все eligible в рукав model (ручейка нет). Не путать с
+        «без участия людей» (100% compliance: исполнение Result=1).</td>
+      </tr>
+      <tr>
+        <th>Без участия людей</th>
+        <td>Вся сеть, 100% потока в model и всегда исполнять рекомендацию
+        (ITT_100). Механический сценарий, не фактический ITT.</td>
       </tr>
       <tr>
         <th>ПСР</th>
@@ -1021,12 +1031,13 @@ def _plan_calculation_steps() -> str:
     <div class="fx-node main">
       <div class="fx-head">
         <span class="fx-tag main">главная</span>
-        1. Факт на окне пилота (Yult)
+        1. Эффект за период работы модели (50/50)
       </div>
       <div class="formula">
-        <div class="eq">Финрез₁ = ITT(365) × N<sub>obs</sub></div>
-        <div class="note">N<sub>obs</sub> — число eligible-инцидентов в окне
-        (ручеек + модель). 95% CI = [ci_low, ci_high] × N<sub>obs</sub>.</div>
+        <div class="eq">Финрез₁ = ITT(Yult) × N<sub>model,obs</sub></div>
+        <div class="note">N<sub>model,obs</sub> — только инциденты рукава model
+        в окне. 95% CI = [ci_low, ci_high] × N<sub>model,obs</sub>.
+        Не умножаем на весь N<sub>obs</sub> (ручеек + модель).</div>
       </div>
       <p class="fx-need">Чтобы посчитать Финрез₁:</p>
       <div class="fx-kids">
@@ -1034,10 +1045,12 @@ def _plan_calculation_steps() -> str:
         <div class="fx-node sub">
           <div class="fx-head">
             <span class="fx-tag sub">второстепенная</span>
-            N<sub>obs</sub> — размер окна
+            N<sub>model,obs</sub> — model в окне
           </div>
           <div class="formula">
-            <div class="eq">N<sub>obs</sub> = count(eligible в окне пилота)</div>
+            <div class="eq">N<sub>model,obs</sub> = count(eligible ∩ model в окне)</div>
+            <div class="eq">N<sub>obs</sub> = N<sub>model,obs</sub> + N<sub>control,obs</sub>
+            (нужен для share и N<sub>year</sub>)</div>
           </div>
           <p class="fx-need">Чтобы получить eligible:</p>
           <div class="fx-kids">
@@ -1051,7 +1064,7 @@ def _plan_calculation_steps() -> str:
     <div class="fx-node main">
       <div class="fx-head">
         <span class="fx-tag main">главная</span>
-        2. Факт за год (те же филиалы пилота, доля модели как сейчас)
+        2. Годовой эффект на пилоте 50/50
       </div>
       <div class="formula">
         <div class="eq">Финрез₂ = ITT(365) × N<sub>model,year,cur</sub></div>
@@ -1084,12 +1097,13 @@ def _plan_calculation_steps() -> str:
     <div class="fx-node main">
       <div class="fx-head">
         <span class="fx-tag main">главная</span>
-        3. Шарим на все филиалы (год, доля модели как сейчас)
+        3. Годовой эффект все филиалы (50/50)
       </div>
       <div class="formula">
-        <div class="eq">Финрез₃ = Финрез₂ × множитель<sub>сети</sub></div>
-        <div class="note">Тот же эффект на инцидент переносим на nonpilot
-        через объём и тяжесть ПСР.</div>
+        <div class="eq">Финрез₃ = Финрез₂ × множитель<sub>сети</sub>
+        = ITT × N<sub>model,year,cur</sub> × множитель<sub>сети</sub></div>
+        <div class="note">Годовой эффект все филиалы (50/50).
+        В отчёте: <code>annual_network_current</code>.</div>
       </div>
       <p class="fx-need">Чтобы посчитать Финрез₃:</p>
       <div class="fx-kids">
@@ -1107,7 +1121,7 @@ def _plan_calculation_steps() -> str:
     <div class="fx-node main">
       <div class="fx-head">
         <span class="fx-tag main">главная</span>
-        4. Все филиалы + год + весь поток в модель (не 50/50)
+        4. Годовой эффект все филиалы (100%)
       </div>
       <div class="formula">
         <div class="eq">Финрез₄ = ITT(365) × N<sub>year</sub> ×
@@ -1356,8 +1370,6 @@ def _annual_scenarios_section(result: MonitoringEffectResult) -> str:
 
     itt = float(g("effect_per_case"))
     itt100 = float(g("effect_100_compliance"))
-    n_year = float(g("N_pilot_eligible_year"))
-    net_mult = float(g("network_multiplier"))
     net = float(g("annual_network_full"))
     net100 = float(g("annual_network_full_compliance"))
     delta_case = itt100 - itt
@@ -1366,7 +1378,8 @@ def _annual_scenarios_section(result: MonitoringEffectResult) -> str:
     why_lower = ""
     if np.isfinite(delta_case) and delta_case < 0:
         why_lower = (
-            f"<div class='diff-note'><b>Почему «год сеть 100%» ниже «год сеть»:</b> "
+            f"<div class='diff-note'><b>Почему «Годовой эффект без участия людей» ниже "
+            f"«Годовой эффект все филиалы (100%)»:</b> "
             f"масштаб один и тот же (N_year × множитель сети), меняется только "
             f"эффект на кейс. ITT_100 = {format_money(itt100)} ₽ vs ITT = "
             f"{format_money(itt)} ₽ (Δ {format_money(delta_case)} ₽/кейс). "
@@ -1377,7 +1390,8 @@ def _annual_scenarios_section(result: MonitoringEffectResult) -> str:
         )
     elif np.isfinite(delta_case) and delta_case > 0:
         why_lower = (
-            f"<div class='diff-note'><b>Почему «год сеть 100%» выше «год сеть»:</b> "
+            f"<div class='diff-note'><b>Почему «Годовой эффект без участия людей» выше "
+            f"«Годовой эффект все филиалы (100%)»:</b> "
             f"ITT_100 ({format_money(itt100)} ₽) больше ITT ({format_money(itt)} ₽). "
             f"Принудительное исполнение рекомендации здесь улучшает эффект на кейс; "
             f"объём (N_year × сеть) тот же.</div>"
@@ -1391,14 +1405,29 @@ def _annual_scenarios_section(result: MonitoringEffectResult) -> str:
                 "note": "доля типичного года, уже увиденная; по числу дел, не по ПСР",
             },
             {
-                "metric": "N_year (eligible пилота)",
-                "value": g("N_pilot_eligible_year"),
-                "note": "N_obs / exposure",
+                "metric": "N_obs (окно, оба рукава)",
+                "value": g("N_obs"),
+                "note": "control + model в окне; для share и N_year",
             },
             {
-                "metric": "N_model при текущей доле",
+                "metric": "N_model_obs (окно, только model)",
+                "value": g("N_model_obs"),
+                "note": "масштаб эффекта на период = ITT × N_model_obs",
+            },
+            {
+                "metric": "share_model",
+                "value": g("share_model"),
+                "note": "N_model_obs / N_obs (~0.5 при 50/50)",
+            },
+            {
+                "metric": "N_year (eligible пилота)",
+                "value": g("N_pilot_eligible_year"),
+                "note": "N_obs / exposure — годовой поток обоих рукавов",
+            },
+            {
+                "metric": "N_model при текущей доле (~50%)",
                 "value": g("N_pilot_model_year_current"),
-                "note": "доля model × N_year",
+                "note": "share_model × N_year",
             },
             {
                 "metric": "vol_NP",
@@ -1423,12 +1452,12 @@ def _annual_scenarios_section(result: MonitoringEffectResult) -> str:
             {
                 "metric": "ITT на инцидент",
                 "value": g("effect_per_case"),
-                "note": "факт назначения (as-is)",
+                "note": "mean(Yult|ручеек) − mean(Yult|model), стратификация",
             },
             {
-                "metric": "Эффект на период работы модели",
+                "metric": "Эффект за период работы модели (50/50)",
                 "value": g("annual_window"),
-                "note": "ITT × N_obs окна",
+                "note": "ITT × N_model_obs (только рукав model)",
             },
             {
                 "metric": "CI периода ↓ / ↑",
@@ -1436,7 +1465,7 @@ def _annual_scenarios_section(result: MonitoringEffectResult) -> str:
                     f"{format_money(g('annual_window_ci_low'))} … "
                     f"{format_money(g('annual_window_ci_high'))}"
                 ),
-                "note": "линейный перенос CI с /инцидент",
+                "note": "линейный перенос CI × N_model_obs",
             },
         ]
     )
@@ -1449,14 +1478,14 @@ def _annual_scenarios_section(result: MonitoringEffectResult) -> str:
                 "note": "тот же ITT as-is",
             },
             {
-                "metric": "Год пилот, текущая доля model",
+                "metric": "Годовой эффект на пилоте 50/50",
                 "value": g("annual_pilot_current"),
-                "note": "ITT × N_model_cur",
+                "note": "ITT × share_model × N_year",
             },
             {
-                "metric": "Год пилот, весь поток в модель",
+                "metric": "Годовой эффект на пилоте (100%)",
                 "value": g("annual_pilot_full"),
-                "note": "ITT × N_year",
+                "note": "ITT × N_year (ручейка нет)",
             },
             {
                 "metric": "CI года пилота ↓ / ↑",
@@ -1464,7 +1493,30 @@ def _annual_scenarios_section(result: MonitoringEffectResult) -> str:
                     f"{format_money(g('annual_pilot_full_ci_low'))} … "
                     f"{format_money(g('annual_pilot_full_ci_high'))}"
                 ),
-                "note": "для сценария «весь поток»",
+                "note": "для сценария «Годовой эффект на пилоте (100%)»",
+            },
+        ]
+    )
+
+    s_net_cur = pd.DataFrame(
+        [
+            {
+                "metric": "ITT на инцидент",
+                "value": g("effect_per_case"),
+                "note": "as-is",
+            },
+            {
+                "metric": "Годовой эффект все филиалы (50/50)",
+                "value": g("annual_network_current"),
+                "note": "ITT × N_model_cur × множитель сети",
+            },
+            {
+                "metric": "CI ↓ / ↑",
+                "value": (
+                    f"{format_money(g('annual_network_current_ci_low'))} … "
+                    f"{format_money(g('annual_network_current_ci_high'))}"
+                ),
+                "note": "линейный перенос CI на тот же масштаб",
             },
         ]
     )
@@ -1477,7 +1529,7 @@ def _annual_scenarios_section(result: MonitoringEffectResult) -> str:
                 "note": "as-is",
             },
             {
-                "metric": "Год сеть (весь поток в модель)",
+                "metric": "Годовой эффект все филиалы (100%)",
                 "value": g("annual_network_full"),
                 "note": "ITT × N_year × множитель сети",
             },
@@ -1497,17 +1549,17 @@ def _annual_scenarios_section(result: MonitoringEffectResult) -> str:
             {
                 "metric": "ITT_100 на инцидент",
                 "value": g("effect_100_compliance"),
-                "note": "сценарий 100% исполнения рекомендации",
+                "note": "сценарий без участия людей: всегда исполнять рекомендацию",
             },
             {
-                "metric": "Год сеть 100% compliance",
+                "metric": "Годовой эффект без участия людей",
                 "value": g("annual_network_full_compliance"),
                 "note": "ITT_100 × N_year × множитель сети",
             },
             {
-                "metric": "Δ к «год сеть» (as-is)",
+                "metric": "Δ к «Годовой эффект все филиалы (100%)»",
                 "value": delta_year if np.isfinite(delta_year) else np.nan,
-                "note": "только из-за разницы ITT_100 vs ITT; объём тот же",
+                "note": "только ITT_100 vs ITT; объём тот же",
             },
         ]
     )
@@ -1518,42 +1570,63 @@ def _annual_scenarios_section(result: MonitoringEffectResult) -> str:
             columns={
                 "metric": "Метрика",
                 "value": "Значение",
-                "note": "Как читать",
+                "note": "Как считается",
             },
         )
 
     return f"""
     <h3>Сценарии годового эффекта</h3>
-    <p class="muted">Каждый блок — один сценарий. Сравнивайте ключевые строки
-    друг под другом. <b>NP</b> = nonpilot (остальная сеть), <b>P</b> = pilot.</p>
+    <p class="muted">Каждый блок — один сценарий масштаба одного и того же ITT
+    (кроме п.5, где меняется эффект на кейс). <b>Экономию всегда считаем от
+    рукава model</b> (ITT × число model-кейсов), не от N_obs.
+    <b>~50% потока</b> = сохранить текущую долю model (~ручеек/модель).
+    <b>100% потока</b> = все eligible в model.
+    <b>Без участия людей</b> (100% compliance) = другое: всегда исполнять
+    рекомендацию Result=1.
+    <b>NP</b> = nonpilot, <b>P</b> = pilot.</p>
     <div class="scenario-stack">
       <div class="scenario-card">
         <h4>0. Общие множители объёма</h4>
-        <p class="why">Одинаковы для сценариев ниже (кроме периода работы модели,
-        где берётся N_obs окна, а не N_year).</p>
+        <p class="why"><b>Что:</b> общие коэффициенты для сценариев ниже.
+        <b>Как:</b> exposure из сезонности ретро; N_year = N_obs / exposure;
+        N_model_cur = share_model × N_year; множитель сети = 1 + vol_NP × risk_NP.</p>
         {_kv_table(shared)}
       </div>
       <div class="scenario-card">
-        <h4>1. Период работы модели (факт на выгрузке)</h4>
-        <p class="why">ITT as-is × число инцидентов в текущем окне пилота.</p>
+        <h4>1. Эффект за период работы модели (50/50)</h4>
+        <p class="why"><b>Что:</b> экономия за фактическое окно пилота от тех,
+        кого назначили в model (не от ручейка).
+        <b>Как:</b> ITT × N_model_obs.</p>
         {_kv_table(s_period)}
       </div>
       <div class="scenario-card">
-        <h4>2. Год на пилотных филиалах</h4>
-        <p class="why">Тот же ITT as-is × годовой поток eligible
-        (с поправкой на сезонность убытков).</p>
+        <h4>2. Годовой эффект на пилоте (50/50 и 100%)</h4>
+        <p class="why"><b>Что:</b> тот же ITT, экстраполяция числа дел на типичный
+        год на тех же филиалах.
+        <b>50/50:</b> ITT × share_model × N_year.
+        <b>100%:</b> ITT × N_year (весь eligible в model, ручейка нет).</p>
         {_kv_table(s_pilot)}
       </div>
       <div class="scenario-card">
-        <h4>3. Год на всю сеть (as-is ITT)</h4>
-        <p class="why">Год пилота «весь поток» × множитель сети
-        (vol_NP × risk_NP). Сценарий масштаба, не рандомизация на nonpilot.</p>
+        <h4>3. Годовой эффект все филиалы (50/50)</h4>
+        <p class="why"><b>Что:</b> шарим эффект на nonpilot, доля model 50/50.
+        <b>Как:</b> ITT × N_model_cur × множитель сети
+        (= «Годовой эффект на пилоте 50/50» × множитель сети). Сценарий масштаба, не
+        рандомизация на nonpilot.</p>
+        {_kv_table(s_net_cur)}
+      </div>
+      <div class="scenario-card">
+        <h4>4. Годовой эффект все филиалы (100%)</h4>
+        <p class="why"><b>Что:</b> вся сеть, все eligible в model (без ручейка).
+        <b>Как:</b> ITT × N_year × множитель сети.</p>
         {_kv_table(s_net)}
       </div>
       <div class="scenario-card alt">
-        <h4>4. Год на всю сеть при 100% исполнения</h4>
-        <p class="why">Тот же объём, что в п.3, но эффект на кейс = ITT_100
-        (механически «доначислили» рекомендации). Не ITT.</p>
+        <h4>5. Годовой эффект без участия людей</h4>
+        <p class="why"><b>Что:</b> тот же объём, что в п.4 (100% потока), но
+        эффект на кейс = ITT_100: механически «доначислили» рекомендации
+        Result=1 (без участия людей). Это <b>не</b> «50/50» и не доля потока.
+        <b>Как:</b> ITT_100 × N_year × множитель сети.</p>
         {_kv_table(s_net100)}
         {why_lower}
       </div>
@@ -1818,7 +1891,7 @@ t_calc={result.t_calc.date()} · источник <code>{escape(source_label)}</
 <p class="muted">Это не полный fin_effect_report: нет Yult, ITT, CI и заключения.
 Пересчёт: <code>estimate_agreement_instruments</code> →
 <code>write_agreement_instruments_html</code>.</p>
-</div>
+        </div>
 </body>
 </html>
 """
@@ -2046,7 +2119,7 @@ def build_plan_html(
       <li>Для сверки цифр — Excel-аудит с формулами
       (<code>fin_effect_audit.xlsx</code>).</li>
     </ul>
-  </div>
+    </div>
 
   <h2>Какие файлы получаем</h2>
   <div class="card">
@@ -2802,12 +2875,20 @@ def build_monitoring_html(
                 "Какую долю типичного года мы уже увидели с учётом сезонности.",
             ),
             (
-                "<b>N_obs</b> = число eligible-убытков current (model+control)",
-                "Сколько eligible-инцидентов набралось в окне мониторинга.",
+                "<b>N_obs</b> = число eligible current (model+control)",
+                "Размер окна обоих рукавов; нужен для share и N_year.",
+            ),
+            (
+                "<b>N_model_obs</b> = число eligible ∩ model в окне",
+                "Масштаб эффекта на период: только рукав model.",
             ),
             (
                 "<b>N_pilot_eligible_year</b> = N_obs / seasonal_exposure",
                 "Оценка годового потока eligible на тех же пилотных филиалах.",
+            ),
+            (
+                "<b>N_model_year_cur</b> = share_model × N_pilot_eligible_year",
+                "Годовой объём model при текущей доле (~50/50).",
             ),
             (
                 "<b>network_multiplier</b> = 1 + volume_ratio_NP×risk_ratio_NP",
@@ -2815,12 +2896,20 @@ def build_monitoring_html(
                 "перенести на nonpilot (объём × относительная тяжесть ПСР).",
             ),
             (
-                "<b>annual_network_full</b> = effect_per_case × N_pilot_eligible_year × network_multiplier",
-                "Годовая экономия сети: ITT на кейс × годовой поток пилота × множитель сети.",
+                "<b>annual_window</b> = effect_per_case × N_model_obs",
+                "Экономия за окно от назначенных в model.",
             ),
             (
-                "<b>annual CI</b> = [ci_low, ci_high] × N_pilot_eligible_year × network_multiplier",
-                "Тот же масштаб применяем к границам bootstrap CI с уровня инцидента.",
+                "<b>annual_network_current</b> = effect_per_case × N_model_year_cur × network_multiplier",
+                "Годовой эффект все филиалы (50/50).",
+            ),
+            (
+                "<b>annual_network_full</b> = effect_per_case × N_pilot_eligible_year × network_multiplier",
+                "Годовой эффект все филиалы (100%).",
+            ),
+            (
+                "<b>annual CI</b> = [ci_low, ci_high] × тот же масштаб N",
+                "Линейный перенос bootstrap CI с уровня инцидента.",
             ),
         ],
         "Горизонт Yult не умножается на 365/30: масштабируется число новых убытков. "
@@ -2836,7 +2925,8 @@ def build_monitoring_html(
     )}
     <h3>Зачем сезонность и откуда берутся числа</h3>
     <p>Нужно ответить: «в окне набралось N_obs убытков за неполный год;
-    сколько ждать за полный типичный год?» Это <b>число убытков</b>, не сумма выплат.</p>
+    сколько ждать за полный типичный год?» Это <b>число убытков</b>, не сумма выплат.
+    Эффект денег = ITT × число <b>model</b>-кейсов на выбранном горизонте.</p>
     <ul>
       <li><b>s<sub>m</sub></b> — из ретро-пилота по дате
       (<code>PAYMENT_ORDER_DATE_TIME</code> / fallback), доля строк месяца в годе.</li>
@@ -2848,10 +2938,12 @@ def build_monitoring_html(
     </ul>
         <div class="formula">
       <b>Пример</b>
-      <div class="eq">N_obs = 2 500, seasonal_exposure = 0.25 →
-      N_pilot_eligible_year = 2 500 / 0.25 = 10 000</div>
-      <div class="eq">effect_per_case = 4 694, network_multiplier = 2.5 →
-      annual_network_full ≈ 4 694 × 10 000 × 2.5 = 117 350 000</div>
+      <div class="eq">N_obs = 2 500, N_model_obs = 1 250, seasonal_exposure = 0.25 →
+      N_year = 10 000, N_model_cur = 5 000</div>
+      <div class="eq">effect = 4 694, network_multiplier = 2.5 →
+      annual_window = 4 694 × 1 250;
+      annual_network_current = 4 694 × 5 000 × 2.5;
+      annual_network_full = 4 694 × 10 000 × 2.5</div>
       <div class="note">Если окно попало в «лёгкие» месяцы, exposure меньше и
       годовой поток выше при том же N_obs — поэтому и нужна сезонная поправка.</div>
         </div>
@@ -3054,10 +3146,8 @@ def build_conclusion_body_from_result(
         )
 
     e_y, lo_y, hi_y = _eff("ult")
-    ann_pilot_full = float(annual.loc["ult", "annual_pilot_full"])
-    ann_pilot_full_lo = float(annual.loc["ult", "annual_pilot_full_ci_low"])
-    ann_pilot_full_hi = float(annual.loc["ult", "annual_pilot_full_ci_high"])
-    n_year = float(annual.loc["ult", "N_pilot_eligible_year"])
+    ann_ult = annual.loc["ult"]
+    n_model_year = float(ann_ult.get("N_pilot_model_year_current", np.nan))
 
     n_rows = int(quality.get("n_rows", len(result.frame)))
     n_c = int(quality.get("n_control", 0))
@@ -3066,14 +3156,28 @@ def build_conclusion_body_from_result(
     obs_start = quality.get("observation_start", "?")
     obs_end = quality.get("observation_end", "?")
 
-    # 1) текущий объём инцидентов + lifetime-хвост
-    save_window = e_y * n_rows
-    save_window_lo = lo_y * n_rows
-    save_window_hi = hi_y * n_rows
-    # 2) годовой объём eligible пилота + тот же ITT_ult
-    save_year = ann_pilot_full
-    save_year_lo = ann_pilot_full_lo
-    save_year_hi = ann_pilot_full_hi
+    # 1) окно: только рукав model (не весь N_obs)
+    if "annual_window" in ann_ult.index and pd.notna(ann_ult["annual_window"]):
+        save_window = float(ann_ult["annual_window"])
+        save_window_lo = float(ann_ult.get("annual_window_ci_low", lo_y * n_m))
+        save_window_hi = float(ann_ult.get("annual_window_ci_high", hi_y * n_m))
+    else:
+        save_window = e_y * n_m
+        save_window_lo = lo_y * n_m
+        save_window_hi = hi_y * n_m
+    # 2) год пилот при текущей доле model (~50/50)
+    if "annual_pilot_current" in ann_ult.index and pd.notna(
+        ann_ult["annual_pilot_current"]
+    ):
+        save_year = float(ann_ult["annual_pilot_current"])
+        # CI года ~50%: линейный перенос с /инцидент на N_model_cur
+        save_year_lo = lo_y * n_model_year if np.isfinite(n_model_year) else np.nan
+        save_year_hi = hi_y * n_model_year if np.isfinite(n_model_year) else np.nan
+    else:
+        save_year = float(ann_ult["annual_pilot_full"])
+        save_year_lo = float(ann_ult["annual_pilot_full_ci_low"])
+        save_year_hi = float(ann_ult["annual_pilot_full_ci_high"])
+        n_model_year = float(ann_ult["N_pilot_eligible_year"])
 
     ctrl_x = _extra_row(extras, "control")
     model_x = _extra_row(extras, "model")
@@ -3333,20 +3437,22 @@ def build_conclusion_body_from_result(
 
   <div class="card">
     <h3>Финрез (Yult = касса + факт ПСР + остаток хвоста)</h3>
-    <p class="muted">Два масштаба одного ITT на инцидент. Пункт 2 — экстраполяция
-    числа инцидентов на год, не новый эксперимент.</p>
+    <p class="muted">Два масштаба одного ITT на инцидент. Умножаем только на
+    рукав <b>model</b> (не на весь N_obs). Пункт 2 — экстраполяция при текущей
+    доле model (~50/50), не «весь поток в модель».</p>
     <table class="kv">
       <tr>
-        <th>1. Текущий объём (окно пилота)</th>
+        <th>1. Текущий объём (окно, только model)</th>
         <td><span class="million">{_fmt_million(save_window)} млн ₽</span>
-        <small>= ITT_Yult × {n_rows} инцидентов окна;
+        <small>= ITT_Yult × {n_m} model-инцидентов окна
+        (из {n_rows} eligible);
         95% CI: {_fmt_million(save_window_lo)} … {_fmt_million(save_window_hi)} млн</small></td>
       </tr>
       <tr>
-        <th>2. Годовой объём (те же филиалы пилота)</th>
+        <th>2. Годовой эффект на пилоте 50/50</th>
         <td><span class="million">{_fmt_million(save_year)} млн ₽</span>
-        <small>= ITT_Yult × N_year eligible ≈ {n_year:,.0f}
-        (сезонная экстраполяция всего потока пилота);
+        <small>= ITT_Yult × N_model_year ≈ {n_model_year:,.0f}
+        (share_model × N_year, сезонная экстраполяция);
         95% CI: {_fmt_million(save_year_lo)} … {_fmt_million(save_year_hi)} млн</small></td>
       </tr>
     </table>
@@ -3359,8 +3465,9 @@ def build_conclusion_body_from_result(
       <li><b>Yult</b> — paid (касса) + уже выплаченные претензия/ФУ/суд
       + NPV ещё не дозревшего хвоста
       (ретро p_U/k_U/m_U/e_U минус факт; при соглашении от ретро берётся 7%).</li>
-      <li>Пункт финреза 2 — сценарий по объёму; обещать как факт нельзя,
-      пока CI через 0.</li>
+      <li>Пункт финреза 2 — сценарий «продолжаем ~50/50 на год»; сеть / 100%
+      потока / compliance — в report §11. Обещать как факт нельзя, пока CI
+      через 0.</li>
     </ul>
   </div>
 """
