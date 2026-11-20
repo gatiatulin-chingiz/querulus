@@ -781,7 +781,6 @@
           }
         ],
         "includeAll": true,
-        "allValue": "'cf','rg'",
         "multi": true,
         "current": {
           "text": "Все",
@@ -790,7 +789,7 @@
         },
         "refresh": 0,
         "sort": 0,
-        "description": "Только секция «Датадрифт»"
+        "description": "Только секция «Датадрифт». All → ${track:sqlstring} без allValue (иначе двойные кавычки)."
       },
       {
         "name": "filial",
@@ -823,5 +822,5 @@
   "timezone": "browser",
   "title": "Мониторинг Querulus",
   "uid": "querulus_monitoring",
-  "version": 12
+  "version": 13
 }
