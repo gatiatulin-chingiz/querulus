@@ -164,7 +164,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT TOP 200 [date], model_name, model_version, track, col, [TYPE],\n  ROUND(CAST([PSI] AS FLOAT), 4) AS [PSI], ROUND(CAST([KL] AS FLOAT), 4) AS [KL],\n  ROUND(CAST([NaN_train] AS FLOAT), 4) AS [NaN_train], ROUND(CAST([NaN_test] AS FLOAT), 4) AS [NaN_test],\n  mode_train, mode_test, mean_train, mean_test,\n  dif_train AS [только в train],\n  dif_test AS [только в test]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND track IN (${track:sqlstring})\n  AND [PSI] > 0.3\nORDER BY [PSI] DESC",
+          "rawSql": "SELECT TOP 200 [date], model_name, model_version, track, col, [TYPE],\n  ROUND(CAST([PSI] AS FLOAT), 4) AS [PSI], ROUND(CAST([KL] AS FLOAT), 4) AS [KL],\n  ROUND(CAST([NaN_train] AS FLOAT), 4) AS [NaN_train], ROUND(CAST([NaN_test] AS FLOAT), 4) AS [NaN_test],\n  mode_train, mode_test, mean_train, mean_test,\n  dif_train AS [только в train],\n  dif_test AS [только в test]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND track IN (${track})\n  AND [PSI] > 0.3\nORDER BY [PSI] DESC",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -190,7 +190,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT\n  CAST([date] AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_name, ''), stem) + N' | ' + track + N' | ' + col AS metric,\n  CAST(AVG([PSI]) AS FLOAT) AS [value]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND track IN (${track:sqlstring})\nGROUP BY CAST([date] AS DATETIME2), COALESCE(NULLIF(model_name, ''), stem) + N' | ' + track + N' | ' + col\nORDER BY 1",
+          "rawSql": "SELECT\n  CAST([date] AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_name, ''), stem) + N' | ' + track + N' | ' + col AS metric,\n  CAST(AVG([PSI]) AS FLOAT) AS [value]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND track IN (${track})\nGROUP BY CAST([date] AS DATETIME2), COALESCE(NULLIF(model_name, ''), stem) + N' | ' + track + N' | ' + col\nORDER BY 1",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -240,7 +240,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT\n  CAST([date] AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_name, ''), stem) + N' | ' + track AS metric,\n  CAST(MAX([PSI]) AS FLOAT) AS [value]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND track IN (${track:sqlstring})\nGROUP BY CAST([date] AS DATETIME2), COALESCE(NULLIF(model_name, ''), stem) + N' | ' + track\nORDER BY 1",
+          "rawSql": "SELECT\n  CAST([date] AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_name, ''), stem) + N' | ' + track AS metric,\n  CAST(MAX([PSI]) AS FLOAT) AS [value]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND track IN (${track})\nGROUP BY CAST([date] AS DATETIME2), COALESCE(NULLIF(model_name, ''), stem) + N' | ' + track\nORDER BY 1",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -286,7 +286,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT model_name, model_version, track,\n  COUNT(*) AS [признаков],\n  ROUND(CAST(MAX([PSI]) AS FLOAT), 4) AS [макс PSI],\n  SUM(CASE WHEN [PSI] > 0.3 THEN 1 ELSE 0 END) AS [PSI>0.3]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND track IN (${track:sqlstring})\n  AND [date] = (SELECT MAX([date]) FROM [agrafana].[querulus_DataDrift])\nGROUP BY model_name, model_version, track\nORDER BY model_name, track",
+          "rawSql": "SELECT model_name, model_version, track,\n  COUNT(*) AS [признаков],\n  ROUND(CAST(MAX([PSI]) AS FLOAT), 4) AS [макс PSI],\n  SUM(CASE WHEN [PSI] > 0.3 THEN 1 ELSE 0 END) AS [PSI>0.3]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND track IN (${track})\n  AND [date] = (SELECT MAX([date]) FROM [agrafana].[querulus_DataDrift])\nGROUP BY model_name, model_version, track\nORDER BY model_name, track",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -757,7 +757,7 @@
         "refresh": 2,
         "sort": 1,
         "current": {
-          "text": "Все",
+          "text": "All",
           "value": "$__all",
           "selected": true
         },
@@ -767,29 +767,30 @@
         "name": "track",
         "label": "Трек (cf|rg)",
         "type": "custom",
-        "query": "cf, rg",
+        "query": "cf : 'cf', rg : 'rg'",
         "options": [
           {
             "text": "cf",
-            "value": "cf",
+            "value": "'cf'",
             "selected": false
           },
           {
             "text": "rg",
-            "value": "rg",
+            "value": "'rg'",
             "selected": false
           }
         ],
         "includeAll": true,
         "multi": true,
         "current": {
-          "text": "Все",
+          "text": "All",
           "value": "$__all",
           "selected": true
         },
         "refresh": 0,
         "sort": 0,
-        "description": "Только секция «Датадрифт». All → ${track:sqlstring} без allValue (иначе двойные кавычки)."
+        "description": "DataDrift only. All → allValue 'cf','rg'; panels use ${track} without :sqlstring.",
+        "allValue": "'cf','rg'"
       },
       {
         "name": "filial",
@@ -804,7 +805,7 @@
         "allValue": "__all__",
         "multi": false,
         "current": {
-          "text": "Все",
+          "text": "All",
           "value": "__all__",
           "selected": true
         },
@@ -822,5 +823,5 @@
   "timezone": "browser",
   "title": "Мониторинг Querulus",
   "uid": "querulus_monitoring",
-  "version": 13
+  "version": 14
 }
