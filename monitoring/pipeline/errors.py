@@ -15,7 +15,7 @@ if str(_MONITORING_ROOT) not in sys.path:
     sys.path.insert(0, str(_MONITORING_ROOT))
 
 from pipeline.config import Settings, load_settings
-from pipeline.write_sql import get_engine, write_replace
+from pipeline.write_sql import get_engine, write_append_guarded
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("errors")
@@ -168,11 +168,18 @@ def main() -> int:
     raw = load_errors_frame(settings)
     daily = aggregate_errors(raw)
     engine = get_engine(settings.grafana_sqlalchemy_url)
-    n = write_replace(
+    n = write_append_guarded(
         daily,
         engine=engine,
         table=settings.table_errors,
         schema=settings.schema,
+        guard_cols=[
+            "run_date",
+            "stem",
+            "slot",
+            "model_version",
+            "error_fingerprint",
+        ],
     )
     logger.info("errors done || rows=%s", n)
     return 0

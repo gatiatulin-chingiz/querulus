@@ -26,7 +26,7 @@ if _QUERULUS_SRC.is_dir() and str(_QUERULUS_SRC) not in sys.path:
     sys.path.insert(0, str(_QUERULUS_SRC))
 
 from pipeline.config import Settings, load_settings
-from pipeline.write_sql import get_engine, write_replace
+from pipeline.write_sql import get_engine, write_append_guarded
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("fin_effect")
@@ -753,11 +753,12 @@ def main() -> int:
         return 0
 
     engine = get_engine(settings.grafana_sqlalchemy_url)
-    n = write_replace(
+    n = write_append_guarded(
         wide,
         engine=engine,
         table=settings.table_fin_effect,
         schema=settings.schema,
+        guard_cols=["week_start", "stem", "slot", "filial"],
     )
     formula = str(wide["formula_version"].iloc[0])
     n_all = int((wide["filial"] == FILIAL_ALL).sum())
