@@ -349,7 +349,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) + N' | ' + filial AS metric,\n  CAST(AVG(coverage) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND filial <> N'(все)'\n  AND (\n    '${filial}' = '__all__'\n    OR filial = '${filial}'\n  )\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem) + N' | ' + filial\nORDER BY 1",
+          "rawSql": "SELECT\n  CAST(week_start AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_label, ''), stem) + N' | ' + filial AS metric,\n  CAST(AVG(coverage) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND filial <> N'(все)'\n  AND (\n    '${filial}' = '__all__'\n    OR filial = N'${filial}'\n  )\nGROUP BY CAST(week_start AS DATETIME2), COALESCE(NULLIF(model_label, ''), stem) + N' | ' + filial\nORDER BY 1",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -561,7 +561,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT\n  ROUND(CAST(AVG(agreement_share_lift_pp) AS FLOAT), 1) AS [Соглашения],\n  ROUND(CAST(AVG(pretension_share_lift_pp) AS FLOAT), 1) AS [Претензии],\n  ROUND(CAST(AVG(fu_share_lift_pp) AS FLOAT), 1) AS [ФУ],\n  ROUND(CAST(AVG(court_share_lift_pp) AS FLOAT), 1) AS [Суд]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND (\n    ('${filial}' = '__all__' AND filial = N'(все)')\n    OR ('${filial}' <> '__all__' AND filial = '${filial}')\n  )",
+          "rawSql": "SELECT\n  ROUND(CAST(AVG(agreement_share_lift_pp) AS FLOAT), 1) AS [Соглашения],\n  ROUND(CAST(AVG(pretension_share_lift_pp) AS FLOAT), 1) AS [Претензии],\n  ROUND(CAST(AVG(fu_share_lift_pp) AS FLOAT), 1) AS [ФУ],\n  ROUND(CAST(AVG(court_share_lift_pp) AS FLOAT), 1) AS [Суд]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND (\n    ('${filial}' = '__all__' AND filial = N'(все)')\n    OR ('${filial}' <> '__all__' AND filial = N'${filial}')\n  )",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -729,7 +729,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT\n  filial AS [filial],\n  ROUND(CAST(agr_control_pct AS FLOAT), 1) AS [agr control %],\n  ROUND(CAST(agr_model_pct AS FLOAT), 1) AS [agr model %],\n  ROUND(CAST(gap_pp AS FLOAT), 1) AS [gap п.п.]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND gap_pp IS NOT NULL\n  AND filial <> N'(все)'\n  AND (\n    '${filial}' = '__all__'\n    OR filial = '${filial}'\n  )\nORDER BY gap_pp DESC, filial",
+          "rawSql": "SELECT\n  filial AS [filial],\n  ROUND(CAST(agr_control_pct AS FLOAT), 1) AS [agr control %],\n  ROUND(CAST(agr_model_pct AS FLOAT), 1) AS [agr model %],\n  ROUND(CAST(gap_pp AS FLOAT), 1) AS [gap п.п.]\nFROM [agrafana].[Querulus_FinEffect]\nWHERE slot = N'main'\n  AND stem IN (${model:sqlstring})\n  AND gap_pp IS NOT NULL\n  AND filial <> N'(все)'\n  AND (\n    '${filial}' = '__all__'\n    OR filial = N'${filial}'\n  )\nORDER BY gap_pp DESC, filial",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -800,7 +800,7 @@
           "type": "mssql",
           "uid": "querulus_mssql"
         },
-        "query": "SELECT filial FROM (SELECT N'(все)' AS filial, 0 AS ord UNION ALL SELECT DISTINCT filial, 1 FROM [agrafana].[Querulus_FinEffect] WHERE filial <> N'(все)') t ORDER BY ord, filial",
+        "query": "SELECT DISTINCT filial FROM [agrafana].[Querulus_FinEffect] WHERE filial <> N'(все)' ORDER BY 1",
         "includeAll": true,
         "allValue": "__all__",
         "multi": false,
@@ -823,5 +823,5 @@
   "timezone": "browser",
   "title": "Мониторинг Querulus",
   "uid": "querulus_monitoring",
-  "version": 11
+  "version": 12
 }
