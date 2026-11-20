@@ -12,6 +12,22 @@ TABLE_ERRORS = "Querulus_errors"
 TABLE_DRIFT = "querulus_DataDrift"
 TABLE_FIN_EFFECT = "Querulus_FinEffect"
 
+_ENV_FILE = Path(__file__).resolve().parent / ".env"
+
+
+def load_dotenv(path: Path = _ENV_FILE) -> None:
+    """Load KEY=VALUE from pipeline/.env into os.environ (setdefault — real env wins)."""
+    if not path.is_file():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key:
+            os.environ.setdefault(key, value.strip())
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -68,6 +84,7 @@ def load_settings() -> Settings:
     GRAFANA_SQLALCHEMY_URL or MSSQL_USER + MSSQL_SA_PASSWORD (+ host/port/db)
     SYNTHETIC_DATA_DIR: directory with generated parquet/csv
     """
+    load_dotenv()
     mode = os.environ.get("SOURCE_MODE", "synthetic").strip().lower()
     if mode not in {"synthetic", "prod"}:
         raise ValueError(f"SOURCE_MODE must be synthetic|prod, got {mode!r}")

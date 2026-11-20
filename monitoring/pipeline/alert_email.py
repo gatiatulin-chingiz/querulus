@@ -30,7 +30,7 @@ _MONITORING_ROOT = _PIPELINE_ROOT.parent
 if str(_MONITORING_ROOT) not in sys.path:
     sys.path.insert(0, str(_MONITORING_ROOT))
 
-from pipeline.config import load_settings
+from pipeline.config import load_dotenv, load_settings
 from pipeline.write_sql import get_engine
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -141,6 +141,7 @@ class QuerulusDriftAlertMail(EMailMonitoring):
 
 
 def _load_email_config() -> _EmailEnvConfig:
+    load_dotenv()
     receivers_raw = os.environ.get("EMAIL_RECEIVERS", "").strip()
     receivers = [r.strip() for r in receivers_raw.split(",") if r.strip()]
     if not receivers:

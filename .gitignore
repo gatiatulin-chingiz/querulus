@@ -13,6 +13,8 @@ venv/
 .env
 .env.*
 !.env.example
+# Contour template with receivers (passwords empty) — tracked on purpose
+!monitoring/pipeline/.env
 **/env.local
 *.pem
 *.key
@@ -91,5 +93,14 @@ features_engineering/discriptions/
 notebooks/pi_estimate_querulus.html
 **/pi_estimate_querulus.html
 
-# Локальный SQL-исходник витрины
-monitoring/fin_effects/sql/sql.sql
+# --- Querulus monitoring ---
+# Legacy notebooks / example мониторинги (только локально)
+monitoring/archive/
+
+# Local Docker volumes & generated synthetic inputs
+monitoring/local/.env
+monitoring/local/postgres-data/
+monitoring/local/airflow/logs/**
+!monitoring/local/airflow/logs/.gitkeep
+monitoring/local/synthetic/data/**
+!monitoring/local/synthetic/data/.gitkeep
