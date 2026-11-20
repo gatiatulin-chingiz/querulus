@@ -1,4 +1,15 @@
-"""DataDrift via outboxml → querulus_DataDrift (MSSQL agrafana)."""
+"""DataDrift: train parquet + Oracle SPR-логи → Motor.agrafana.querulus_DataDrift.
+
+Источники (prod):
+  * train — ``TRAIN_PARQUET_PATH`` / ``df_for_service.parquet`` (обучающая выборка)
+  * prod  — Oracle ``spr_uu_json_log``, маршрут ОИСУУ → SPR_UU::QUERULUS,
+            JSON_FILE разворачивается в фичи (см. ``pipeline.db.expand_json_column``)
+
+Расчёт PSI/KL/JS — OutBoxML ``DataDrift`` (подкласс ``QuerulusDataDrift``
+с безопасным кодированием категориальных, если в prod появились новые уровни).
+
+Synthetic — только в ``local/synthetic/run_datadrift.py``.
+"""
 from __future__ import annotations
 
 import logging
@@ -17,13 +28,20 @@ if str(_MONITORING_ROOT) not in sys.path:
     sys.path.insert(0, str(_MONITORING_ROOT))
 
 from pipeline.config import Settings, load_settings
+from pipeline.db import (
+    connect_oracle,
+    expand_json_column,
+    query_querulus_request_logs,
+)
 from pipeline.write_sql import get_engine, write_append_guarded
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("datadrift")
 
+# Мета-колонки не участвуют в PSI (это ярлыки модели/трека, не фичи)
 META_COLS = {"stem", "slot", "track", "run_date", "model_label", "model_name", "model_version"}
 
+# Порядок колонок отчёта как в archive MonitoringReport
 ARCHIVE_COLS = [
     "model_name",
     "model_version",
@@ -47,15 +65,21 @@ ARCHIVE_COLS = [
 
 
 class QuerulusDataDrift(OutboxmlDataDrift):
-    """OutBoxML DataDrift with safe categorical encoding (unseen labels in prod)."""
+    """OutBoxML DataDrift + безопасные категориальные коды.
+
+    Базовый outboxml падает/искажает метрики, если в prod появились категории,
+    которых не было в train. Здесь train∪test → общий словарь кодов.
+    """
 
     def __init__(self, *args, dif_len_string: int = 100, **kwargs):
         super().__init__(*args, **kwargs)
+        # длина строк dif_train / dif_test (списки уникальных значений)
         self.dif_len_string = dif_len_string
 
     def _drift_calc(
         self, base: pd.Series, control: pd.Series, label: str, type: str = "CATEGORICAL"
     ) -> dict:
+        """Расширенная статистика по одной колонке (для full_calc)."""
         base_unique = set(base.unique())
         control_unique = set(control.unique())
 
@@ -87,6 +111,7 @@ class QuerulusDataDrift(OutboxmlDataDrift):
         base_data: pd.DataFrame = None,
         control_data: pd.DataFrame = None,
     ) -> pd.DataFrame:
+        """Поколоночный PSI/KL/JS; при full_calc — доп. описательные поля."""
         result = pd.DataFrame()
         base_data = train_data if base_data is None else base_data
         control_data = test_data if control_data is None else control_data
@@ -100,6 +125,7 @@ class QuerulusDataDrift(OutboxmlDataDrift):
 
             x_train = train_data[column].copy()
             x_test = test_data[column].copy()
+            # object/string/category → категориальный тип для PSI-бинов
             is_cat = (
                 x_train.dtype == "category"
                 or x_train.dtype == object
@@ -135,6 +161,7 @@ class QuerulusDataDrift(OutboxmlDataDrift):
 
 
 def _codes_aligned(train: pd.Series, test: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """Общий словарь категорий train∪test → float-коды для PSI."""
     tr = train.astype("string")
     te = test.astype("string")
     cats = sorted(set(tr.dropna().unique()) | set(te.dropna().unique()))
@@ -298,41 +325,85 @@ def compute_datadrift_by_meta(
     return pd.concat(parts, ignore_index=True)
 
 
-def _load_synthetic_logs(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-    train = _read_features(data_dir, "train_features")
-    prod = _read_features(data_dir, "prod_features")
+# --- extract (prod) ------------------------------------------------------------
+
+
+def _load_train(settings: Settings) -> pd.DataFrame:
+    """Обучающая выборка сервиса (integration/results/df_for_service.parquet)."""
+    path = settings.train_parquet_path
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Train parquet not found: {path}. "
+            "Set TRAIN_PARQUET_PATH (df_for_service.parquet)"
+        )
+    df = pd.read_parquet(path)
+    logger.info("train loaded || path=%s || rows=%s || cols=%s", path, len(df), len(df.columns))
+    return df
+
+
+def _load_prod_oracle_logs(settings: Settings) -> pd.DataFrame:
+    """Боевые логи Querulus из Oracle + разворот JSON_FILE в фичи.
+
+    Фильтр как в ноутбуке DataDrift: убрать EVENT_CREATED_BY_GIBDD_FLAG == 'Да'.
+    Пустые строки → NA (чтобы не считались отдельной категорией).
+    """
+    from datetime import timedelta
+
+    cutoff = datetime.now() - timedelta(weeks=settings.drift_window_weeks)
+    conn = connect_oracle(settings)
+    try:
+        raw = query_querulus_request_logs(conn, min_time_stamp=cutoff)
+    finally:
+        conn.close()
+
+    if raw.empty:
+        logger.warning("Oracle querulus logs empty || since=%s", cutoff)
+        return raw
+
+    # после query колонки lower; на всякий случай принимаем оба регистра
+    json_col = "json_file" if "json_file" in raw.columns else "JSON_FILE"
+    prod = expand_json_column(raw, json_col)
+    for col in prod.columns:
+        prod[col] = prod[col].map(
+            lambda v: pd.NA if isinstance(v, str) and v == "" else v
+        )
+    if "EVENT_CREATED_BY_GIBDD_FLAG" in prod.columns:
+        prod = prod.loc[prod["EVENT_CREATED_BY_GIBDD_FLAG"] != "Да"].copy()
+    logger.info(
+        "prod logs loaded || rows=%s || since=%s || cols=%s",
+        len(prod),
+        cutoff,
+        len(prod.columns),
+    )
+    return prod
+
+
+def load_train_and_prod_logs(
+    settings: Settings,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    """Вернуть (train, prod, shared_feature_names) для расчёта дрифта."""
+    train = _load_train(settings)
+    prod = _load_prod_oracle_logs(settings)
+    # дрифт только по пересечению колонок (имена фич должны совпасть)
     features = [
         c for c in train.columns if c in prod.columns and c not in META_COLS
     ]
     if not features:
-        raise ValueError("No shared feature columns between train and prod logs")
+        raise ValueError(
+            "No shared feature columns between train and Oracle logs. "
+            f"train_cols={list(train.columns)[:15]} "
+            f"prod_cols={list(prod.columns)[:15]}"
+        )
+    logger.info("shared features=%s", len(features))
     return train, prod, features
 
 
-def _read_features(data_dir: Path, stem: str) -> pd.DataFrame:
-    for suffix in (".parquet", ".csv"):
-        path = data_dir / f"{stem}{suffix}"
-        if path.is_file():
-            return pd.read_csv(path) if path.suffix == ".csv" else pd.read_parquet(path)
-    raise FileNotFoundError(
-        f"Synthetic {stem} not found under {data_dir}. Run local/synthetic/generate.py"
-    )
-
-
-def load_train_and_prod_logs(settings: Settings) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-    if settings.source_mode == "synthetic":
-        return _load_synthetic_logs(settings.synthetic_data_dir)
-    raise NotImplementedError(
-        "prod_logs: wire train parquet path + Oracle/prod log extractor. "
-        f"SOURCE_MODE={settings.source_mode}"
-    )
-
-
 def main() -> int:
+    """Точка входа: extract → PSI-отчёт → append в Motor."""
     settings = load_settings()
     logger.info(
-        "SOURCE_MODE=%s || datadrift=outboxml → %s",
-        settings.source_mode,
+        "datadrift ← train parquet + Oracle SPR → %s.%s",
+        settings.schema,
         settings.table_drift,
     )
     train, prod, features = load_train_and_prod_logs(settings)

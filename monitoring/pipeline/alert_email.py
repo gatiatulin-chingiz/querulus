@@ -3,14 +3,11 @@
 Reads already-written metrics (no recalculation). Same shape as archive
 datadrift_* UUEMailMonitoring: PSI over threshold table + Grafana link.
 
-Env (no secrets in code):
-  EMAIL_SMTP_SERVER, EMAIL_PORT, EMAIL_SENDER, EMAIL_LOGIN, EMAIL_PASSWORD
-  EMAIL_RECEIVERS — comma-separated
-  GRAFANA_DASHBOARD_URL — link in body
-  PSI_THRESHOLD — default 0.3
-  ALERT_LOOKBACK_DAYS — default 7
-  ALERT_RESULTS_DIR — where to save email.html (EMail.save_mail_as_html)
+Секреты SMTP — из Airflow Connection (EMAIL_LOGIN / EMAIL_PASSWORD).
+Получатели, URL Grafana, lookback — дефолты в ``pipeline.config`` (env перекрывает).
+
   ALERT_DRY_RUN=1 — build mail + save HTML, skip SMTP
+  ALERT_RESULTS_DIR — каталог для email.html
 """
 from __future__ import annotations
 
@@ -30,7 +27,12 @@ _MONITORING_ROOT = _PIPELINE_ROOT.parent
 if str(_MONITORING_ROOT) not in sys.path:
     sys.path.insert(0, str(_MONITORING_ROOT))
 
-from pipeline.config import load_dotenv, load_settings
+from pipeline.config import (
+    DEFAULT_EMAIL_PORT,
+    DEFAULT_EMAIL_SENDER,
+    DEFAULT_EMAIL_SMTP,
+    load_settings,
+)
 from pipeline.write_sql import get_engine
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -141,11 +143,10 @@ class QuerulusDriftAlertMail(EMailMonitoring):
 
 
 def _load_email_config() -> _EmailEnvConfig:
-    load_dotenv()
-    receivers_raw = os.environ.get("EMAIL_RECEIVERS", "").strip()
-    receivers = [r.strip() for r in receivers_raw.split(",") if r.strip()]
+    settings = load_settings()
+    receivers = list(settings.email_receivers)
     if not receivers:
-        raise ValueError("Set EMAIL_RECEIVERS (comma-separated)")
+        raise ValueError("email_receivers empty (DEFAULT_EMAIL_RECEIVERS / EMAIL_RECEIVERS)")
 
     login = os.environ.get("EMAIL_LOGIN", "").strip()
     password = os.environ.get("EMAIL_PASSWORD", "").strip()
@@ -162,13 +163,13 @@ def _load_email_config() -> _EmailEnvConfig:
     results.mkdir(parents=True, exist_ok=True)
 
     return _EmailEnvConfig(
-        email_smtp_server=os.environ.get("EMAIL_SMTP_SERVER", "internalsmtp.vsk.ru").strip()
-        or "internalsmtp.vsk.ru",
-        email_port=int(os.environ.get("EMAIL_PORT", "2525") or "2525"),
-        email_sender=os.environ.get(
-            "EMAIL_SENDER", "artificial.intelligence@vsk.ru"
-        ).strip()
-        or "artificial.intelligence@vsk.ru",
+        email_smtp_server=os.environ.get("EMAIL_SMTP_SERVER", DEFAULT_EMAIL_SMTP).strip()
+        or DEFAULT_EMAIL_SMTP,
+        email_port=int(
+            os.environ.get("EMAIL_PORT", str(DEFAULT_EMAIL_PORT)) or str(DEFAULT_EMAIL_PORT)
+        ),
+        email_sender=os.environ.get("EMAIL_SENDER", DEFAULT_EMAIL_SENDER).strip()
+        or DEFAULT_EMAIL_SENDER,
         email_login=login,
         email_pass=password,
         email_receivers=receivers,
@@ -200,17 +201,15 @@ def _fetch_drift(lookback_days: int) -> pd.DataFrame:
 
 
 def main() -> int:
-    lookback = int(os.environ.get("ALERT_LOOKBACK_DAYS", "7") or "7")
-    grafana_url = os.environ.get("GRAFANA_DASHBOARD_URL", "").strip()
-    dry = os.environ.get("ALERT_DRY_RUN", "").strip().lower() in {"1", "true", "yes"}
     settings = load_settings()
+    dry = os.environ.get("ALERT_DRY_RUN", "").strip().lower() in {"1", "true", "yes"}
 
-    drift = _fetch_drift(lookback)
+    drift = _fetch_drift(settings.alert_lookback_days)
     mail = QuerulusDriftAlertMail(config=_load_email_config())
     mail.send_report(
         drift,
         psi_threshold=settings.psi_threshold,
-        grafana_url=grafana_url,
+        grafana_url=settings.grafana_dashboard_url,
         dry_run=dry,
     )
     over = int((drift["PSI"] > settings.psi_threshold).sum()) if not drift.empty and "PSI" in drift else 0

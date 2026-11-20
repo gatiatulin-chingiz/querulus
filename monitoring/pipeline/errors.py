@@ -1,30 +1,44 @@
-"""Errors monitoring: MatemModelsLogs → Querulus_errors (MSSQL agrafana)."""
+"""Ошибки модели: OISUU MatemModelsLogs → Motor.agrafana.Querulus_errors.
+
+Поток:
+  1) SELECT из oisuu81_t_MatemModelsLogs (РезультатПроверки = -1)
+  2) нормализация колонок + fingerprint traceback
+  3) дневная агрегация count по модели × fingerprint
+  4) append в Motor (guard: run_date/stem/slot/model_version/error_fingerprint)
+
+Synthetic — только в local/synthetic/run_errors.py.
+"""
 from __future__ import annotations
 
 import hashlib
 import logging
 import re
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 
+# PYTHONPATH: корень monitoring/, чтобы ``import pipeline.*`` работал и из make, и локально
 _PIPELINE_ROOT = Path(__file__).resolve().parent
 _MONITORING_ROOT = _PIPELINE_ROOT.parent
 if str(_MONITORING_ROOT) not in sys.path:
     sys.path.insert(0, str(_MONITORING_ROOT))
 
 from pipeline.config import Settings, load_settings
+from pipeline.db import connect_oisuu
 from pipeline.write_sql import get_engine, write_append_guarded
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("errors")
 
+# --- нормализация текста ошибки для fingerprint (пути/адреса не должны плодить ключи) ---
 _RE_FILE_LINE = re.compile(r'File "[^"]+", line \d+', re.IGNORECASE)
 _RE_LINE_NO = re.compile(r", line \d+")
 _RE_HEX_ADDR = re.compile(r"0x[0-9a-fA-F]+")
 _RE_WS = re.compile(r"\s+")
 
+# Допустимые наборы колонок сырья (русские имена OISUU или уже нормализованные)
 _REQUIRED_ANY = (
     {"ДатаПроверки", "ОписаниеОшибки", "ВидМодели"},
     {"checked_at", "error_text", "model_kind"},
@@ -33,6 +47,7 @@ _REQUIRED_ANY = (
 
 
 def traceback_head(text: str, max_len: int = 180) -> str:
+    """Короткий «заголовок» ошибки для Grafana (последняя осмысленная строка)."""
     if text is None or (isinstance(text, float) and pd.isna(text)):
         return "Ответа нет."
     raw = str(text).strip()
@@ -40,6 +55,7 @@ def traceback_head(text: str, max_len: int = 180) -> str:
         return "Ответа нет."
     lines = [ln.strip() for ln in raw.replace("\r\n", "\n").split("\n") if ln.strip()]
     head = lines[-1] if lines else "Ответа нет."
+    # Ищем снизу строку с Error/Exception или «тип: сообщение»
     for ln in reversed(lines):
         if re.search(r"Error|Exception|Traceback", ln, re.IGNORECASE) or ":" in ln:
             head = ln
@@ -48,6 +64,7 @@ def traceback_head(text: str, max_len: int = 180) -> str:
 
 
 def traceback_fingerprint(text: str) -> str:
+    """Стабильный короткий hash traceback без абсолютных путей и адресов памяти."""
     if text is None or (isinstance(text, float) and pd.isna(text)):
         return "empty"
     raw = str(text)
@@ -60,44 +77,61 @@ def traceback_fingerprint(text: str) -> str:
     return hashlib.sha1(norm.encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
-def _load_synthetic(data_dir: Path) -> pd.DataFrame:
-    path = data_dir / "errors.parquet"
-    if not path.is_file():
-        path = data_dir / "errors.csv"
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"Synthetic errors not found under {data_dir}. "
-            "Run local/synthetic/generate.py"
-        )
-    df = pd.read_csv(path) if path.suffix == ".csv" else pd.read_parquet(path)
+def load_errors_frame(settings: Settings) -> pd.DataFrame:
+    """Боевая выгрузка ошибок из OISUU.
+
+    ``РезультатПроверки = -1`` — сбой/ошибка модели (не успешный score).
+    Окно: ``ERRORS_LOOKBACK_DAYS``. Опционально ``ERRORS_MODEL_KINDS`` (ВидМодели IN …).
+    """
+    since = (datetime.now() - timedelta(days=settings.errors_lookback_days)).strftime(
+        "%Y-%m-%d"
+    )
+    sql = """
+        SELECT
+            ДатаПроверки,
+            LossNumber,
+            ОписаниеОшибки,
+            ВерсияМодели,
+            Комментарий,
+            Filial,
+            ВидМодели,
+            Подразделение,
+            LossProcess,
+            РезультатПроверки
+        FROM [OISUU_report].[dbo].[oisuu81_t_MatemModelsLogs] WITH (NOLOCK)
+        WHERE РезультатПроверки = -1
+          AND ДатаПроверки >= ?
+    """
+    params: list = [since]
+    if settings.errors_model_kinds:
+        placeholders = ",".join("?" for _ in settings.errors_model_kinds)
+        sql += f"\n          AND ВидМодели IN ({placeholders})"
+        params.extend(settings.errors_model_kinds)
+
+    conn = connect_oisuu(settings)
+    try:
+        df = pd.read_sql(sql, conn, params=params)
+    finally:
+        conn.close()
+
     cols = set(df.columns)
     if not any(req.issubset(cols) for req in _REQUIRED_ANY):
         raise ValueError(
             "errors frame must look like MatemModelsLogs "
-            "(ДатаПроверки/ОписаниеОшибки/ВидМодели) or "
-            "(checked_at|run_date, error_text, model_kind)"
+            "(ДатаПроверки/ОписаниеОшибки/ВидМодели); "
+            f"got columns={list(df.columns)[:20]}"
         )
-    if "РезультатПроверки" in df.columns:
-        df = df.loc[df["РезультатПроверки"] == -1].copy()
-    if "check_result" in df.columns:
-        df = df.loc[df["check_result"] == -1].copy()
+    logger.info(
+        "errors loaded || rows=%s || since=%s || kinds=%s",
+        len(df),
+        since,
+        settings.errors_model_kinds or "(all)",
+    )
     return df
 
 
-def _load_prod(settings: Settings) -> pd.DataFrame:
-    raise NotImplementedError(
-        "prod errors: SELECT from oisuu81_t_MatemModelsLogs "
-        f"where РезультатПроверки = -1. SOURCE_MODE={settings.source_mode}"
-    )
-
-
-def load_errors_frame(settings: Settings) -> pd.DataFrame:
-    if settings.source_mode == "synthetic":
-        return _load_synthetic(settings.synthetic_data_dir)
-    return _load_prod(settings)
-
-
 def _normalize_raw(df: pd.DataFrame) -> pd.DataFrame:
+    """Русские колонки OISUU → канон pipeline + head/fingerprint."""
     work = df.copy()
     rename = {
         "ДатаПроверки": "checked_at",
@@ -122,6 +156,7 @@ def _normalize_raw(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("errors frame needs error_text or ОписаниеОшибки")
     work["error_text"] = work["error_text"].fillna("").astype(str)
     work.loc[work["error_text"].str.strip() == "", "error_text"] = "Ответа нет."
+    # stem/slot/label — для Grafana-фильтра «Модель»; без них берём ВидМодели
     if "model_kind" not in work.columns:
         work["model_kind"] = work["stem"] if "stem" in work.columns else "unknown"
     work["model_kind"] = work["model_kind"].fillna("unknown").astype(str)
@@ -139,7 +174,7 @@ def _normalize_raw(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def aggregate_errors(df: pd.DataFrame) -> pd.DataFrame:
-    """Daily counts by model × traceback fingerprint."""
+    """Дневные счётчики: модель × fingerprint (зерно таблицы Querulus_errors)."""
     work = _normalize_raw(df)
     return (
         work.groupby(
@@ -163,11 +198,13 @@ def aggregate_errors(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> int:
+    """Точка входа make automl / python errors.py."""
     settings = load_settings()
-    logger.info("SOURCE_MODE=%s", settings.source_mode)
+    logger.info("errors ← OISUU MatemModelsLogs → %s.%s", settings.schema, settings.table_errors)
     raw = load_errors_frame(settings)
     daily = aggregate_errors(raw)
     engine = get_engine(settings.grafana_sqlalchemy_url)
+    # guard: повторный прогон того же дня не дублирует строки
     n = write_append_guarded(
         daily,
         engine=engine,

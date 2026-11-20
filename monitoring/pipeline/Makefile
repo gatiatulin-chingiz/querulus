@@ -5,8 +5,10 @@
 #   make automl   — errors + datadrift + fin_effect; Mon (or ALERT_FORCE=1) → alert_email
 #   make clean    — remove venv / caches
 
-ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
-export PYTHONPATH := $(ROOT)/src:$(ROOT):$(PYTHONPATH)
+# Standalone clone (querulus_monitoring.git): PIPE=repo root.
+# Nested in monorepo: also add ../../src (examples/querulus/src).
+PIPE := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+export PYTHONPATH := $(PIPE):$(PIPE)/src:$(PIPE)/../..:$(PIPE)/../../src:$(PYTHONPATH)
 
 venv:
 	echo $@ processing...
@@ -18,11 +20,11 @@ venv:
 	./venv/bin/pip3 install --extra-index-url https://repo.vsk.ru/repository/pipdiligence/simple --trusted-host repo.vsk.ru -r requirements.txt
 
 fetch:
-	@echo "No fetch step — metrics sources via SOURCE_MODE / extractors"
+	@echo "No fetch step — sources: OISUU + Oracle RTDM + train parquet"
 
 test:
 	@echo "Running syntax checks..."
-	./venv/bin/python3 -m py_compile config.py write_sql.py errors.py datadrift.py fin_effect.py alert_email.py
+	./venv/bin/python3 -m py_compile config.py db.py write_sql.py errors.py datadrift.py fin_effect.py alert_email.py
 	@echo "Syntax checks passed."
 
 automl:

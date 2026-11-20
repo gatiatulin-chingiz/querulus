@@ -3,6 +3,7 @@ numpy>=1.24,<3
 sqlalchemy>=2.0,<3
 pyodbc>=5.0,<6
 pyarrow>=14.0,<20
+oracledb>=2.0,<4
 # Contour (make venv): outboxml с внутреннего индекса VSK
 outboxml>=0.10.1
 loguru>=0.7,<1

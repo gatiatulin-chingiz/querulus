@@ -1,12 +1,13 @@
-"""Querulus monitoring DAG — contour style like BUU_projects.
+"""Querulus monitoring DAG — контурный стиль как BUU_projects / MONITORING_BUU.
 
-Airflow dags folder: only this file.
-Pipeline .py: git clone each run (KubernetesPodOperator), then make venv/test/automl.
+На контуре в Airflow dags лежит только этот файл.
+Код пайплайна каждый run: git clone → make venv/test/automl в pod.
 
-Override GitLab path: Airflow Variable ``querulus_git_path``
-  default: /mlops/losses_projects/querulus.git
+GitLab path: Variable ``querulus_git_path``
+  default ``/mlops/losses_projects/monitoring/querulus_monitoring.git``
 
-Local docker (no K8s): set QUERULUS_DAG_MODE=bash (+ PIPELINE_DIR mount).
+Локально (docker, без K8s): ``QUERULUS_DAG_MODE=bash`` + mount PIPELINE_DIR.
+Synthetic: ``QUERULUS_USE_SYNTHETIC=1`` → local/synthetic/run_*.py
 """
 from __future__ import annotations
 
@@ -19,15 +20,15 @@ from airflow.models import Variable
 
 tags = ["BUU_projects", "querulus", "monitoring"]
 task_name = "querulus_monitoring"
-DEBUG = False
+DEBUG = False  # True → sleep 3600 в конце pod (отладка)
 
-# Contour GitLab repo with monitoring/pipeline (clone → <repo>/monitoring/pipeline)
+# Contour GitLab: clone → каталог querulus_monitoring/ (= корень pipeline)
 git_path = Variable.get(
     "querulus_git_path",
-    default_var="/mlops/losses_projects/querulus.git",
+    default_var="/mlops/losses_projects/monitoring/querulus_monitoring.git",
 )
-git_folder = "querulus/monitoring/pipeline"
-dag_schedule_interval = "0 9 * * *"
+git_folder = "querulus_monitoring"
+dag_schedule_interval = "0 9 * * *"  # ежедневно 09:00; письмо — только в понедельник
 
 default_args = {
     "owner": "querulus",
@@ -36,20 +37,30 @@ default_args = {
     "provide_context": True,
 }
 
+# k8s (контур) | bash (local SequentialExecutor)
 DAG_MODE = os.environ.get("QUERULUS_DAG_MODE", "k8s").strip().lower()
 
 
 def _build_bash_dag():
-    """Local / SequentialExecutor: scripts already on disk (PIPELINE_DIR)."""
+    """Local: скрипты уже на диске (volume), без clone."""
     from airflow.operators.bash import BashOperator
     from airflow.operators.python import ShortCircuitOperator
 
     pipeline = os.environ.get("PIPELINE_DIR", "/opt/querulus/monitoring/pipeline")
-    source_mode = os.environ.get("SOURCE_MODE", "prod").strip().lower()
-    synth_dir = os.environ.get("SYNTHETIC_DATA_DIR", "")
-    generate = os.environ.get("GENERATE_SCRIPT", "")
+    local_synth = os.environ.get(
+        "LOCAL_SYNTHETIC_DIR", "/opt/querulus/monitoring/local/synthetic"
+    )
+    # Synthetic не в pipeline/: отдельные run_*.py под local docker
+    use_synth = os.environ.get("QUERULUS_USE_SYNTHETIC", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    synth_dir = os.environ.get("SYNTHETIC_DATA_DIR", f"{local_synth}/data")
+    generate = os.environ.get("GENERATE_SCRIPT", f"{local_synth}/generate.py")
 
     def _is_monday_alert(**context) -> bool:
+        """ShortCircuit: письмо только в ALERT_WEEKDAY (0=пн) или ALERT_FORCE."""
         force = os.environ.get("ALERT_FORCE", "").strip().lower() in {
             "1",
             "true",
@@ -61,6 +72,15 @@ def _build_bash_dag():
         when = context.get("data_interval_end") or context["logical_date"]
         return int(when.weekday()) == weekday
 
+    if use_synth:
+        errors_cmd = f"python {local_synth}/run_errors.py"
+        drift_cmd = f"python {local_synth}/run_datadrift.py"
+        fin_cmd = f"python {local_synth}/run_fin_effect.py"
+    else:
+        errors_cmd = f"python {pipeline}/errors.py"
+        drift_cmd = f"python {pipeline}/datadrift.py"
+        fin_cmd = f"python {pipeline}/fin_effect.py"
+
     with DAG(
         dag_id=task_name,
         default_args=default_args,
@@ -70,18 +90,9 @@ def _build_bash_dag():
         max_active_runs=1,
         tags=tags + ["bash"],
     ) as dag:
-        run_errors = BashOperator(
-            task_id="errors",
-            bash_command=f"python {pipeline}/errors.py",
-        )
-        run_datadrift = BashOperator(
-            task_id="datadrift",
-            bash_command=f"python {pipeline}/datadrift.py",
-        )
-        run_fin_effect = BashOperator(
-            task_id="fin_effect",
-            bash_command=f"python {pipeline}/fin_effect.py",
-        )
+        run_errors = BashOperator(task_id="errors", bash_command=errors_cmd)
+        run_datadrift = BashOperator(task_id="datadrift", bash_command=drift_cmd)
+        run_fin_effect = BashOperator(task_id="fin_effect", bash_command=fin_cmd)
         is_monday_alert = ShortCircuitOperator(
             task_id="is_monday_alert",
             python_callable=_is_monday_alert,
@@ -91,7 +102,7 @@ def _build_bash_dag():
             bash_command=f"python {pipeline}/alert_email.py",
         )
         metrics = [run_errors, run_datadrift, run_fin_effect]
-        if source_mode == "synthetic" and generate and synth_dir:
+        if use_synth and generate and synth_dir:
             generate_synthetic = BashOperator(
                 task_id="generate_synthetic",
                 bash_command=f"python {generate} --out {synth_dir}",
@@ -102,10 +113,15 @@ def _build_bash_dag():
 
 
 def _build_k8s_dag():
-    """Contour: clone querulus from GitLab, make automl in a pod."""
+    """Контур: KubernetesPodOperator — clone GitLab + make automl.
+
+    Секреты БД не в git: BaseHook.get_connection → env_vars пода.
+    Имена Connections как у MONITORING_BUU (уже заведены на инстансе).
+    """
     from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
     from kubernetes.client import models as k8s
 
+    # Volumes: dags PVC, рабочий /data_jcs, kerberos/hive/hadoop конфиги ADH
     volume_mount = [
         k8s.V1VolumeMount(
             mount_path="/opt/airflow/dags", name="dags", sub_path=None, read_only=True
@@ -225,25 +241,52 @@ def _build_k8s_dag():
         git_path=git_path,
     )
 
-    motor = BaseHook.get_connection("ACTUAR2_monitoring")
+    # Connections → env (pipeline/config.py читает те же ключи, что BUU)
+    rtdm = BaseHook.get_connection("sandbox_rtdm")  # Oracle RTDM / spr_uu_json_log
+    oisuu = BaseHook.get_connection("OISUU-DB-BIZ_monitoring")  # MatemModelsLogs + витрина
+    motor = BaseHook.get_connection("ACTUAR2_monitoring")  # Motor.agrafana write
     email = BaseHook.get_connection("DCO_Email_Notification")
 
     user_env = {
-        "SOURCE_MODE": "prod",
+        # Motor / Actuar — запись метрик под Grafana
         "MSSQL_HOST": motor.host or "",
         "MSSQL_PORT": str(motor.port) if motor.port else "1433",
         "MSSQL_DATABASE": motor.schema or "Motor",
         "MSSQL_USER": motor.login or "",
         "MSSQL_SA_PASSWORD": motor.password or "",
         "MSSQL_ODBC_DRIVER": "ODBC Driver 18 for SQL Server",
+        "motor_host": motor.host or "",
+        "motor_name": motor.schema or "Motor",
+        "motor_user_name": motor.login or "",
+        "motor_user_pass": motor.password or "",
+        # OISUU — errors + fin_effect monitoring
+        "database_host": oisuu.host or "",
+        "database_port": str(oisuu.port) if oisuu.port else "1433",
+        "database_name": oisuu.schema or "OISUU_report",
+        "database_user_name": oisuu.login or "",
+        "database_user_pass": oisuu.password or "",
+        # Oracle RTDM — DataDrift prod-логи
+        "SERVER_PROD8": rtdm.host or "",
+        "PORT_PROD8": str(rtdm.port) if rtdm.port else "1521",
+        "USER_PROD8": rtdm.login or "",
+        "PASSWORD_PROD8": rtdm.password or "",
+        "SERVICE_NAME_PROD8": rtdm.schema or "rtdmdb08",
+        # Email: логин/пароль из Connection; получатели — DEFAULT_EMAIL_RECEIVERS в config
         "EMAIL_SMTP_SERVER": "internalsmtp.vsk.ru",
         "EMAIL_PORT": "2525",
         "EMAIL_SENDER": "artificial.intelligence@vsk.ru",
         "EMAIL_LOGIN": email.login or "",
         "EMAIL_PASSWORD": email.password or "",
-        # EMAIL_RECEIVERS — from cloned pipeline/.env (setdefault)
     }
+    # Пути к артефактам на шаре / PVC (Airflow Variables)
+    train_path = Variable.get("querulus_train_parquet_path", default_var="")
+    if train_path:
+        user_env["TRAIN_PARQUET_PATH"] = train_path
+    retro_path = Variable.get("querulus_fin_effect_retro_path", default_var="")
+    if retro_path:
+        user_env["FIN_EFFECT_RETRO_PATH"] = retro_path
 
+    # bash в pod: kinit → clone → make (как MONITORING_BUU)
     bcom = """
 set -e
 echo "=== kinit ===" &&
@@ -274,6 +317,7 @@ echo "=== DONE ==="
     if DEBUG:
         bcom += " && sleep 3600"
 
+    # Системные пути ADH/Hadoop внутри образа (как у BUU)
     system_env = {
         "HIVE_CONF_DIR": "/etc/hive/conf",
         "SPARK_HOME": "/usr/local/spark",

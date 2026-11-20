@@ -1,8 +1,16 @@
-"""Fin-effect via querulus → Querulus_FinEffect wide (MSSQL agrafana).
+"""Финэффект Querulus → Motor.agrafana.Querulus_FinEffect (wide).
 
-Grain: (week_start, stem, slot, filial)
+Источники (prod) — это НЕ Oracle SPR:
+  * monitoring — OISUU ``ВитринаСутяжность`` (или файл FIN_EFFECT_MONITORING_PATH)
+  * retro      — обязательный файл FIN_EFFECT_RETRO_PATH (parquet/csv)
+
+Расчёт — пакет ``querulus.fin_effect`` (ITT / coverage / annual / paths).
+
+Зерно wide-таблицы: (week_start, stem, slot, filial)
   filial='(все)' → ITT / annual_* / overall coverage / path lifts
   filial=<имя>  → coverage + path shares + instruments attn
+
+Synthetic — только в ``local/synthetic/run_fin_effect.py``.
 """
 from __future__ import annotations
 
@@ -21,19 +29,22 @@ _MONITORING_ROOT = _PIPELINE_ROOT.parent
 if str(_MONITORING_ROOT) not in sys.path:
     sys.path.insert(0, str(_MONITORING_ROOT))
 
+# monorepo: examples/querulus/src — на контуре пакет querulus должен быть в PYTHONPATH
 _QUERULUS_SRC = _MONITORING_ROOT.parent / "src"
 if _QUERULUS_SRC.is_dir() and str(_QUERULUS_SRC) not in sys.path:
     sys.path.insert(0, str(_QUERULUS_SRC))
 
 from pipeline.config import Settings, load_settings
+from pipeline.db import connect_oisuu
 from pipeline.write_sql import get_engine, write_append_guarded
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("fin_effect")
 
+# Коды РезультатПроверки в витрине: −100 = вне модели, 0/1 = контроль/ручеёк
 RESULT_OUT_OF_MODEL = -100
 RESULT_ELIGIBLE = {0, 1, RESULT_OUT_OF_MODEL}
-FILIAL_ALL = "(все)"
+FILIAL_ALL = "(все)"  # агрегат «по всей сети» в wide-таблице
 
 PILOT_FILIALS = (
     "Владимирский",
@@ -46,21 +57,6 @@ PILOT_FILIALS = (
     "Петропавловск-Камчатский",
     "Уфимский",
     "Ярославский",
-)
-
-# Модели, которые когда-либо были в слоте main (финэффект только для main).
-# Сейчас в бою одна; в истории / synthetic — несколько stem с slot=main.
-_MAIN_MODELS = (
-    {
-        "stem": "querulus_ansamble_2026_04_18_v1",
-        "label": "querulus_ansamble_2026_04_18_v1",
-        "seed": 42,
-    },
-    {
-        "stem": "UU_querulus_2026_11_05_12_44_24",
-        "label": "UU_querulus_2026_11_05_12_44_24",
-        "seed": 99,
-    },
 )
 
 WIDE_COLS = [
@@ -530,72 +526,75 @@ def _first_col(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
     return next((n for n in names if n in df.columns), None)
 
 
-# --- extract (synthetic / prod) -------------------------------------------------
+# --- extract (prod: OISUU vittrina + retro file) -------------------------------
+
+
+def _read_table(path: Path) -> pd.DataFrame:
+    """csv или parquet по суффиксу."""
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    if path.suffix.lower() in {".parquet", ".pq"}:
+        return pd.read_parquet(path)
+    return pd.read_csv(path)
+
+
+def _load_monitoring_vitrina(settings: Settings) -> pd.DataFrame:
+    """Витрина сутяжности из OISUU (не SPR-логи).
+
+    Override: FIN_EFFECT_MONITORING_PATH — готовый csv/parquet (отладка / снимок).
+    enrich_incident_path_flags — флаги ФУ/суда на уровне инцидента (если есть querulus).
+    """
+    if settings.fin_effect_monitoring_path:
+        df = _read_table(Path(settings.fin_effect_monitoring_path))
+        logger.info(
+            "fin_effect monitoring ← file %s || rows=%s",
+            settings.fin_effect_monitoring_path,
+            len(df),
+        )
+        return df
+
+    sql = f"SELECT * FROM {settings.fin_effect_vitrina_table}"
+    conn = connect_oisuu(settings)
+    try:
+        df = pd.read_sql(sql, conn)
+    finally:
+        conn.close()
+    try:
+        from querulus.fin_effect.excel_explore import enrich_incident_path_flags
+
+        df = enrich_incident_path_flags(df)
+    except Exception as exc:  # noqa: BLE001 — на контуре без querulus src не валим весь шаг
+        logger.warning("enrich_incident_path_flags skipped: %s", exc)
+    logger.info(
+        "fin_effect monitoring ← OISUU %s || rows=%s",
+        settings.fin_effect_vitrina_table,
+        len(df),
+    )
+    return df
 
 
 def load_fin_effect_jobs(settings: Settings) -> list[FinEffectJob]:
-    if settings.source_mode == "synthetic":
-        return _load_synthetic_jobs(settings.synthetic_data_dir)
-    return _load_prod_jobs(settings)
+    """Собрать jobs: одна витрина × список stem (история смен main).
 
-
-def _load_synthetic_jobs(data_dir: Path) -> list[FinEffectJob]:
-    """Несколько stem с slot=main — как смена main в проде во времени."""
-    mon_path = data_dir / "fin_effect_monitoring.csv"
-    retro_path = data_dir / "fin_effect_retro.csv"
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    jobs: list[FinEffectJob] = []
-    for i, model in enumerate(_MAIN_MODELS):
-        if i == 0 and mon_path.is_file() and retro_path.is_file():
-            monitoring = pd.read_csv(mon_path)
-            retro = pd.read_csv(retro_path)
-        else:
-            monitoring, retro = build_synthetic_frames(seed=int(model["seed"]))
-            if i == 0:
-                monitoring.to_csv(mon_path, index=False)
-                retro.to_csv(retro_path, index=False)
-        jobs.append(
-            FinEffectJob(
-                monitoring_df=monitoring.copy(),
-                retro_df=retro.copy(),
-                stem=model["stem"],
-                slot="main",
-                model_label=model["label"],
-            )
-        )
-    return jobs
-
-
-def _load_prod_jobs(settings: Settings) -> list[FinEffectJob]:
-    """Все stem, которые когда-либо были main.
-
-    FIN_EFFECT_MONITORING_PATH / FIN_EFFECT_RETRO_PATH — витрины.
-    FIN_EFFECT_STEMS — через запятую (предпочтительно); иначе FIN_EFFECT_STEM.
-    FIN_EFFECT_MODEL_LABELS — опционально, через запятую, 1:1 к stems.
+    FIN_EFFECT_STEMS — через запятую; иначе FIN_EFFECT_STEM (default ``prod``).
+    Финэффект считается только для slot=main.
     """
-    mon_path = os.environ.get("FIN_EFFECT_MONITORING_PATH", "").strip()
-    retro_path = os.environ.get("FIN_EFFECT_RETRO_PATH", "").strip()
-    if not mon_path or not retro_path:
-        raise NotImplementedError(
-            "prod_fin_effect: задай FIN_EFFECT_MONITORING_PATH и "
-            "FIN_EFFECT_RETRO_PATH (csv/parquet). "
-            f"SOURCE_MODE={settings.source_mode}"
+    if not settings.fin_effect_retro_path:
+        raise ValueError(
+            "FIN_EFFECT_RETRO_PATH required (csv/parquet ретро-выборки). "
+            "Monitoring берётся из OISUU ВитринаСутяжность "
+            "(или FIN_EFFECT_MONITORING_PATH)."
         )
-    monitoring = _read_table(Path(mon_path))
-    retro = _read_table(Path(retro_path))
+    monitoring = _load_monitoring_vitrina(settings)
+    retro = _read_table(Path(settings.fin_effect_retro_path))
     stems_raw = os.environ.get("FIN_EFFECT_STEMS", "").strip()
     if stems_raw:
         stems = [s.strip() for s in stems_raw.split(",") if s.strip()]
     else:
-        stems = [os.environ.get("FIN_EFFECT_STEM", "prod").strip() or "prod"]
+        stems = [settings.fin_effect_stem]
     labels_raw = os.environ.get("FIN_EFFECT_MODEL_LABELS", "").strip()
-    labels = (
-        [x.strip() for x in labels_raw.split(",")]
-        if labels_raw
-        else []
-    )
-    slot = os.environ.get("FIN_EFFECT_SLOT", "main").strip() or "main"
+    labels = [x.strip() for x in labels_raw.split(",")] if labels_raw else []
+    slot = settings.fin_effect_slot
     if slot != "main":
         raise ValueError(
             f"финэффект считается только для slot=main, получено {slot!r}"
@@ -621,122 +620,12 @@ def _load_prod_jobs(settings: Settings) -> list[FinEffectJob]:
     return jobs
 
 
-def _read_table(path: Path) -> pd.DataFrame:
-    if not path.is_file():
-        raise FileNotFoundError(path)
-    if path.suffix.lower() in {".parquet", ".pq"}:
-        return pd.read_parquet(path)
-    return pd.read_csv(path)
-
-
-def build_synthetic_frames(
-    *,
-    n_monitoring: int = 400,
-    n_retro: int = 800,
-    seed: int = 42,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    monitoring = _build_monitoring_claims(n_rows=n_monitoring, seed=seed)
-    today = pd.Timestamp.today().normalize()
-    pilot_start = pd.Timestamp("2026-04-20")
-    span = max((today - pilot_start).days, 30)
-    rng = np.random.default_rng(seed)
-    monitoring["ДатаЗаявления"] = pilot_start + pd.to_timedelta(
-        rng.integers(0, span, len(monitoring)), unit="D"
-    )
-    monitoring["Дата вызова модели сутяжности"] = monitoring["ДатаЗаявления"]
-    retro = _build_synthetic_retro(n_rows=n_retro, seed=seed + 1)
-    return monitoring, retro
-
-
-def _build_monitoring_claims(*, n_rows: int, seed: int) -> pd.DataFrame:
-    if n_rows < 20:
-        raise ValueError("n_rows должен быть не меньше 20")
-    rng = np.random.default_rng(seed)
-    result = rng.choice([RESULT_OUT_OF_MODEL, 0, 1], size=n_rows)
-    payout = (result == 1) & (rng.random(n_rows) < 0.6)
-    agreement = (result == 1) & (rng.random(n_rows) < 0.5)
-    today = pd.Timestamp.today().normalize()
-    psr = np.where(rng.random(n_rows) < 0.08, rng.uniform(1_000, 30_000, n_rows), 0.0)
-    frame = pd.DataFrame(
-        {
-            "Убыток": [f"SYN-{index:06d}" for index in range(n_rows)],
-            "НомерИнцидент": [f"INC-{index // 2:06d}" for index in range(n_rows)],
-            "Филиал": rng.choice(PILOT_FILIALS, size=n_rows),
-            "ФормаВозмещения": np.where(agreement, "Соглашение", "Денежная"),
-            "УбытокСтатус": "Первичный",
-            "ТипОбъектаАвтотранспорт": 1,
-            "РезультатПроверки": result,
-            "СуммаПлатежа": rng.uniform(30_000, 250_000, n_rows),
-            "СуммаКВыплате": rng.uniform(30_000, 250_000, n_rows),
-            "СуммаОсновногоДолгаЗаявлено": rng.uniform(20_000, 300_000, n_rows),
-            "Сумма рекомендованная к доплате по модулю": np.where(
-                result == 1, rng.uniform(10_000, 80_000, n_rows), 0.0
-            ),
-            "Иные затраты": np.where(payout, rng.uniform(5_000, 60_000, n_rows), 0.0),
-            "Выплата по модели": payout.astype(int),
-            "Заключено соглашение": agreement.astype(int),
-            "ВызовМодельСутяжность": np.where(
-                result != RESULT_OUT_OF_MODEL,
-                1,
-                (rng.random(n_rows) < 0.35).astype(int),
-            ),
-            "Дата вызова модели сутяжности": today
-            - pd.to_timedelta(rng.integers(0, 120, n_rows), unit="D"),
-            "ДатаЗаявления": today
-            - pd.to_timedelta(rng.integers(0, 120, n_rows), unit="D"),
-            "Cумма выплаты по претензии": psr,
-            "Сумма выплат по ФУ": 0.0,
-            "Сумма выплаты по суду": 0.0,
-            "ЕМР+20": ((rng.random(n_rows) < 0.12) & agreement).astype(int),
-            "ПереплатаЕМР+(безКВ)": 0.0,
-            "Выплата из лимитов директоров филиалов": (
-                (rng.random(n_rows) < 0.10) & agreement
-            ).astype(int),
-            "СогласованнаяСуммаКВ": 0.0,
-        }
-    )
-    frame["СуммаКВыплате"] = frame["СуммаПлатежа"]
-    frame["ПереплатаЕМР+(безКВ)"] = np.where(
-        frame["ЕМР+20"].eq(1), rng.uniform(3_000, 40_000, n_rows), 0.0
-    )
-    frame["СогласованнаяСуммаКВ"] = np.where(
-        frame["Выплата из лимитов директоров филиалов"].eq(1),
-        rng.uniform(5_000, 50_000, n_rows),
-        0.0,
-    )
-    return frame
-
-
-def _build_synthetic_retro(*, n_rows: int, seed: int) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    nonpilot = ("Московский", "Санкт-Петербургский", "Казанский", "Новосибирский")
-    filials = list(PILOT_FILIALS) + list(nonpilot)
-    end = pd.Timestamp("2025-06-30")
-    start = end - pd.DateOffset(years=2)
-    days = (end - start).days
-    dates = start + pd.to_timedelta(rng.integers(0, max(days, 1), n_rows), unit="D")
-    amount = rng.uniform(20_000, 200_000, n_rows)
-    return pd.DataFrame(
-        {
-            "FILIAL": rng.choice(filials, size=n_rows),
-            "LOSS_DATE": dates,
-            "TARGET_FREQ_AMOUNT": amount,
-            "RECOVEREDMAINDEBT_LAST_INST_SUM": amount * rng.uniform(0.3, 0.9, n_rows),
-            "Сумма_взыскано_по_ФУ": np.where(
-                rng.random(n_rows) < 0.1, amount * 0.2, 0.0
-            ),
-            "Суммы_взыскано_по_иску": np.where(
-                rng.random(n_rows) < 0.05, amount * 0.3, 0.0
-            ),
-        }
-    )
-
-
 def main() -> int:
+    """Точка входа: extract → weekly snapshots → wide append в Motor."""
     settings = load_settings()
     logger.info(
-        "SOURCE_MODE=%s || engine=querulus.fin_effect → %s (wide)",
-        settings.source_mode,
+        "fin_effect ← OISUU vittrina + retro → %s.%s",
+        settings.schema,
         settings.table_fin_effect,
     )
     jobs = load_fin_effect_jobs(settings)
