@@ -147,16 +147,10 @@ def _build_k8s_dag():
     from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
     from kubernetes.client import models as k8s
 
-    # Volumes как у MONITORING_BUU (+ hive/hadoop mounts из NS-style образов)
+    # Volumes 1:1 как MONITORING_BUU (иначе pod висит Pending на отсутствующих CM)
     volume_mount = [
         k8s.V1VolumeMount(
             mount_path="/opt/airflow/dags", name="dags", sub_path=None, read_only=True
-        ),
-        k8s.V1VolumeMount(
-            mount_path="/opt/adh-etl-user.keytab",
-            name="dag-keytab",
-            sub_path="adh-etl-user.airflow.keytab",
-            read_only=True,
         ),
         k8s.V1VolumeMount(
             mount_path="/etc/krb5.conf",
@@ -165,45 +159,39 @@ def _build_k8s_dag():
             read_only=True,
         ),
         k8s.V1VolumeMount(
-            mount_path="/usr/local/spark/conf/hive-site.xml",
-            name="hive-site-volume",
-            sub_path="hive-site.xml",
+            mount_path="/usr/local/apache-hive-4.0.1-bin/conf/hive-site.xml",
+            name="adh-configs",
+            sub_path="hive.hive-site.xml",
             read_only=True,
         ),
         k8s.V1VolumeMount(
-            mount_path="/usr/local/hadoop/etc/hadoop/hive-site.xml",
-            name="hive-site-volume",
-            sub_path="hive-site.xml",
+            mount_path="/usr/local/apache-hive-4.0.1-bin/conf/beeline-hs2-connection.xml",
+            name="adh-configs",
+            sub_path="hive.beeline-hs2-connection.xml",
             read_only=True,
         ),
         k8s.V1VolumeMount(
-            mount_path="/usr/local/hadoop/etc/hadoop/core-site.xml",
-            name="core-site-volume",
-            sub_path="core-site.xml",
+            mount_path="/usr/local/hadoop-3.3.6/etc/hadoop/hive-site.xml",
+            name="adh-configs",
+            sub_path="hive.hive-site.xml",
             read_only=True,
         ),
         k8s.V1VolumeMount(
-            mount_path="/usr/local/hadoop/etc/hadoop/hdfs-site.xml",
-            name="hdfs-site-volume",
-            sub_path="hdfs-site.xml",
+            mount_path="/usr/local/hadoop-3.3.6/etc/hadoop/core-site.xml",
+            name="adh-configs",
+            sub_path="core.core-site.xml",
             read_only=True,
         ),
         k8s.V1VolumeMount(
-            mount_path="/etc/hive/conf/beeline-hs2-connection.xml",
-            name="beeline-hs2-connection-volume",
-            sub_path="beeline-hs2-connection.xml",
+            mount_path="/usr/local/hadoop-3.3.6/etc/hadoop/hdfs-site.xml",
+            name="adh-configs",
+            sub_path="hdfs.hdfs-site.xml",
             read_only=True,
         ),
         k8s.V1VolumeMount(
-            mount_path="/etc/pki/ca-trust/extracted/java/truststore.jks",
-            name="truststore-adh-volume",
-            sub_path="truststore.jks",
-            read_only=True,
-        ),
-        k8s.V1VolumeMount(
-            mount_path="/spark/truststore.jks",
-            name="truststore-adh-volume",
-            sub_path="truststore.jks",
+            mount_path="/opt/adh-etl-user.keytab",
+            name="adh-etl-user-airflow-keytab",
+            sub_path="adh-etl-user.airflow.keytab",
             read_only=True,
         ),
     ]
@@ -216,37 +204,21 @@ def _build_k8s_dag():
             ),
         ),
         k8s.V1Volume(
-            name="dag-keytab",
-            config_map=k8s.V1ConfigMapVolumeSource(name="airflow-adh-keytab"),
-        ),
-        k8s.V1Volume(
             name="dag-krb5",
             config_map=k8s.V1ConfigMapVolumeSource(name="krb-conf"),
         ),
         k8s.V1Volume(
-            name="hive-site-volume",
-            config_map=k8s.V1ConfigMapVolumeSource(name="hive-site"),
+            name="adh-configs",
+            config_map=k8s.V1ConfigMapVolumeSource(name="adh-configs"),
         ),
         k8s.V1Volume(
-            name="core-site-volume",
-            config_map=k8s.V1ConfigMapVolumeSource(name="core-site"),
-        ),
-        k8s.V1Volume(
-            name="hdfs-site-volume",
-            config_map=k8s.V1ConfigMapVolumeSource(name="hdfs-site"),
-        ),
-        k8s.V1Volume(
-            name="beeline-hs2-connection-volume",
-            config_map=k8s.V1ConfigMapVolumeSource(name="beeline-hs2-connection"),
-        ),
-        k8s.V1Volume(
-            name="truststore-adh-volume",
-            config_map=k8s.V1ConfigMapVolumeSource(name="truststore-adh"),
+            name="adh-etl-user-airflow-keytab",
+            secret=k8s.V1SecretVolumeSource(secret_name="adh-etl-user.airflow.keytab"),
         ),
     ]
 
-    # Образ и CPU/RAM из Airflow Variable k8s_base (общий для контура)
-    k8s_base = Variable.get(key="k8s_base", deserialize_json=True)
+    # Как MONITORING_BUU: образ из Variable k8s_base_b
+    k8s_base = Variable.get(key="k8s_base_b", deserialize_json=True)
     compute_resources = k8s.V1ResourceRequirements(
         requests=k8s_base["resources"]["requests"],
         limits=k8s_base["resources"]["limits"],
@@ -355,6 +327,8 @@ echo "=== [{label}] DONE ==="
             in_cluster=True,
             do_xcom_push=False,
             get_logs=True,
+            # Pull образа / mount иногда > default 120s
+            startup_timeout_seconds=600,
         )
 
     with DAG(
