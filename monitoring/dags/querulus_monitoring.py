@@ -1,7 +1,8 @@
 """Querulus monitoring DAG — контурный стиль как BUU_projects / MONITORING_BUU.
 
 На контуре в Airflow dags лежит только этот файл.
-Код пайплайна: git clone на PVC → отдельные Airflow-таски (errors / datadrift / …).
+Код пайплайна: каждый pod сам делает git clone в ``/tmp`` (как MONITORING_BUU).
+PVC ``airflow-dag-venv`` не используем — его нет на кластере.
 
 GitLab path: Variable ``querulus_git_path``
   default ``/mlops/losses_projects/monitoring/querulus_monitoring.git``
@@ -9,16 +10,16 @@ GitLab path: Variable ``querulus_git_path``
 Локально (docker, без K8s): ``QUERULUS_DAG_MODE=bash`` + mount PIPELINE_DIR.
 Synthetic: ``QUERULUS_USE_SYNTHETIC=1`` → local/synthetic/run_*.py
 
-Схема K8s-рана (каждая таска = отдельный pod):
+Схема K8s-рана (каждая таска = отдельный pod, свой clone в /tmp):
 
     prepare  →  errors
              →  datadrift   →  is_monday_alert  →  alert_email
              →  fin_effect
 
-  prepare          — СТИРАЕТ старый каталог на PVC, клонирует репо заново, ставит venv
-  errors/…         — НЕ клонируют снова: ходят в уже подготовленный каталог на PVC
-  is_monday_alert  — ShortCircuit на scheduler (без pod): False → alert_email не стартует
-  alert_email      — отдельный pod с make alert_email
+  prepare          — clone + venv + test (ранний fail без записи в Motor)
+  errors/…         — снова clone + venv + make <этап> (диск между pod не шарится)
+  is_monday_alert  — ShortCircuit на scheduler (без pod)
+  alert_email      — clone + venv + make alert_email
 """
 from __future__ import annotations
 
@@ -42,11 +43,9 @@ git_path = Variable.get(
 )
 git_folder = "querulus_monitoring"
 
-# Общий workdir на PVC между тасками ОДНОГО DAG run.
-# Pod'ы эфемерные, а /data_jcs — постоянный диск (PVC airflow-dag-venv),
-# поэтому prepare пишет сюда clone+venv, а следующие таски их читают.
-_work_root = f"/data_jcs/schedule/{task_name}"  # весь «рабочий стол» DAG
-_work_dir = f"{_work_root}/{git_folder}"  # корень клона (= Makefile, *.py)
+# Как MONITORING_BUU: workdir в /tmp внутри pod (не PVC). Между тасками не шарится.
+_work_root = f"/tmp/schedule/{task_name}"
+_work_dir = f"{_work_root}/{git_folder}"
 
 dag_schedule_interval = "0 9 * * *"  # ежедневно 09:00; письмо — только в понедельник
 
@@ -141,29 +140,18 @@ def _build_bash_dag():
 def _build_k8s_dag():
     """Контур: несколько KubernetesPodOperator = несколько Airflow-тасок.
 
-    Важно про жизненный цикл файлов:
-      - каждый KubernetesPodOperator поднимает НОВЫЙ pod и после успеха
-        УДАЛЯЕТ его (on_finish_action=\"delete_pod\");
-      - поэтому код нельзя класть «внутрь» ephemeral container FS;
-      - общий диск — PVC airflow-dag-venv → mount /data_jcs;
-      - prepare ПЕРЕЗАПИСЫВАЕТ /data_jcs/schedule/querulus_monitoring
-        (rm -rf + mkdir + git clone + make venv);
-      - errors / datadrift / fin_effect / alert_email только cd туда и make <цель>.
+    Как MONITORING_BUU: clone+venv в /tmp внутри pod.
+    PVC airflow-dag-venv нет на кластере — не монтируем.
+    Каждый этапный pod заново клонирует репо (диск между pod не общий).
     """
     from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
     from kubernetes.client import models as k8s
 
-    # --- куда монтируем тома внутри каждого pod ---------------------------------
+    # Volumes как у MONITORING_BUU (+ hive/hadoop mounts из NS-style образов)
     volume_mount = [
-        # DAG-файлы Airflow (read-only): сам этот .py уже загружен scheduler'ом
         k8s.V1VolumeMount(
             mount_path="/opt/airflow/dags", name="dags", sub_path=None, read_only=True
         ),
-        # РАБОЧИЙ диск (read-write): сюда prepare кладёт clone + venv
-        k8s.V1VolumeMount(
-            mount_path="/data_jcs", name="dag-venv", sub_path=None, read_only=False
-        ),
-        # Kerberos keytab для kinit (Hive / Hadoop)
         k8s.V1VolumeMount(
             mount_path="/opt/adh-etl-user.keytab",
             name="dag-keytab",
@@ -176,7 +164,6 @@ def _build_k8s_dag():
             sub_path="krb5.conf",
             read_only=True,
         ),
-        # Hive / HDFS конфиги (один ConfigMap hive-site монтируется в 2 пути)
         k8s.V1VolumeMount(
             mount_path="/usr/local/spark/conf/hive-site.xml",
             name="hive-site-volume",
@@ -221,20 +208,11 @@ def _build_k8s_dag():
         ),
     ]
 
-    # --- сами тома (PVC / ConfigMap) --------------------------------------------
     volume = [
-        # Как MONITORING_BUU: claim airflow-custom-dags (не airflow-dags)
         k8s.V1Volume(
             name="dags",
             persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
                 claim_name="airflow-custom-dags"
-            ),
-        ),
-        # Общий PVC для clone+venv между тасками (у BUU — /tmp; нам нужен shared диск)
-        k8s.V1Volume(
-            name="dag-venv",
-            persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
-                claim_name="airflow-dag-venv"
             ),
         ),
         k8s.V1Volume(
@@ -330,69 +308,40 @@ def _build_k8s_dag():
     }
     env_vars = {**system_env, **user_env}
 
-    # --- bash bodies: что реально выполняется внутри pod ------------------------
-    #
-    # prepare: ЕДИНСТВЕННОЕ место, где каталог на PVC уничтожается и создаётся
-    # заново. Без rm -rf остался бы вчерашний clone/venv → stale-код / битый venv.
-    prepare_cmd = f"""
+    # --- bash: как MONITORING_BUU — rm/mkdir/clone/venv в /tmp, потом make -----
+    def _bootstrap_cmd(*, make_targets: str, label: str) -> str:
+        """Полный bootstrap в /tmp + make-цели (через пробел). Не трогает БД сам по себе."""
+        return f"""
 set -e
-echo "=== kinit (тикет Kerberos для Hive/HDFS) ==="
+echo "=== [{label}] kinit ==="
 kinit -F -k -t /opt/adh-etl-user.keytab adh-etl-user
 
-echo "=== УДАЛЯЕМ старый workdir на PVC (если был) ==="
-# ВНИМАНИЕ: стирает ВЕСЬ /data_jcs/schedule/querulus_monitoring
-# (прошлый clone + venv). Нужно, чтобы каждый run брал свежий код из GitLab.
+echo "=== [{label}] чистим /tmp workdir (только FS pod, не БД) ==="
 rm -rf {_work_root}
-
-echo "=== СОЗДАЁМ пустой workdir заново ==="
 mkdir -p {_work_root}
 cd {_work_root}
 
 export GIT_SSL_NO_VERIFY=true
-echo "=== git clone pipeline из GitLab ==="
-# Создаёт подкаталог {_work_root}/{git_folder}/
+echo "=== [{label}] git clone ==="
 git clone {git_url}
 cd {git_folder}
 ls -la
 
-echo "=== make venv (создаёт ./venv и ставит зависимости) ==="
+echo "=== [{label}] make venv ==="
 make venv
 
-echo "=== make test (py_compile, без запросов к БД) ==="
-make test
+echo "=== [{label}] make {make_targets} ==="
+make {make_targets}
 
-echo "=== prepare DONE — clone+venv лежат на PVC, pod можно убивать ==="
+echo "=== [{label}] DONE ==="
 """
+
+    prepare_cmd = _bootstrap_cmd(make_targets="test", label="prepare")
     if DEBUG:
-        # Не удаляем файлы — только держим pod живым для ручного захода
         prepare_cmd += "\necho 'DEBUG sleep 3600'; sleep 3600\n"
 
-    def _step_cmd(make_target: str) -> str:
-        """Bash для этапной таски: НЕ трогает clone, только запускает make.
-
-        Каждый такой вызов — новый pod. kinit делаем снова, потому что
-        Kerberos-тикет жил в предыдущем (уже удалённом) контейнере.
-        venv на PVC уже есть после prepare — его не пересоздаём.
-        """
-        return f"""
-set -e
-echo "=== kinit (новый pod = новый тикет) ==="
-kinit -F -k -t /opt/adh-etl-user.keytab adh-etl-user
-
-echo "=== переходим в clone на PVC (prepare уже положил сюда код+venv) ==="
-cd {_work_dir}
-
-# Страховка: если prepare упал / PVC пустой — падаем сразу, а не на pip
-test -d venv || {{ echo "venv missing — did prepare run?" >&2; exit 1; }}
-
-echo "=== make {make_target} (этап пайплайна, пишет в Motor) ==="
-make {make_target}
-
-echo "=== {make_target} DONE ==="
-"""
-
     def _k8s_task(task_id: str, bash: str) -> KubernetesPodOperator:
-        """Один Airflow-столбик = один pod с общим PVC и одними и теми же env."""
+        """Один Airflow-столбик = один pod."""
         return KubernetesPodOperator(
             task_id=task_id,
             name=f"{task_name}-{task_id}",
@@ -402,7 +351,6 @@ echo "=== {make_target} DONE ==="
             volume_mounts=volume_mount,
             env_vars=env_vars,
             cmds=["bash", "-cx", bash],
-            # После успеха/фейла pod УДАЛЯЕТСЯ; файлы на PVC остаются
             on_finish_action="delete_pod",
             in_cluster=True,
             do_xcom_push=False,
@@ -418,24 +366,29 @@ echo "=== {make_target} DONE ==="
         ),
         schedule=dag_schedule_interval,
         catchup=False,
-        max_active_runs=1,  # не запускать второй run, пока живёт первый (общий PVC)
+        max_active_runs=1,
         tags=tags,
     ) as dag:
-        # 1) стереть/пересоздать clone+venv
         prepare = _k8s_task("prepare", prepare_cmd)
-        # 2) три независимых этапа (можно параллельно после prepare)
-        errors = _k8s_task("errors", _step_cmd("errors"))
-        datadrift = _k8s_task("datadrift", _step_cmd("datadrift"))
-        fin_effect = _k8s_task("fin_effect", _step_cmd("fin_effect"))
-        # 3) гейт на scheduler: не понедельник → alert_email skipped
+        errors = _k8s_task(
+            "errors", _bootstrap_cmd(make_targets="errors", label="errors")
+        )
+        datadrift = _k8s_task(
+            "datadrift", _bootstrap_cmd(make_targets="datadrift", label="datadrift")
+        )
+        fin_effect = _k8s_task(
+            "fin_effect",
+            _bootstrap_cmd(make_targets="fin_effect", label="fin_effect"),
+        )
         is_monday_alert = ShortCircuitOperator(
             task_id="is_monday_alert",
             python_callable=_is_monday_alert,
         )
-        # 4) письмо (отдельный pod)
-        alert_email = _k8s_task("alert_email", _step_cmd("alert_email"))
+        alert_email = _k8s_task(
+            "alert_email",
+            _bootstrap_cmd(make_targets="alert_email", label="alert_email"),
+        )
 
-        # Граф: prepare → {errors, datadrift, fin_effect} → гейт → письмо
         prepare >> [errors, datadrift, fin_effect] >> is_monday_alert >> alert_email
     return dag
 
