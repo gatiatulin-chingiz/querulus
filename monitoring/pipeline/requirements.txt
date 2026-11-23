@@ -1,7 +1,12 @@
+# Contour image: без setuptools pip падает на pyarrow (No module named pkg_resources)
+setuptools>=65.0.0
+wheel>=0.40.0
+
 pandas>=2.0,<3
 numpy>=1.24,<3
 sqlalchemy>=2.0,<3
 pyodbc>=5.0,<6
+# Только wheel (в образе нет toolchain для сборки из source)
 pyarrow>=14.0,<20
 oracledb>=2.0,<4
 # Contour (make venv): outboxml с внутреннего индекса VSK

@@ -23,8 +23,9 @@ venv:
 	venv/bin/python3 -m pip config set global.index-url 'http://repo.vsk.ru/repository/pypi.org/simple'
 	venv/bin/python3 -m pip config set global.extra-index-url 'https://repo.vsk.ru/repository/pipdiligence/simple'
 	venv/bin/python3 -m pip config set global.trusted-host 'repo.vsk.ru'
-	venv/bin/python3 -m pip install --upgrade pip
-	./venv/bin/pip3 install --extra-index-url https://repo.vsk.ru/repository/pipdiligence/simple --trusted-host repo.vsk.ru -r requirements.txt
+	venv/bin/python3 -m pip install --upgrade pip setuptools wheel
+	# pyarrow: только binary wheel (иначе Failed to build + pkg_resources)
+	./venv/bin/pip3 install --extra-index-url https://repo.vsk.ru/repository/pipdiligence/simple --trusted-host repo.vsk.ru --only-binary=:pyarrow: -r requirements.txt
 
 # Заглушка под BUU-контракт (у нас данные не из git-fetch)
 fetch:
