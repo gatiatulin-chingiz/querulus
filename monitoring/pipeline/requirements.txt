@@ -6,8 +6,7 @@ pandas>=2.0,<3
 numpy>=1.24,<3
 sqlalchemy>=2.0,<3
 pyodbc>=5.0,<6
-# Только wheel (в образе нет toolchain для сборки из source)
-pyarrow>=14.0,<20
+# pyarrow ставит Makefile отдельно: --only-binary=pyarrow (без source build)
 oracledb>=2.0,<4
 # Contour (make venv): outboxml с внутреннего индекса VSK
 outboxml>=0.10.1
