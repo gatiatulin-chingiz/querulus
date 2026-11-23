@@ -20,11 +20,11 @@ venv:
 	./venv/bin/pip3 install --extra-index-url https://repo.vsk.ru/repository/pipdiligence/simple --trusted-host repo.vsk.ru -r requirements.txt
 
 fetch:
-	@echo "No fetch step — sources: OISUU + Oracle RTDM + train parquet"
+	@echo "No fetch step — sources: OISUU + Oracle RTDM + Hive reference"
 
 test:
 	@echo "Running syntax checks..."
-	./venv/bin/python3 -m py_compile config.py db.py write_sql.py errors.py datadrift.py fin_effect.py alert_email.py
+	./venv/bin/python3 -m py_compile config.py db.py hadoop_extractor.py write_sql.py errors.py datadrift.py fin_effect.py alert_email.py
 	@echo "Syntax checks passed."
 
 automl:

@@ -278,15 +278,13 @@ def _build_k8s_dag():
         "EMAIL_LOGIN": email.login or "",
         "EMAIL_PASSWORD": email.password or "",
     }
-    # Пути к артефактам на шаре / PVC (Airflow Variables)
-    train_path = Variable.get("querulus_train_parquet_path", default_var="")
-    if train_path:
-        user_env["TRAIN_PARQUET_PATH"] = train_path
+    # Hive table / окна train — в pipeline/config.py (DEFAULT_REFERENCE_HIVE_TABLE).
+    # FIN_EFFECT_RETRO_PATH — если нужен файл на PVC, задать Variable (опционально).
     retro_path = Variable.get("querulus_fin_effect_retro_path", default_var="")
     if retro_path:
         user_env["FIN_EFFECT_RETRO_PATH"] = retro_path
 
-    # bash в pod: kinit → clone → make (как MONITORING_BUU)
+    # bash в pod: kinit (Kerberos для HDFS/Hive) → clone → make
     bcom = """
 set -e
 echo "=== kinit ===" &&

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from urllib.parse import quote_plus
 
 
@@ -27,20 +26,33 @@ TABLE_ERRORS = "Querulus_errors"
 TABLE_DRIFT = "querulus_DataDrift"
 TABLE_FIN_EFFECT = "Querulus_FinEffect"
 
-_PIPELINE_ROOT = Path(__file__).resolve().parent
-
-# Train в monorepo; на контуре — Variable querulus_train_parquet_path
-_DEFAULT_TRAIN = (
-    _PIPELINE_ROOT.parents[1] / "integration" / "results" / "df_for_service.parquet"
-)
-
-# --- несекретные дефолты (раньше жили в pipeline/.env) -----------------------
+# --- несекретные дефолты -----------------------------------------------------
 DEFAULT_PSI_THRESHOLD = 0.3
 DEFAULT_DRIFT_WINDOW_WEEKS = 2.0
 DEFAULT_ERRORS_LOOKBACK_DAYS = 14
 DEFAULT_FIN_EFFECT_STEM = "prod"
 DEFAULT_FIN_EFFECT_SLOT = "main"
 DEFAULT_FIN_EFFECT_VITRINA = "[OISUU_report].[dbo].[ВитринаСутяжность]"
+
+# DataDrift: main/second — разные Hive-таблицы (как models.json).
+# Менять stem/hive здесь при смене модели; env REFERENCE_HIVE_TABLE_MAIN/SECOND перекрывает.
+DEFAULT_DRIFT_MODELS: tuple[dict[str, str], ...] = (
+    {
+        "slot": "main",
+        "stem": "querulus_ansamble_2026_04_18_v1",
+        "hive": "models.querulus_ansamble_2026_04_18_v1",
+        "label": "querulus_ansamble_2026_04_18_v1",
+    },
+    {
+        "slot": "second",
+        "stem": "UU_querulus_2026_11_05_12_44_24",
+        "hive": "models.UU_querulus_2026_11_05_12_44_24",
+        "label": "UU_querulus_2026_11_05_12_44_24",
+    },
+)
+# Опциональный срез train по PAYMENT_ORDER_DATE_TIME; пусто = без среза
+DEFAULT_REFERENCE_TRAIN_START = ""
+DEFAULT_REFERENCE_TRAIN_END = ""
 
 DEFAULT_OISUU_HOST = "oisuu-db-biz.vsk.ru"
 DEFAULT_OISUU_PORT = 1433
@@ -85,7 +97,10 @@ class Settings:
     oracle_password: str
     oracle_service_name: str
 
-    train_parquet_path: Path
+    # DataDrift: список моделей (slot/stem/hive/label) — только Hive
+    drift_models: tuple[dict[str, str], ...]
+    reference_train_start: str  # ISO date или ""
+    reference_train_end: str
     drift_window_weeks: float
     errors_lookback_days: int
     errors_model_kinds: tuple[str, ...]
@@ -156,10 +171,15 @@ def _split_csv(raw: str) -> tuple[str, ...]:
 
 def load_settings() -> Settings:
     """Собрать Settings из env (Airflow) + дефолты констант выше."""
-    train_raw = os.environ.get("TRAIN_PARQUET_PATH", "").strip() or os.environ.get(
-        "REFERENCE_DATASET_PATH", ""
-    ).strip()
-    train_path = Path(train_raw) if train_raw else _DEFAULT_TRAIN
+    # Опционально перекрыть hive-таблицы без правки кода
+    models: list[dict[str, str]] = [dict(m) for m in DEFAULT_DRIFT_MODELS]
+    hive_main = os.environ.get("REFERENCE_HIVE_TABLE_MAIN", "").strip()
+    hive_second = os.environ.get("REFERENCE_HIVE_TABLE_SECOND", "").strip()
+    for m in models:
+        if m.get("slot") == "main" and hive_main:
+            m["hive"] = hive_main
+        if m.get("slot") == "second" and hive_second:
+            m["hive"] = hive_second
 
     receivers_raw = os.environ.get("EMAIL_RECEIVERS", "").strip()
     receivers = (
@@ -192,7 +212,13 @@ def load_settings() -> Settings:
         oracle_password=os.environ.get("PASSWORD_PROD8", "").strip(),
         oracle_service_name=os.environ.get("SERVICE_NAME_PROD8", "").strip()
         or DEFAULT_ORACLE_SERVICE,
-        train_parquet_path=train_path,
+        drift_models=tuple(models),
+        reference_train_start=os.environ.get(
+            "REFERENCE_TRAIN_START", DEFAULT_REFERENCE_TRAIN_START
+        ).strip(),
+        reference_train_end=os.environ.get(
+            "REFERENCE_TRAIN_END", DEFAULT_REFERENCE_TRAIN_END
+        ).strip(),
         drift_window_weeks=float(
             os.environ.get("DRIFT_WINDOW_WEEKS", str(DEFAULT_DRIFT_WINDOW_WEEKS))
             or str(DEFAULT_DRIFT_WINDOW_WEEKS)

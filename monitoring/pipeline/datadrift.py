@@ -1,14 +1,13 @@
-"""DataDrift: train parquet + Oracle SPR-логи → Motor.agrafana.querulus_DataDrift.
+"""DataDrift: Hive reference (main+second) + Oracle SPR → querulus_DataDrift.
 
 Источники (prod):
-  * train — ``TRAIN_PARQUET_PATH`` / ``df_for_service.parquet`` (обучающая выборка)
-  * prod  — Oracle ``spr_uu_json_log``, маршрут ОИСУУ → SPR_UU::QUERULUS,
-            JSON_FILE разворачивается в фичи (см. ``pipeline.db.expand_json_column``)
+  * train/reference — Hive на каждую модель из ``DEFAULT_DRIFT_MODELS``
+    (slot main/second → своя ``hive``-таблица); без parquet-fallback.
+  * prod — Oracle ``spr_uu_json_log`` ОИСУУ→SPR_UU::QUERULUS (+ expand JSON);
+    один prod-снимок сравнивается с каждым train отдельно.
 
-Расчёт PSI/KL/JS — OutBoxML ``DataDrift`` (подкласс ``QuerulusDataDrift``
-с безопасным кодированием категориальных, если в prod появились новые уровни).
-
-Synthetic — только в ``local/synthetic/run_datadrift.py``.
+Kerberos: ``kinit`` в DAG до ``make automl``.
+Synthetic — ``local/synthetic/run_datadrift.py``.
 """
 from __future__ import annotations
 
@@ -328,17 +327,61 @@ def compute_datadrift_by_meta(
 # --- extract (prod) ------------------------------------------------------------
 
 
-def _load_train(settings: Settings) -> pd.DataFrame:
-    """Обучающая выборка сервиса (integration/results/df_for_service.parquet)."""
-    path = settings.train_parquet_path
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"Train parquet not found: {path}. "
-            "Set TRAIN_PARQUET_PATH (df_for_service.parquet)"
+def _filter_train_window(df: pd.DataFrame, settings: Settings) -> pd.DataFrame:
+    """Срез reference по PAYMENT_ORDER_DATE_TIME, если заданы START/END (как BUU)."""
+    date_col = "PAYMENT_ORDER_DATE_TIME"
+    start = settings.reference_train_start
+    end = settings.reference_train_end
+    if not start and not end:
+        return df
+    if date_col not in df.columns:
+        logger.warning(
+            "reference train window ignored: column %s missing", date_col
         )
-    df = pd.read_parquet(path)
-    logger.info("train loaded || path=%s || rows=%s || cols=%s", path, len(df), len(df.columns))
-    return df
+        return df
+    d = pd.to_datetime(df[date_col], errors="coerce")
+    mask = pd.Series(True, index=df.index)
+    if start:
+        mask &= d >= start
+    if end:
+        mask &= d < end
+    out = df.loc[mask].copy()
+    logger.info(
+        "reference train window || start=%s end=%s || rows %s → %s",
+        start or "-",
+        end or "-",
+        len(df),
+        len(out),
+    )
+    return out
+
+
+def load_reference_dataset(settings: Settings, *, hive_table: str) -> pd.DataFrame:
+    """Обучающая выборка одной модели — только Hive (без parquet-fallback)."""
+    table = hive_table.strip()
+    if not table:
+        raise ValueError(
+            "Hive table empty for drift model. "
+            "Set hive in DEFAULT_DRIFT_MODELS (pipeline/config.py)."
+        )
+
+    from pipeline.hadoop_extractor import HadoopExtractor
+
+    # локальный parquet-кэш после hdfs get — уникальное имя на таблицу
+    safe = table.replace(".", "_").replace("/", "_")
+    logger.info("reference ← Hive %s", table)
+    df = HadoopExtractor(
+        source=table,
+        to_df=f"querulus_hive_reference_{safe}.parquet",
+        app_name="querulus_datadrift",
+    ).extract_dataset()
+    logger.info(
+        "Hive reference loaded || table=%s || rows=%s || cols=%s",
+        table,
+        len(df),
+        len(df.columns),
+    )
+    return _filter_train_window(df, settings)
 
 
 def _load_prod_oracle_logs(settings: Settings) -> pd.DataFrame:
@@ -378,13 +421,7 @@ def _load_prod_oracle_logs(settings: Settings) -> pd.DataFrame:
     return prod
 
 
-def load_train_and_prod_logs(
-    settings: Settings,
-) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-    """Вернуть (train, prod, shared_feature_names) для расчёта дрифта."""
-    train = _load_train(settings)
-    prod = _load_prod_oracle_logs(settings)
-    # дрифт только по пересечению колонок (имена фич должны совпасть)
+def _shared_features(train: pd.DataFrame, prod: pd.DataFrame) -> list[str]:
     features = [
         c for c in train.columns if c in prod.columns and c not in META_COLS
     ]
@@ -394,23 +431,60 @@ def load_train_and_prod_logs(
             f"train_cols={list(train.columns)[:15]} "
             f"prod_cols={list(prod.columns)[:15]}"
         )
-    logger.info("shared features=%s", len(features))
-    return train, prod, features
+    return features
 
 
 def main() -> int:
-    """Точка входа: extract → PSI-отчёт → append в Motor."""
+    """Точка входа: для каждой main/second — Hive train + Oracle prod → append."""
     settings = load_settings()
+    if not settings.drift_models:
+        raise ValueError("DEFAULT_DRIFT_MODELS is empty in pipeline/config.py")
+
     logger.info(
-        "datadrift ← train parquet + Oracle SPR → %s.%s",
+        "datadrift ← Hive×%s models + Oracle SPR → %s.%s",
+        len(settings.drift_models),
         settings.schema,
         settings.table_drift,
     )
-    train, prod, features = load_train_and_prod_logs(settings)
-    report = compute_datadrift_by_meta(train, prod, features)
-    if report.empty:
+    prod = _load_prod_oracle_logs(settings)
+    if prod.empty:
+        logger.warning("Empty prod logs — skip datadrift write")
+        return 0
+
+    parts: list[pd.DataFrame] = []
+    for model in settings.drift_models:
+        slot = model.get("slot", "")
+        stem = model.get("stem", "")
+        hive = model.get("hive", "")
+        label = model.get("label") or stem
+        logger.info("datadrift model || slot=%s stem=%s hive=%s", slot, stem, hive)
+        train = load_reference_dataset(settings, hive_table=hive)
+        features = _shared_features(train, prod)
+        # cf/rg пока один блок на модель; track=slot чтобы Grafana отличала main/second
+        part = compute_datadrift(
+            train,
+            prod,
+            features,
+            stem=stem,
+            track=slot or "cf",
+            model_name=stem,
+            model_version=stem,
+            model_label=label,
+        )
+        if not part.empty:
+            parts.append(part)
+        logger.info(
+            "datadrift model done || stem=%s || features=%s || rows=%s",
+            stem,
+            len(features),
+            len(part),
+        )
+
+    if not parts:
         logger.warning("Empty datadrift report")
         return 0
+    report = pd.concat(parts, ignore_index=True)
+
     engine = get_engine(settings.grafana_sqlalchemy_url)
     n = write_append_guarded(
         report,
@@ -421,9 +495,9 @@ def main() -> int:
     )
     over = int((report["PSI"] > settings.psi_threshold).sum()) if "PSI" in report else 0
     logger.info(
-        "datadrift done || rows_written=%s || features=%s || psi_over_threshold=%s",
+        "datadrift done || rows_written=%s || models=%s || psi_over_threshold=%s",
         n,
-        len(features),
+        len(settings.drift_models),
         over,
     )
     return 0
