@@ -52,7 +52,7 @@ dag_schedule_interval = "0 9 * * *"  # ежедневно 09:00; письмо �
 default_args = {
     "owner": "querulus",
     "start_date": datetime.datetime(2026, 1, 1, 9, 0, 0),
-    "retries": 1,
+    "retries": 0,  # как MONITORING_BUU: упала — не гоняем второй раз
     "provide_context": True,
 }
 
