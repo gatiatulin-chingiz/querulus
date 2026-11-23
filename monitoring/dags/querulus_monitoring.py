@@ -223,13 +223,14 @@ def _build_k8s_dag():
 
     # --- сами тома (PVC / ConfigMap) --------------------------------------------
     volume = [
+        # Как MONITORING_BUU: claim airflow-custom-dags (не airflow-dags)
         k8s.V1Volume(
             name="dags",
             persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
-                claim_name="airflow-dags"
+                claim_name="airflow-custom-dags"
             ),
         ),
-        # Общий PVC для clone+venv между тасками (не путать с airflow-dags)
+        # Общий PVC для clone+venv между тасками (у BUU — /tmp; нам нужен shared диск)
         k8s.V1Volume(
             name="dag-venv",
             persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(
