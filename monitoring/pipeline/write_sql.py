@@ -1,7 +1,8 @@
 """Запись датафреймов мониторинга в Motor.agrafana (MSSQL).
 
-При первом запуске ``ensure_monitoring_tables`` создаёт schema + таблицы
-(IF NOT EXISTS). Дальше только INSERT новых ключей (``write_append_guarded``).
+При первом запуске ``ensure_monitoring_tables`` создаёт только таблицы
+(IF NOT EXISTS). БД Motor и schema agrafana не трогаем — они уже есть на контуре.
+Дальше только INSERT новых ключей (``write_append_guarded``).
 ALTER / DROP не делаем: недостающие колонки — вручную или пересоздать таблицу.
 
 Таблицы:
@@ -42,18 +43,12 @@ def _quote_ident(name: str) -> str:
 
 
 def _ddl_statements(schema: str = SCHEMA) -> list[str]:
-    """CREATE SCHEMA + CREATE TABLE IF NOT EXISTS (MSSQL)."""
+    """Только CREATE TABLE IF NOT EXISTS (MSSQL). Без CREATE DATABASE / SCHEMA."""
     s = _quote_ident(schema)
     t_err = _quote_ident(TABLE_ERRORS)
     t_drift = _quote_ident(TABLE_DRIFT)
     t_fin = _quote_ident(TABLE_FIN_EFFECT)
     return [
-        f"""
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'{schema}')
-BEGIN
-    EXEC(N'CREATE SCHEMA [{s}]');
-END
-""",
         f"""
 IF OBJECT_ID(N'[{s}].[{t_err}]', N'U') IS NULL
 BEGIN
@@ -146,7 +141,7 @@ def ensure_monitoring_tables(
     *,
     schema: str = SCHEMA,
 ) -> None:
-    """Создать schema agrafana и 3 таблицы, если их ещё нет (без ALTER)."""
+    """Создать 3 таблицы, если их ещё нет (без ALTER / без CREATE DATABASE|SCHEMA)."""
     with engine.begin() as conn:
         for stmt in _ddl_statements(schema):
             conn.execute(text(stmt))

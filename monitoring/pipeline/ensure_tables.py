@@ -1,4 +1,6 @@
-"""Один раз создать Motor.agrafana таблицы мониторинга (IF NOT EXISTS).
+"""Один раз создать таблицы мониторинга в Motor.agrafana (IF NOT EXISTS).
+
+БД Motor и schema agrafana должны уже существовать.
 
   python ensure_tables.py
   make tables

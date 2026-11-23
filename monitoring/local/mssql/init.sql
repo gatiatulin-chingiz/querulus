@@ -1,4 +1,5 @@
--- Motor + agrafana + таблицы Querulus monitoring (как в контуре)
+-- Local docker: Motor + agrafana + таблицы Querulus monitoring.
+-- На контуре (pipeline/) CREATE DATABASE / SCHEMA запрещены — только таблицы.
 IF DB_ID(N'Motor') IS NULL
 BEGIN
     CREATE DATABASE Motor;

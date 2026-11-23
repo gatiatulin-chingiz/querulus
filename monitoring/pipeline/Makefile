@@ -36,7 +36,7 @@ test:
 	./venv/bin/python3 -m py_compile config.py settings.py db.py hadoop_extractor.py write_sql.py ensure_tables.py errors.py datadrift.py fin_effect.py alert_email.py
 	@echo "Syntax checks passed."
 
-# Создать schema agrafana + Querulus_* таблицы на Motor (IF NOT EXISTS)
+# Создать Querulus_* таблицы на Motor (IF NOT EXISTS; БД/schema не трогаем)
 tables:
 	@echo "=== ensure Motor.agrafana tables ==="
 	./venv/bin/python3 ensure_tables.py
