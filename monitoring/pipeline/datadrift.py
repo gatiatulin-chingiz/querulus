@@ -1,10 +1,10 @@
 """DataDrift: Hive reference (main+second) + Oracle SPR → querulus_DataDrift.
 
 Источники (prod):
-  * train/reference — Hive на каждую модель из ``DEFAULT_DRIFT_MODELS``
-    (slot main/second → своя ``hive``-таблица); без parquet-fallback.
-  * prod — Oracle ``spr_uu_json_log`` ОИСУУ→SPR_UU::QUERULUS (+ expand JSON);
-    один prod-снимок сравнивается с каждым train отдельно.
+  * train — Hive на каждую модель из ``DEFAULT_DRIFT_MODELS`` (полный train);
+  * prod — Oracle ``spr_uu_json_log`` (+ expand JSON), один снимок на все модели.
+  * фичи — ``config.features ∩ train.columns ∩ prod.columns`` (cf∪rg в config);
+    отсутствующие фичи → warning в лог.
 
 Kerberos: ``kinit`` в DAG до ``make automl``.
 Synthetic — ``local/synthetic/run_datadrift.py``.
@@ -26,7 +26,7 @@ _MONITORING_ROOT = _PIPELINE_ROOT.parent
 if str(_MONITORING_ROOT) not in sys.path:
     sys.path.insert(0, str(_MONITORING_ROOT))
 
-from pipeline.config import Settings, load_settings
+from pipeline.settings import Settings, load_settings
 from pipeline.db import (
     connect_oracle,
     expand_json_column,
@@ -39,6 +39,8 @@ logger = logging.getLogger("datadrift")
 
 # Мета-колонки не участвуют в PSI (это ярлыки модели/трека, не фичи)
 META_COLS = {"stem", "slot", "track", "run_date", "model_label", "model_name", "model_version"}
+# Один расчёт на модель (cf∪rg); колонка track для guard/схемы Motor
+DRIFT_TRACK = "all"
 
 # Порядок колонок отчёта как в archive MonitoringReport
 ARCHIVE_COLS = [
@@ -392,7 +394,7 @@ def _load_prod_oracle_logs(settings: Settings) -> pd.DataFrame:
     """
     from datetime import timedelta
 
-    cutoff = datetime.now() - timedelta(weeks=settings.drift_window_weeks)
+    cutoff = datetime.now() - timedelta(days=settings.drift_lookback_days)
     conn = connect_oracle(settings)
     try:
         raw = query_querulus_request_logs(conn, min_time_stamp=cutoff)
@@ -421,15 +423,59 @@ def _load_prod_oracle_logs(settings: Settings) -> pd.DataFrame:
     return prod
 
 
-def _shared_features(train: pd.DataFrame, prod: pd.DataFrame) -> list[str]:
-    features = [
-        c for c in train.columns if c in prod.columns and c not in META_COLS
-    ]
+def resolve_drift_features(
+    configured: Iterable[str],
+    train: pd.DataFrame,
+    prod: pd.DataFrame,
+    *,
+    stem: str,
+) -> list[str]:
+    """config.features ∩ train ∩ prod; warning, если чего-то нет."""
+    wanted = [c for c in configured if c and c not in META_COLS]
+    if not wanted:
+        raise ValueError(
+            f"Empty features list in DEFAULT_DRIFT_MODELS for stem={stem!r}. "
+            "Edit pipeline/config.py."
+        )
+
+    train_cols = set(train.columns)
+    prod_cols = set(prod.columns)
+    missing_train = [c for c in wanted if c not in train_cols]
+    missing_prod = [c for c in wanted if c not in prod_cols]
+    if missing_train:
+        logger.warning(
+            "ALERT datadrift missing in TRAIN || stem=%s || n=%s || cols=%s",
+            stem,
+            len(missing_train),
+            missing_train,
+        )
+    if missing_prod:
+        logger.warning(
+            "ALERT datadrift missing in PROD || stem=%s || n=%s || cols=%s",
+            stem,
+            len(missing_prod),
+            missing_prod,
+        )
+
+    features = [c for c in wanted if c in train_cols and c in prod_cols]
     if not features:
         raise ValueError(
-            "No shared feature columns between train and Oracle logs. "
-            f"train_cols={list(train.columns)[:15]} "
-            f"prod_cols={list(prod.columns)[:15]}"
+            f"No usable features after ∩ train ∩ prod for stem={stem!r}. "
+            f"configured={wanted} missing_train={missing_train} "
+            f"missing_prod={missing_prod}"
+        )
+    if missing_train or missing_prod:
+        logger.warning(
+            "ALERT datadrift features reduced || stem=%s || "
+            "configured=%s || used=%s || dropped=%s",
+            stem,
+            len(wanted),
+            len(features),
+            len(wanted) - len(features),
+        )
+    else:
+        logger.info(
+            "datadrift features ok || stem=%s || n=%s", stem, len(features)
         )
     return features
 
@@ -441,10 +487,11 @@ def main() -> int:
         raise ValueError("DEFAULT_DRIFT_MODELS is empty in pipeline/config.py")
 
     logger.info(
-        "datadrift ← Hive×%s models + Oracle SPR → %s.%s",
+        "datadrift ← Hive×%s models + Oracle SPR → %s.%s || track=%s",
         len(settings.drift_models),
         settings.schema,
         settings.table_drift,
+        DRIFT_TRACK,
     )
     prod = _load_prod_oracle_logs(settings)
     if prod.empty:
@@ -454,19 +501,19 @@ def main() -> int:
     parts: list[pd.DataFrame] = []
     for model in settings.drift_models:
         slot = model.get("slot", "")
-        stem = model.get("stem", "")
-        hive = model.get("hive", "")
-        label = model.get("label") or stem
+        stem = str(model.get("stem", ""))
+        hive = str(model.get("hive", ""))
+        label = str(model.get("label") or stem)
+        configured = model.get("features") or ()
         logger.info("datadrift model || slot=%s stem=%s hive=%s", slot, stem, hive)
         train = load_reference_dataset(settings, hive_table=hive)
-        features = _shared_features(train, prod)
-        # cf/rg пока один блок на модель; track=slot чтобы Grafana отличала main/second
+        features = resolve_drift_features(configured, train, prod, stem=stem)
         part = compute_datadrift(
             train,
             prod,
             features,
             stem=stem,
-            track=slot or "cf",
+            track=DRIFT_TRACK,
             model_name=stem,
             model_version=stem,
             model_label=label,

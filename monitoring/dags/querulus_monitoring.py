@@ -241,20 +241,15 @@ def _build_k8s_dag():
         git_path=git_path,
     )
 
-    # Connections → env (pipeline/config.py читает те же ключи, что BUU)
+    # Connections → env (pipeline/settings.py читает те же ключи, что BUU)
     rtdm = BaseHook.get_connection("sandbox_rtdm")  # Oracle RTDM / spr_uu_json_log
     oisuu = BaseHook.get_connection("OISUU-DB-BIZ_monitoring")  # MatemModelsLogs + витрина
     motor = BaseHook.get_connection("ACTUAR2_monitoring")  # Motor.agrafana write
     email = BaseHook.get_connection("DCO_Email_Notification")
 
+    # Имена env — стиль MONITORING_BUU (без дублей MSSQL_*)
     user_env = {
         # Motor / Actuar — запись метрик под Grafana
-        "MSSQL_HOST": motor.host or "",
-        "MSSQL_PORT": str(motor.port) if motor.port else "1433",
-        "MSSQL_DATABASE": motor.schema or "Motor",
-        "MSSQL_USER": motor.login or "",
-        "MSSQL_SA_PASSWORD": motor.password or "",
-        "MSSQL_ODBC_DRIVER": "ODBC Driver 18 for SQL Server",
         "motor_host": motor.host or "",
         "motor_name": motor.schema or "Motor",
         "motor_user_name": motor.login or "",
@@ -278,7 +273,7 @@ def _build_k8s_dag():
         "EMAIL_LOGIN": email.login or "",
         "EMAIL_PASSWORD": email.password or "",
     }
-    # Hive table / окна train — в pipeline/config.py (DEFAULT_REFERENCE_HIVE_TABLE).
+    # Hive / stem / features — только pipeline/config.py (DEFAULT_DRIFT_MODELS).
     # FIN_EFFECT_RETRO_PATH — если нужен файл на PVC, задать Variable (опционально).
     retro_path = Variable.get("querulus_fin_effect_retro_path", default_var="")
     if retro_path:

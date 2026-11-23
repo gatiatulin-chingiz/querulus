@@ -13,8 +13,6 @@ venv/
 .env
 .env.*
 !.env.example
-# Contour template with receivers (passwords empty) — tracked on purpose
-!monitoring/pipeline/.env
 **/env.local
 *.pem
 *.key
@@ -104,3 +102,5 @@ monitoring/local/airflow/logs/**
 !monitoring/local/airflow/logs/.gitkeep
 monitoring/local/synthetic/data/**
 !monitoring/local/synthetic/data/.gitkeep
+
+monitoring/local/airflow/db/*.db

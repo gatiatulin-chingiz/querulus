@@ -1,0 +1,17 @@
+apiVersion: 1
+
+datasources:
+  - name: Querulus MSSQL
+    uid: querulus_mssql
+    type: mssql
+    access: proxy
+    url: $MSSQL_HOST:1433
+    user: $MSSQL_USER
+    secureJsonData:
+      password: $MSSQL_SA_PASSWORD
+    jsonData:
+      database: $MSSQL_DATABASE
+      encrypt: "false"
+      tlsSkipVerify: true
+    isDefault: true
+    editable: true

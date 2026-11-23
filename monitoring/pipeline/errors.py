@@ -25,7 +25,7 @@ _MONITORING_ROOT = _PIPELINE_ROOT.parent
 if str(_MONITORING_ROOT) not in sys.path:
     sys.path.insert(0, str(_MONITORING_ROOT))
 
-from pipeline.config import Settings, load_settings
+from pipeline.settings import Settings, load_settings
 from pipeline.db import connect_oisuu
 from pipeline.write_sql import get_engine, write_append_guarded
 

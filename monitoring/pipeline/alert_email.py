@@ -1,10 +1,10 @@
 """Weekly email alert from querulus_DataDrift (MSSQL agrafana).
 
-Reads already-written metrics (no recalculation). Same shape as archive
-datadrift_* UUEMailMonitoring: PSI over threshold table + Grafana link.
+Reads already-written metrics (no recalculation). Дайджест: последний
+``date`` в Motor, строки с PSI выше порога (без усреднения).
 
 Секреты SMTP — из Airflow Connection (EMAIL_LOGIN / EMAIL_PASSWORD).
-Получатели, URL Grafana, lookback — дефолты в ``pipeline.config`` (env перекрывает).
+Получатели — дефолты в ``pipeline.config`` / ``settings`` (env перекрывает).
 
   ALERT_DRY_RUN=1 — build mail + save HTML, skip SMTP
   ALERT_RESULTS_DIR — каталог для email.html
@@ -27,16 +27,16 @@ _MONITORING_ROOT = _PIPELINE_ROOT.parent
 if str(_MONITORING_ROOT) not in sys.path:
     sys.path.insert(0, str(_MONITORING_ROOT))
 
-from pipeline.config import (
-    DEFAULT_EMAIL_PORT,
-    DEFAULT_EMAIL_SENDER,
-    DEFAULT_EMAIL_SMTP,
-    load_settings,
-)
+from pipeline.settings import load_settings
 from pipeline.write_sql import get_engine
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("alert_email")
+
+# SMTP (контур задаёт через DAG env; локально — pipeline/.env)
+EMAIL_SMTP_SERVER = "internalsmtp.vsk.ru"
+EMAIL_PORT = 2525
+EMAIL_SENDER = "artificial.intelligence@vsk.ru"
 
 _TABLE_COLS = [
     "model_name",
@@ -68,14 +68,13 @@ class _EmailEnvConfig:
 
 
 class QuerulusDriftAlertMail(EMailMonitoring):
-    """Weekly DataDrift digest (cf+rg) for Querulus."""
+    """Weekly DataDrift digest for Querulus."""
 
     def send_report(
         self,
         drift_df: pd.DataFrame,
         *,
         psi_threshold: float,
-        grafana_url: str,
         dry_run: bool = False,
     ) -> None:
         self.base_mail(
@@ -83,28 +82,29 @@ class QuerulusDriftAlertMail(EMailMonitoring):
             text="Еженедельный отчёт по мониторингу модели сутяжничества",
         )
         self.mail.add_text(
-            "Произведён расчёт датадрифта (cf/rg) по отношению к train-датасету.",
+            "Произведён расчёт датадрифта (полный train, фичи cf∪rg) "
+            "по отношению к train-датасету.",
             n_line_breaks=1,
         )
+        run_date = ""
+        if drift_df is not None and not drift_df.empty and "date" in drift_df.columns:
+            run_date = str(drift_df["date"].iloc[0])
         self.mail.add_text(
-            f"Обнаружен дрифт в фичах выше PSI={psi_threshold}:",
+            f"Дрифт за последний прогон"
+            + (f" ({run_date})" if run_date else "")
+            + f", PSI > {psi_threshold}:",
             n_line_breaks=1,
         )
         table = self._prepare_drift_df(drift_df, psi_threshold=psi_threshold)
         if table.empty:
             self.mail.add_text(
-                "За выбранный период признаков с PSI выше порога нет.",
+                "В последнем прогоне признаков с PSI выше порога нет.",
                 n_line_breaks=1,
             )
         else:
             self.mail.add_pandas_table(
                 table,
                 params=dict(text_align="right", font_family="sans-serif", width="180px"),
-            )
-        if grafana_url:
-            self.mail.add_text(
-                f"Полные результаты в Grafana: {grafana_url}",
-                n_line_breaks=2,
             )
         self.mail.add_text(
             "PSI (Population Stability Index): изменение распределения данных.",
@@ -123,9 +123,12 @@ class QuerulusDriftAlertMail(EMailMonitoring):
     def _prepare_drift_df(
         self, df: pd.DataFrame, *, psi_threshold: float
     ) -> pd.DataFrame:
-        if df is None or df.empty:
+        """Фильтр PSI > порог по последнему прогону (без усреднения)."""
+        if df is None or df.empty or "PSI" not in df.columns:
             return pd.DataFrame()
-        alarm = df.loc[df["PSI"] > psi_threshold].copy()
+        work = df.copy()
+        work["PSI"] = pd.to_numeric(work["PSI"], errors="coerce")
+        alarm = work.loc[work["PSI"] > psi_threshold].copy()
         if alarm.empty:
             return pd.DataFrame()
         cols = [c for c in _TABLE_COLS if c in alarm.columns]
@@ -163,13 +166,13 @@ def _load_email_config() -> _EmailEnvConfig:
     results.mkdir(parents=True, exist_ok=True)
 
     return _EmailEnvConfig(
-        email_smtp_server=os.environ.get("EMAIL_SMTP_SERVER", DEFAULT_EMAIL_SMTP).strip()
-        or DEFAULT_EMAIL_SMTP,
+        email_smtp_server=os.environ.get("EMAIL_SMTP_SERVER", EMAIL_SMTP_SERVER).strip()
+        or EMAIL_SMTP_SERVER,
         email_port=int(
-            os.environ.get("EMAIL_PORT", str(DEFAULT_EMAIL_PORT)) or str(DEFAULT_EMAIL_PORT)
+            os.environ.get("EMAIL_PORT", str(EMAIL_PORT)) or str(EMAIL_PORT)
         ),
-        email_sender=os.environ.get("EMAIL_SENDER", DEFAULT_EMAIL_SENDER).strip()
-        or DEFAULT_EMAIL_SENDER,
+        email_sender=os.environ.get("EMAIL_SENDER", EMAIL_SENDER).strip()
+        or EMAIL_SENDER,
         email_login=login,
         email_pass=password,
         email_receivers=receivers,
@@ -177,25 +180,27 @@ def _load_email_config() -> _EmailEnvConfig:
     )
 
 
-def _fetch_drift(lookback_days: int) -> pd.DataFrame:
+def _fetch_latest_drift() -> pd.DataFrame:
+    """Только строки с максимальным date в querulus_DataDrift."""
     settings = load_settings()
     engine = get_engine(settings.grafana_sqlalchemy_url)
-    # date column is written by datadrift; look back N days including today.
     sql = text(
         f"""
         SELECT *
         FROM [{settings.schema}].[{settings.table_drift}]
-        WHERE [date] >= DATEADD(day, - :lookback, CAST(GETDATE() AS date))
+        WHERE [date] = (
+            SELECT MAX([date]) FROM [{settings.schema}].[{settings.table_drift}]
+        )
         """
     )
     with engine.connect() as conn:
-        df = pd.read_sql(sql, conn, params={"lookback": lookback_days})
+        df = pd.read_sql(sql, conn)
     logger.info(
-        "drift rows=%s schema=%s table=%s lookback_days=%s",
+        "drift latest || rows=%s schema=%s table=%s date=%s",
         len(df),
         settings.schema,
         settings.table_drift,
-        lookback_days,
+        df["date"].iloc[0] if not df.empty and "date" in df.columns else "-",
     )
     return df
 
@@ -204,16 +209,14 @@ def main() -> int:
     settings = load_settings()
     dry = os.environ.get("ALERT_DRY_RUN", "").strip().lower() in {"1", "true", "yes"}
 
-    drift = _fetch_drift(settings.alert_lookback_days)
+    drift = _fetch_latest_drift()
     mail = QuerulusDriftAlertMail(config=_load_email_config())
     mail.send_report(
         drift,
         psi_threshold=settings.psi_threshold,
-        grafana_url=settings.grafana_dashboard_url,
         dry_run=dry,
     )
-    over = int((drift["PSI"] > settings.psi_threshold).sum()) if not drift.empty and "PSI" in drift else 0
-    logger.info("alert_email done || psi_over_threshold=%s || dry_run=%s", over, dry)
+    logger.info("alert_email done || dry_run=%s", dry)
     return 0
 
 

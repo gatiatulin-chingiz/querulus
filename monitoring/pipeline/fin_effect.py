@@ -34,7 +34,7 @@ _QUERULUS_SRC = _MONITORING_ROOT.parent / "src"
 if _QUERULUS_SRC.is_dir() and str(_QUERULUS_SRC) not in sys.path:
     sys.path.insert(0, str(_QUERULUS_SRC))
 
-from pipeline.config import Settings, load_settings
+from pipeline.settings import Settings, load_settings
 from pipeline.db import connect_oisuu
 from pipeline.write_sql import get_engine, write_append_guarded
 
@@ -45,6 +45,10 @@ logger = logging.getLogger("fin_effect")
 RESULT_OUT_OF_MODEL = -100
 RESULT_ELIGIBLE = {0, 1, RESULT_OUT_OF_MODEL}
 FILIAL_ALL = "(все)"  # агрегат «по всей сети» в wide-таблице
+# Метки в Motor/Grafana: финэффект только для slot=main; stem по умолчанию «prod».
+FIN_EFFECT_STEM = "prod"
+FIN_EFFECT_SLOT = "main"
+FIN_EFFECT_VITRINA = "[OISUU_report].[dbo].[ВитринаСутяжность]"
 
 PILOT_FILIALS = (
     "Владимирский",
@@ -553,7 +557,7 @@ def _load_monitoring_vitrina(settings: Settings) -> pd.DataFrame:
         )
         return df
 
-    sql = f"SELECT * FROM {settings.fin_effect_vitrina_table}"
+    sql = f"SELECT * FROM {FIN_EFFECT_VITRINA}"
     conn = connect_oisuu(settings)
     try:
         df = pd.read_sql(sql, conn)
@@ -567,7 +571,7 @@ def _load_monitoring_vitrina(settings: Settings) -> pd.DataFrame:
         logger.warning("enrich_incident_path_flags skipped: %s", exc)
     logger.info(
         "fin_effect monitoring ← OISUU %s || rows=%s",
-        settings.fin_effect_vitrina_table,
+        FIN_EFFECT_VITRINA,
         len(df),
     )
     return df
@@ -576,8 +580,8 @@ def _load_monitoring_vitrina(settings: Settings) -> pd.DataFrame:
 def load_fin_effect_jobs(settings: Settings) -> list[FinEffectJob]:
     """Собрать jobs: одна витрина × список stem (история смен main).
 
-    FIN_EFFECT_STEMS — через запятую; иначе FIN_EFFECT_STEM (default ``prod``).
-    Финэффект считается только для slot=main.
+    По умолчанию stem/slot — константы ``FIN_EFFECT_STEM`` / ``FIN_EFFECT_SLOT``.
+    Опционально ``FIN_EFFECT_STEMS`` (csv) для истории смен.
     """
     if not settings.fin_effect_retro_path:
         raise ValueError(
@@ -591,14 +595,9 @@ def load_fin_effect_jobs(settings: Settings) -> list[FinEffectJob]:
     if stems_raw:
         stems = [s.strip() for s in stems_raw.split(",") if s.strip()]
     else:
-        stems = [settings.fin_effect_stem]
+        stems = [FIN_EFFECT_STEM]
     labels_raw = os.environ.get("FIN_EFFECT_MODEL_LABELS", "").strip()
     labels = [x.strip() for x in labels_raw.split(",")] if labels_raw else []
-    slot = settings.fin_effect_slot
-    if slot != "main":
-        raise ValueError(
-            f"финэффект считается только для slot=main, получено {slot!r}"
-        )
     pilot_start = os.environ.get("FIN_EFFECT_PILOT_START") or None
     as_of = os.environ.get("FIN_EFFECT_AS_OF") or None
     retro_as_of = os.environ.get("FIN_EFFECT_RETRO_AS_OF") or None
@@ -610,7 +609,7 @@ def load_fin_effect_jobs(settings: Settings) -> list[FinEffectJob]:
                 monitoring_df=monitoring.copy(),
                 retro_df=retro.copy(),
                 stem=stem,
-                slot=slot,
+                slot=FIN_EFFECT_SLOT,
                 model_label=label,
                 pilot_start=pilot_start,
                 as_of=as_of,

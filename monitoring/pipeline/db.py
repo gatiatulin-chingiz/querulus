@@ -25,7 +25,7 @@ import pyodbc
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
-from pipeline.config import Settings
+from pipeline.settings import Settings
 
 # ---------------------------------------------------------------------------
 # Разворот JSON_FILE: в логах СПР числа часто лежат как singleton-list
