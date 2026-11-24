@@ -23,9 +23,9 @@ from outboxml.core.email import EMailMonitoring
 from sqlalchemy import text
 
 _PIPELINE_ROOT = Path(__file__).resolve().parent
-_MONITORING_ROOT = _PIPELINE_ROOT.parent
-if str(_MONITORING_ROOT) not in sys.path:
-    sys.path.insert(0, str(_MONITORING_ROOT))
+if str(_PIPELINE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PIPELINE_ROOT))
+import _bootstrap_path  # noqa: F401 — monorepo + standalone GitLab clone
 
 from pipeline.settings import load_settings
 from pipeline.write_sql import get_engine

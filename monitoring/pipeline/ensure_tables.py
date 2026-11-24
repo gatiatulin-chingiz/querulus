@@ -9,6 +9,12 @@ from __future__ import annotations
 
 import logging
 import sys
+from pathlib import Path
+
+_PIPELINE_ROOT = Path(__file__).resolve().parent
+if str(_PIPELINE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PIPELINE_ROOT))
+import _bootstrap_path  # noqa: F401 — monorepo + standalone GitLab clone
 
 from pipeline.settings import load_settings
 from pipeline.write_sql import ensure_monitoring_tables, get_engine

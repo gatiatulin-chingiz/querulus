@@ -25,12 +25,12 @@ import numpy as np
 import pandas as pd
 
 _PIPELINE_ROOT = Path(__file__).resolve().parent
-_MONITORING_ROOT = _PIPELINE_ROOT.parent
-if str(_MONITORING_ROOT) not in sys.path:
-    sys.path.insert(0, str(_MONITORING_ROOT))
+if str(_PIPELINE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PIPELINE_ROOT))
+import _bootstrap_path  # noqa: F401 — monorepo + standalone GitLab clone
 
 # monorepo: examples/querulus/src — на контуре пакет querulus должен быть в PYTHONPATH
-_QUERULUS_SRC = _MONITORING_ROOT.parent / "src"
+_QUERULUS_SRC = _PIPELINE_ROOT.parent.parent / "src"
 if _QUERULUS_SRC.is_dir() and str(_QUERULUS_SRC) not in sys.path:
     sys.path.insert(0, str(_QUERULUS_SRC))
 

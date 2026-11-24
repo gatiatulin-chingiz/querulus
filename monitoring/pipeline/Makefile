@@ -11,10 +11,11 @@
 #   этапы       — только читают код/venv и пишут в БД Motor (локально файлы не чистят)
 # Каталог clone на PVC стирает НЕ Makefile, а таска prepare в DAG (rm -rf).
 
-# Standalone clone (querulus_monitoring.git): PIPE=repo root.
-# Nested in monorepo: also add ../../src (examples/querulus/src).
+# Standalone clone (querulus_monitoring.git): PIPE=repo root (flat).
+# Nested in monorepo: PIPE/.. = monitoring/ (пакет pipeline), ../../src = querulus.
+# Импорты ``pipeline.*`` на контуре поднимает _bootstrap_path.py.
 PIPE := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
-export PYTHONPATH := $(PIPE):$(PIPE)/src:$(PIPE)/../..:$(PIPE)/../../src:$(PYTHONPATH)
+export PYTHONPATH := $(PIPE):$(PIPE)/..:$(PIPE)/src:$(PIPE)/../..:$(PIPE)/../../src:$(PYTHONPATH)
 
 # PIP_* — длинный timeout: repo.vsk.ru иногда рвёт большие wheel (nvidia-nccl и т.п.)
 export PIP_DEFAULT_TIMEOUT ?= 300
@@ -43,7 +44,7 @@ fetch:
 # Быстрая проверка синтаксиса без хождения в БД
 test:
 	@echo "Running syntax checks..."
-	./venv/bin/python3 -m py_compile config.py settings.py db.py hadoop_extractor.py write_sql.py ensure_tables.py errors.py datadrift.py fin_effect.py alert_email.py
+	./venv/bin/python3 -m py_compile _bootstrap_path.py config.py settings.py db.py hadoop_extractor.py write_sql.py ensure_tables.py errors.py datadrift.py fin_effect.py alert_email.py
 	@echo "Syntax checks passed."
 
 # Создать Querulus_* таблицы на Motor (IF NOT EXISTS; БД/schema не трогаем)
