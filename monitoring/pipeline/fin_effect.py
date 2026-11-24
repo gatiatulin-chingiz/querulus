@@ -30,10 +30,11 @@ if str(_PIPELINE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PIPELINE_ROOT))
 import _bootstrap_path  # noqa: F401 — monorepo + standalone GitLab clone
 
-# monorepo: examples/querulus/src — на контуре пакет querulus должен быть в PYTHONPATH
+# monorepo: examples/querulus/src; контур: vendored pipeline/querulus (PYTHONPATH=PIPE)
 _QUERULUS_SRC = _PIPELINE_ROOT.parent.parent / "src"
 if _QUERULUS_SRC.is_dir() and str(_QUERULUS_SRC) not in sys.path:
     sys.path.insert(0, str(_QUERULUS_SRC))
+
 
 from pipeline.config import DEFAULT_DRIFT_MODELS
 from pipeline.settings import Settings, load_settings

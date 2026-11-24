@@ -1,0 +1,1392 @@
+"""Лог снимков финэффекта и понедельный ряд с декомпозицией дельт."""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from html import escape
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+from querulus.fin_effect.excel_explore import resolve_column
+from querulus.fin_effect.excel_monitoring import (
+    MonitoringEffectResult,
+    estimate_monitoring_effect,
+)
+from querulus.fin_effect.monitoring_report import (
+    FORMULA_VERSION,
+    _CSS,
+    _c,
+    _formula,
+    _table,
+)
+
+PILOT_START_DEFAULT = "2026-04-20"
+SNAPSHOT_FILENAME = "fin_effect_snapshots.csv"
+WEEKLY_HTML_FILENAME = "fin_effect_weekly.html"
+TOP_LOSS_DRIVERS_PER_KIND = 5
+
+SNAPSHOT_COLUMNS = [
+    "snapshot_at",
+    "t_calc",
+    "formula_version",
+    "source_label",
+    "observation_start",
+    "observation_end",
+    "n_rows",
+    "n_control",
+    "n_model",
+    "n_filials",
+    "max_age_days",
+    "yult_effect",
+    "yult_ci_low",
+    "yult_ci_high",
+    "yult_unstratified",
+    "annual_window_yult",
+    "annual_pilot_current_yult",
+    "annual_pilot_full_yult",
+    "annual_pilot_full_yult_ci_low",
+    "annual_pilot_full_yult_ci_high",
+    "annual_network_current_yult",
+    "annual_network_current_yult_ci_low",
+    "annual_network_current_yult_ci_high",
+    "annual_network_full_yult",
+    "annual_network_full_yult_ci_low",
+    "annual_network_full_yult_ci_high",
+    "annual_network_full_compliance_yult",
+    "agreement_share_control",
+    "agreement_share_model",
+    "agreement_share_lift_pp",
+    "pretension_share_control",
+    "pretension_share_model",
+    "pretension_share_lift_pp",
+    "fu_share_control",
+    "fu_share_model",
+    "fu_share_lift_pp",
+    "court_share_control",
+    "court_share_model",
+    "court_share_lift_pp",
+    "n_pilot_eligible_year",
+    "n_model_obs",
+    "network_multiplier",
+    "payment_to_pay_mismatch_rows",
+    "note",
+]
+
+_PATH_SHARE_METRICS = (
+    ("agreement_share", "agreement_share"),
+    ("pretension_share", "pretension_share"),
+    ("fu_incident_share", "fu_share"),
+    ("court_incident_share", "court_share"),
+)
+
+
+def _quality_map(result: MonitoringEffectResult) -> dict[str, Any]:
+    return result.data_quality.set_index("metric")["value"].to_dict()
+
+
+def _path_share_from_segments(by_seg: pd.DataFrame) -> dict[str, float]:
+    """control / model / Δ п.п. из path_shares (index=segment)."""
+    out: dict[str, float] = {}
+    for src_col, prefix in _PATH_SHARE_METRICS:
+        out[f"{prefix}_control"] = np.nan
+        out[f"{prefix}_model"] = np.nan
+        out[f"{prefix}_lift_pp"] = np.nan
+        if src_col not in by_seg.columns:
+            continue
+        control = (
+            float(by_seg.loc["control", src_col])
+            if "control" in by_seg.index and pd.notna(by_seg.loc["control", src_col])
+            else np.nan
+        )
+        model = (
+            float(by_seg.loc["model", src_col])
+            if "model" in by_seg.index and pd.notna(by_seg.loc["model", src_col])
+            else np.nan
+        )
+        lift = np.nan
+        lift_keys = [
+            k for k in by_seg.index.astype(str) if str(k).startswith("lift_pp")
+        ]
+        if lift_keys and pd.notna(by_seg.loc[lift_keys[0], src_col]):
+            lift = float(by_seg.loc[lift_keys[0], src_col])
+        elif pd.notna(control) and pd.notna(model):
+            lift = model - control
+        out[f"{prefix}_control"] = control
+        out[f"{prefix}_model"] = model
+        out[f"{prefix}_lift_pp"] = lift
+    return out
+
+
+def _path_share_flat(result: MonitoringEffectResult) -> dict[str, float]:
+    """Доли соглашений/претензий/ФУ/суда: control, model и Δ п.п."""
+    paths = getattr(result, "path_shares", None)
+    if paths is None or paths.empty or "segment" not in paths.columns:
+        return _path_share_from_segments(pd.DataFrame())
+    return _path_share_from_segments(paths.set_index("segment"))
+
+
+def path_share_rows_from_result(
+    result: MonitoringEffectResult,
+    *,
+    week_end: str | pd.Timestamp,
+) -> list[dict[str, Any]]:
+    """Строки долей путей: филиал «(все)» + разрез по филиалам."""
+    week = pd.Timestamp(week_end).date().isoformat()
+    rows: list[dict[str, Any]] = []
+    overall = _path_share_flat(result)
+    quality = _quality_map(result)
+    rows.append(
+        {
+            "week_end": week,
+            "filial": "(все)",
+            "n_control": int(quality.get("n_control", 0)),
+            "n_model": int(quality.get("n_model", 0)),
+            **overall,
+        }
+    )
+    filial_paths = getattr(result, "filial_path_shares", None)
+    if filial_paths is None or filial_paths.empty:
+        return rows
+    if "filial" not in filial_paths.columns or "segment" not in filial_paths.columns:
+        return rows
+    for filial, part in filial_paths.groupby("filial", dropna=False):
+        by_seg = part.set_index("segment")
+        flat = _path_share_from_segments(by_seg)
+        n_control = (
+            int(by_seg.loc["control", "n"])
+            if "control" in by_seg.index and "n" in by_seg.columns
+            else 0
+        )
+        n_model = (
+            int(by_seg.loc["model", "n"])
+            if "model" in by_seg.index and "n" in by_seg.columns
+            else 0
+        )
+        rows.append(
+            {
+                "week_end": week,
+                "filial": str(filial) if pd.notna(filial) else "(пусто)",
+                "n_control": n_control,
+                "n_model": n_model,
+                **flat,
+            }
+        )
+    return rows
+
+
+def _effect_row(result: MonitoringEffectResult, horizon: str) -> dict[str, float]:
+    effects = result.effect_summary.set_index("horizon")
+    if horizon not in effects.index:
+        return {
+            "effect": np.nan,
+            "ci_low": np.nan,
+            "ci_high": np.nan,
+            "unstratified": np.nan,
+        }
+    row = effects.loc[horizon]
+    return {
+        "effect": float(row["effect_per_case"]),
+        "ci_low": float(row["ci_low"]) if "ci_low" in row and pd.notna(row["ci_low"]) else np.nan,
+        "ci_high": float(row["ci_high"]) if "ci_high" in row and pd.notna(row["ci_high"]) else np.nan,
+        "unstratified": float(row["unstratified_effect"]),
+    }
+
+
+def snapshot_row_from_result(
+    result: MonitoringEffectResult,
+    *,
+    source_label: str = "",
+    note: str = "",
+    formula_version: str = FORMULA_VERSION,
+    snapshot_at: str | None = None,
+) -> dict[str, Any]:
+    """Одна строка лога снимка из MonitoringEffectResult."""
+    quality = _quality_map(result)
+    yult = _effect_row(result, "ult")
+    annual = result.annual_summary.set_index("horizon")
+    ann = annual.loc["ult"] if "ult" in annual.index else None
+    paths = _path_share_flat(result)
+    return {
+        "snapshot_at": snapshot_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "t_calc": result.t_calc.date().isoformat(),
+        "formula_version": formula_version,
+        "source_label": source_label,
+        "observation_start": quality.get("observation_start"),
+        "observation_end": quality.get("observation_end"),
+        "n_rows": int(quality.get("n_rows", len(result.frame))),
+        "n_control": int(quality.get("n_control", 0)),
+        "n_model": int(quality.get("n_model", 0)),
+        "n_filials": int(quality.get("n_filials", 0)),
+        "max_age_days": int(quality.get("max_age_days", 0)),
+        "yult_effect": yult["effect"],
+        "yult_ci_low": yult["ci_low"],
+        "yult_ci_high": yult["ci_high"],
+        "yult_unstratified": yult["unstratified"],
+        "annual_window_yult": (
+            float(ann["annual_window"]) if ann is not None else np.nan
+        ),
+        "annual_pilot_current_yult": (
+            float(ann["annual_pilot_current"]) if ann is not None else np.nan
+        ),
+        "annual_pilot_full_yult": (
+            float(ann["annual_pilot_full"]) if ann is not None else np.nan
+        ),
+        "annual_pilot_full_yult_ci_low": (
+            float(ann["annual_pilot_full_ci_low"]) if ann is not None else np.nan
+        ),
+        "annual_pilot_full_yult_ci_high": (
+            float(ann["annual_pilot_full_ci_high"]) if ann is not None else np.nan
+        ),
+        "annual_network_current_yult": (
+            float(ann["annual_network_current"]) if ann is not None else np.nan
+        ),
+        "annual_network_current_yult_ci_low": (
+            float(ann["annual_network_current_ci_low"]) if ann is not None else np.nan
+        ),
+        "annual_network_current_yult_ci_high": (
+            float(ann["annual_network_current_ci_high"]) if ann is not None else np.nan
+        ),
+        "annual_network_full_yult": (
+            float(ann["annual_network_full"]) if ann is not None else np.nan
+        ),
+        "annual_network_full_yult_ci_low": (
+            float(ann["annual_network_full_ci_low"]) if ann is not None else np.nan
+        ),
+        "annual_network_full_yult_ci_high": (
+            float(ann["annual_network_full_ci_high"]) if ann is not None else np.nan
+        ),
+        "annual_network_full_compliance_yult": (
+            float(ann["annual_network_full_compliance"])
+            if ann is not None and "annual_network_full_compliance" in ann.index
+            else np.nan
+        ),
+        **paths,
+        "n_pilot_eligible_year": (
+            float(ann["N_pilot_eligible_year"]) if ann is not None else np.nan
+        ),
+        "n_model_obs": (
+            float(ann["N_model_obs"]) if ann is not None and "N_model_obs" in ann.index
+            else int(quality.get("n_model", 0))
+        ),
+        "network_multiplier": (
+            float(ann["network_multiplier"]) if ann is not None else np.nan
+        ),
+        "payment_to_pay_mismatch_rows": int(
+            quality.get("payment_to_pay_mismatch_rows", 0)
+        ),
+        "note": note,
+    }
+
+
+def append_snapshot_log(
+    result: MonitoringEffectResult,
+    path: str | Path,
+    *,
+    source_label: str = "",
+    note: str = "",
+) -> Path:
+    """Дописать снимок в CSV-лог (создаёт файл при первом запуске)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = snapshot_row_from_result(
+        result, source_label=source_label, note=note
+    )
+    frame = pd.DataFrame([row], columns=SNAPSHOT_COLUMNS)
+    if path.exists():
+        prev = pd.read_csv(path)
+        for col in SNAPSHOT_COLUMNS:
+            if col not in prev.columns:
+                prev[col] = np.nan
+        frame = pd.concat([prev[SNAPSHOT_COLUMNS], frame], ignore_index=True)
+    frame.to_csv(path, index=False)
+    return path
+
+
+def load_snapshot_log(path: str | Path) -> pd.DataFrame:
+    """Прочитать CSV-лог снимков."""
+    path = Path(path)
+    if not path.exists():
+        return pd.DataFrame(columns=SNAPSHOT_COLUMNS)
+    return pd.read_csv(path)
+
+
+def _week_ends(
+    *,
+    pilot_start: str | pd.Timestamp,
+    as_of: str | pd.Timestamp,
+    freq: str = "W-SUN",
+) -> list[pd.Timestamp]:
+    start = pd.Timestamp(pilot_start).normalize()
+    end = pd.Timestamp(as_of).normalize()
+    if end < start:
+        raise ValueError("as_of раньше pilot_start")
+    ends = pd.date_range(start=start, end=end, freq=freq)
+    out = [pd.Timestamp(value).normalize() for value in ends]
+    if not out or out[-1] < end:
+        out.append(end)
+    # убрать дубликат, если end уже воскресенье
+    uniq: list[pd.Timestamp] = []
+    for value in out:
+        if not uniq or uniq[-1] != value:
+            uniq.append(value)
+    return uniq
+
+
+def filter_monitoring_by_application_date(
+    monitoring_df: pd.DataFrame,
+    *,
+    end: str | pd.Timestamp,
+    start: str | pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    """Оставить строки с ДатаЗаявления в [start, end]."""
+    col = resolve_column(monitoring_df, "application_date")
+    if col is None:
+        raise KeyError("Не найдена ДатаЗаявления для фильтра среза")
+    dates = pd.to_datetime(monitoring_df[col], errors="coerce")
+    end_ts = pd.Timestamp(end).normalize()
+    mask = dates.notna() & (dates.dt.normalize() <= end_ts)
+    if start is not None:
+        start_ts = pd.Timestamp(start).normalize()
+        mask = mask & (dates.dt.normalize() >= start_ts)
+    return monitoring_df.loc[mask].copy()
+
+
+def _filial_contributions(filial_effects: pd.DataFrame, horizon: str) -> pd.DataFrame:
+    part = filial_effects.loc[
+        filial_effects["horizon"].astype(str).eq(horizon)
+    ].copy()
+    if part.empty:
+        return pd.DataFrame(
+            columns=["filial", "n", "effect", "weight", "contribution"]
+        )
+    part = part.dropna(subset=["effect_control_minus_model"])
+    total_n = float(part["n"].sum())
+    part["weight"] = part["n"] / total_n if total_n else np.nan
+    part["contribution"] = part["weight"] * part["effect_control_minus_model"]
+    return part.rename(
+        columns={"effect_control_minus_model": "effect"}
+    )[["filial", "n", "effect", "weight", "contribution"]]
+
+
+def _group_means_ult(result: MonitoringEffectResult) -> dict[str, float]:
+    """Средние Yult и N по control/model."""
+    part = result.group_summary.loc[
+        result.group_summary["horizon"].astype(str).eq("ult")
+    ]
+    out = {
+        "mean_control": np.nan,
+        "mean_model": np.nan,
+        "n_control": 0.0,
+        "n_model": 0.0,
+    }
+    for _, row in part.iterrows():
+        group = str(row["group"])
+        if group in ("control", "model"):
+            out[f"mean_{group}"] = float(row["mean_cost"])
+            out[f"n_{group}"] = float(row["n"])
+    return out
+
+
+def _unit_level_table(frame: pd.DataFrame) -> pd.DataFrame:
+    """Одна строка на инцидент (единица ITT): группа, Yult, флаги."""
+    if frame.empty:
+        return pd.DataFrame(
+            columns=[
+                "incident_id",
+                "loss_ids",
+                "group",
+                "filial",
+                "yult",
+                "paid",
+                "od",
+                "age_days",
+                "agreement",
+                "has_pretension",
+                "has_fu",
+                "has_court",
+                "application_date",
+            ]
+        )
+    work = frame.copy()
+    work["_has_pretension"] = work["_psr_pretension"].fillna(0).gt(0)
+    work["_has_fu"] = work["_psr_fu"].fillna(0).gt(0)
+    work["_has_court"] = work["_psr_court"].fillna(0).gt(0)
+    # после схлопывания строка уже = инцидент
+    out = pd.DataFrame(
+        {
+            "incident_id": work["_incident"].astype("string"),
+            "loss_ids": work["_loss"].astype("string"),
+            "group": work["_group"],
+            "filial": work["_filial"],
+            "yult": work["Yult"],
+            "paid": work["_paid_to_date"],
+            "od": work["_od"],
+            "age_days": work["_age_days"],
+            "agreement": work["_agreement"].fillna(False).astype(bool),
+            "has_pretension": work["_has_pretension"].fillna(False).astype(bool),
+            "has_fu": work["_has_fu"].fillna(False).astype(bool),
+            "has_court": work["_has_court"].fillna(False).astype(bool),
+            "application_date": pd.to_datetime(
+                work["_application_date"], errors="coerce"
+            ).dt.date.astype("string"),
+        }
+    )
+    return out.reset_index(drop=True)
+
+
+def _severity_flags(row: pd.Series) -> str:
+    parts: list[str] = []
+    if bool(row.get("agreement")):
+        parts.append("соглашение")
+    if bool(row.get("has_pretension")):
+        parts.append("претензия")
+    if bool(row.get("has_fu")):
+        parts.append("ФУ")
+    if bool(row.get("has_court")):
+        parts.append("суд")
+    od = row.get("od")
+    if pd.notna(od) and float(od) > 0:
+        parts.append(f"OD={float(od):,.0f}₽".replace(",", " "))
+    age = row.get("age_days")
+    if pd.notna(age):
+        parts.append(f"age={int(age)}д")
+    return ", ".join(parts)
+
+
+def _group_delta_table(
+    weekly: pd.DataFrame,
+    group_means_by_week: dict[str, dict[str, float]],
+) -> pd.DataFrame:
+    """Δ mean control/model и вклад в Δ ITT (без стратификации по филиалам)."""
+    rows: list[dict[str, Any]] = []
+    ok_weeks = (
+        weekly.loc[weekly["status"].eq("ok"), "week_end"].astype(str).tolist()
+        if "status" in weekly.columns
+        else []
+    )
+    for prev_key, key in zip(ok_weeks, ok_weeks[1:]):
+        prev = group_means_by_week.get(prev_key)
+        cur = group_means_by_week.get(key)
+        if prev is None or cur is None:
+            continue
+        delta_control = (
+            float(cur["mean_control"]) - float(prev["mean_control"])
+            if pd.notna(cur["mean_control"]) and pd.notna(prev["mean_control"])
+            else np.nan
+        )
+        delta_model = (
+            float(cur["mean_model"]) - float(prev["mean_model"])
+            if pd.notna(cur["mean_model"]) and pd.notna(prev["mean_model"])
+            else np.nan
+        )
+        # ITT = mean_c − mean_m → ΔITT ≈ Δmean_c − Δmean_m
+        contrib_control = delta_control
+        contrib_model = (
+            -delta_model if pd.notna(delta_model) else np.nan
+        )
+        delta_itt_unstrat = (
+            contrib_control + contrib_model
+            if pd.notna(contrib_control) and pd.notna(contrib_model)
+            else np.nan
+        )
+        week_row = weekly.loc[weekly["week_end"].astype(str).eq(key)]
+        delta_yult = (
+            float(week_row.iloc[0]["delta_yult"])
+            if not week_row.empty and "delta_yult" in week_row.columns
+            and pd.notna(week_row.iloc[0].get("delta_yult"))
+            else np.nan
+        )
+        if pd.notna(delta_control) and abs(delta_control) >= abs(
+            delta_model if pd.notna(delta_model) else 0.0
+        ):
+            leader = "control"
+            leader_dir = (
+                "подорожал (+ к ITT)"
+                if pd.notna(delta_control) and delta_control > 0
+                else "подешевел (− к ITT)"
+                if pd.notna(delta_control) and delta_control < 0
+                else "без изменения"
+            )
+        else:
+            leader = "model"
+            leader_dir = (
+                "подорожал (− к ITT)"
+                if pd.notna(delta_model) and delta_model > 0
+                else "подешевел (+ к ITT)"
+                if pd.notna(delta_model) and delta_model < 0
+                else "без изменения"
+            )
+        def _fmt(value: Any) -> str:
+            if pd.isna(value):
+                return "—"
+            return f"{float(value):+,.0f}".replace(",", " ")
+
+        read = (
+            f"Сильнее потянул {leader} ({leader_dir}): "
+            f"control Δmean={_fmt(delta_control)}₽ → вклад {_fmt(contrib_control)}; "
+            f"model Δmean={_fmt(delta_model)}₽ → вклад {_fmt(contrib_model)}"
+        )
+        rows.append(
+            {
+                "prev_week_end": prev_key,
+                "week_end": key,
+                "mean_control_prev": prev["mean_control"],
+                "mean_control_cur": cur["mean_control"],
+                "delta_mean_control": delta_control,
+                "n_control_prev": prev["n_control"],
+                "n_control_cur": cur["n_control"],
+                "mean_model_prev": prev["mean_model"],
+                "mean_model_cur": cur["mean_model"],
+                "delta_mean_model": delta_model,
+                "n_model_prev": prev["n_model"],
+                "n_model_cur": cur["n_model"],
+                "itt_contrib_control": contrib_control,
+                "itt_contrib_model": contrib_model,
+                "delta_itt_unstratified": delta_itt_unstrat,
+                "delta_yult_stratified": delta_yult,
+                "dominant_group": leader,
+                "readout": read,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _loss_drivers_table(
+    weekly: pd.DataFrame,
+    loss_by_week: dict[str, pd.DataFrame],
+    group_means_by_week: dict[str, dict[str, float]],
+    *,
+    top_n: int = TOP_LOSS_DRIVERS_PER_KIND,
+) -> pd.DataFrame:
+    """Топ новых инцидентов и топ shared с Δ оплаты по вкладу в Δ ITT."""
+    rows: list[dict[str, Any]] = []
+    ok_weeks = (
+        weekly.loc[weekly["status"].eq("ok"), "week_end"].astype(str).tolist()
+        if "status" in weekly.columns
+        else []
+    )
+    for prev_key, key in zip(ok_weeks, ok_weeks[1:]):
+        cur_tbl = loss_by_week.get(key)
+        prev_tbl = loss_by_week.get(prev_key)
+        prev_means = group_means_by_week.get(prev_key)
+        cur_means = group_means_by_week.get(key)
+        if cur_tbl is None or prev_tbl is None or prev_means is None or cur_means is None:
+            continue
+        if cur_tbl.empty or "incident_id" not in cur_tbl.columns:
+            continue
+        prev_ids = set(prev_tbl["incident_id"].astype(str).tolist())
+        cur_ids = set(cur_tbl["incident_id"].astype(str).tolist())
+        new_ids = cur_ids - prev_ids
+        shared_ids = cur_ids & prev_ids
+        prev_paid = prev_tbl.set_index(
+            prev_tbl["incident_id"].astype(str)
+        )["paid"]
+        cur_indexed = cur_tbl.set_index(cur_tbl["incident_id"].astype(str))
+
+        week_rows: list[dict[str, Any]] = []
+        for incident_id in new_ids:
+            rec = cur_indexed.loc[incident_id]
+            if isinstance(rec, pd.DataFrame):
+                rec = rec.iloc[0]
+            group = str(rec["group"])
+            yult = float(rec["yult"]) if pd.notna(rec["yult"]) else np.nan
+            mean_g = float(prev_means.get(f"mean_{group}", np.nan))
+            n_g = float(prev_means.get(f"n_{group}", 0.0))
+            if pd.notna(yult) and pd.notna(mean_g) and n_g >= 0:
+                delta_mean = (yult - mean_g) / (n_g + 1.0)
+                sign = 1.0 if group == "control" else -1.0
+                pull = sign * delta_mean
+            else:
+                pull = np.nan
+            week_rows.append(
+                {
+                    "prev_week_end": prev_key,
+                    "week_end": key,
+                    "driver_kind": "new_incident",
+                    "incident_id": incident_id,
+                    "loss_ids": rec.get("loss_ids"),
+                    "group": group,
+                    "filial": rec["filial"],
+                    "application_date": rec.get("application_date"),
+                    "yult": yult,
+                    "paid_prev": np.nan,
+                    "paid_cur": float(rec["paid"]) if pd.notna(rec["paid"]) else np.nan,
+                    "delta_paid": np.nan,
+                    "estimated_itt_pull": pull,
+                    "severity": _severity_flags(rec),
+                }
+            )
+
+        for incident_id in shared_ids:
+            rec = cur_indexed.loc[incident_id]
+            if isinstance(rec, pd.DataFrame):
+                rec = rec.iloc[0]
+            if incident_id not in prev_paid.index:
+                continue
+            paid_cur = float(rec["paid"]) if pd.notna(rec["paid"]) else np.nan
+            paid_prev_v = prev_paid.loc[incident_id]
+            paid_prev_f = float(paid_prev_v) if pd.notna(paid_prev_v) else np.nan
+            if pd.isna(paid_cur) or pd.isna(paid_prev_f):
+                continue
+            delta_paid = paid_cur - paid_prev_f
+            if abs(delta_paid) < 1.0:
+                continue
+            group = str(rec["group"])
+            n_g = float(cur_means.get(f"n_{group}", 0.0))
+            if n_g > 0:
+                sign = 1.0 if group == "control" else -1.0
+                pull = sign * (delta_paid / n_g)
+            else:
+                pull = np.nan
+            week_rows.append(
+                {
+                    "prev_week_end": prev_key,
+                    "week_end": key,
+                    "driver_kind": "payment_update",
+                    "incident_id": incident_id,
+                    "loss_ids": rec.get("loss_ids"),
+                    "group": group,
+                    "filial": rec["filial"],
+                    "application_date": rec.get("application_date"),
+                    "yult": float(rec["yult"]) if pd.notna(rec["yult"]) else np.nan,
+                    "paid_prev": paid_prev_f,
+                    "paid_cur": paid_cur,
+                    "delta_paid": delta_paid,
+                    "estimated_itt_pull": pull,
+                    "severity": _severity_flags(rec),
+                }
+            )
+
+        if not week_rows:
+            continue
+        frame = pd.DataFrame(week_rows)
+        for kind in ("new_incident", "payment_update"):
+            part = frame.loc[frame["driver_kind"].eq(kind)].copy()
+            if part.empty:
+                continue
+            part = part.reindex(
+                part["estimated_itt_pull"].abs().sort_values(ascending=False).index
+            ).head(top_n)
+            rows.extend(part.to_dict("records"))
+    return pd.DataFrame(rows)
+
+
+@dataclass
+class WeeklySeriesResult:
+    """Понедельный ряд и декомпозиция."""
+
+    weekly: pd.DataFrame
+    filial_deltas: pd.DataFrame
+    group_deltas: pd.DataFrame
+    loss_drivers: pd.DataFrame
+    week_ends: list[pd.Timestamp]
+    note: str
+    # доли путей на последнем кумулятивном срезе (за весь период)
+    path_shares_latest: pd.DataFrame = field(default_factory=pd.DataFrame)
+    # филиалы: «без инструментов» model < control (последний срез)
+    instruments_attention_latest: pd.DataFrame = field(
+        default_factory=pd.DataFrame
+    )
+
+
+def run_weekly_monitoring_series(
+    monitoring_df: pd.DataFrame,
+    retro_df: pd.DataFrame,
+    *,
+    pilot_start: str | pd.Timestamp = PILOT_START_DEFAULT,
+    as_of: str | pd.Timestamp | None = None,
+    residual_share: float = 0.07,
+    discount_rate: float = 0.12,
+    lookback_years: float | None = 2.0,
+    retro_as_of: str | pd.Timestamp | None = None,
+    bootstrap_iterations: int = 0,
+    bootstrap_compliance_iterations: int = 0,
+    bootstrap_n_jobs: int | None = 1,
+    freq: str = "W-SUN",
+    min_rows: int = 50,
+) -> WeeklySeriesResult:
+    """Кумулятивные срезы по week_end: заявления ≤ week_end, t_calc=week_end.
+
+    Платежи — как в текущей витрине (не архив на ту дату). Bootstrap по умолчанию
+    выключен для скорости; CI в ряду будут пустыми, пока iterations>0.
+    """
+    as_of_ts = (
+        pd.Timestamp(as_of).normalize()
+        if as_of is not None
+        else pd.Timestamp.today().normalize()
+    )
+    ends = _week_ends(pilot_start=pilot_start, as_of=as_of_ts, freq=freq)
+    weekly_rows: list[dict[str, Any]] = []
+    contrib_by_week: dict[str, pd.DataFrame] = {}
+    loss_sets: dict[str, set[Any]] = {}
+    paid_by_week: dict[str, pd.Series] = {}
+    loss_by_week: dict[str, pd.DataFrame] = {}
+    group_means_by_week: dict[str, dict[str, float]] = {}
+    path_shares_latest = pd.DataFrame()
+    instruments_attention_latest = pd.DataFrame()
+
+    for week_end in ends:
+        subset = filter_monitoring_by_application_date(
+            monitoring_df,
+            end=week_end,
+            start=pilot_start,
+        )
+        if len(subset) < min_rows:
+            weekly_rows.append(
+                {
+                    "week_end": week_end.date().isoformat(),
+                    "status": "skipped_small_n",
+                    "n_rows": len(subset),
+                    "yult_effect": np.nan,
+                    "reason": f"n<{min_rows}",
+                }
+            )
+            continue
+        try:
+            result = estimate_monitoring_effect(
+                subset,
+                retro_df,
+                t_calc=week_end,
+                residual_share=residual_share,
+                discount_rate=discount_rate,
+                lookback_years=lookback_years,
+                retro_as_of=retro_as_of,
+                bootstrap_iterations=bootstrap_iterations,
+                bootstrap_compliance_iterations=bootstrap_compliance_iterations,
+                bootstrap_n_jobs=bootstrap_n_jobs,
+            )
+        except Exception as exc:  # noqa: BLE001 — ряд не должен падать целиком
+            weekly_rows.append(
+                {
+                    "week_end": week_end.date().isoformat(),
+                    "status": "error",
+                    "n_rows": len(subset),
+                    "yult_effect": np.nan,
+                    "reason": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            continue
+
+        snap = snapshot_row_from_result(
+            result,
+            note=f"weekly cumulative ≤ {week_end.date().isoformat()}",
+            snapshot_at=week_end.date().isoformat(),
+        )
+        key = week_end.date().isoformat()
+        snap["week_end"] = key
+        snap["status"] = "ok"
+        snap["reason"] = ""
+        weekly_rows.append(snap)
+        path_shares_latest = pd.DataFrame(
+            path_share_rows_from_result(result, week_end=week_end)
+        )
+        attn = getattr(result, "agreement_instruments_attention", None)
+        if attn is not None and not attn.empty:
+            instruments_attention_latest = attn.copy()
+            instruments_attention_latest["week_end"] = key
+        else:
+            instruments_attention_latest = pd.DataFrame()
+
+        contrib_by_week[key] = _filial_contributions(result.filial_effects, "ult")
+        loss_level = _unit_level_table(result.frame)
+        loss_by_week[key] = loss_level
+        group_means_by_week[key] = _group_means_ult(result)
+        loss_sets[key] = set(loss_level["incident_id"].astype(str).tolist())
+        paid_by_week[key] = loss_level.set_index(
+            loss_level["incident_id"].astype(str)
+        )["paid"]
+
+    weekly = pd.DataFrame(weekly_rows)
+    empty = WeeklySeriesResult(
+        weekly=weekly,
+        filial_deltas=pd.DataFrame(),
+        group_deltas=pd.DataFrame(),
+        loss_drivers=pd.DataFrame(),
+        week_ends=ends,
+        note="Пустой ряд",
+        path_shares_latest=pd.DataFrame(),
+        instruments_attention_latest=pd.DataFrame(),
+    )
+    if weekly.empty:
+        return empty
+
+    weekly = _add_week_deltas(weekly, loss_sets, paid_by_week)
+    filial_deltas = _filial_delta_table(weekly, contrib_by_week)
+    group_deltas = _group_delta_table(weekly, group_means_by_week)
+    loss_drivers = _loss_drivers_table(
+        weekly, loss_by_week, group_means_by_week
+    )
+    note = (
+        "Кумулятивные срезы на текущих платежах витрины; "
+        "ретроспектива ≠ архивный снимок на ту дату. "
+        "Вклад отдельного убытка в Δ ITT — диагностическая оценка "
+        "без стратификации по филиалам."
+    )
+    return WeeklySeriesResult(
+        weekly=weekly,
+        filial_deltas=filial_deltas,
+        group_deltas=group_deltas,
+        loss_drivers=loss_drivers,
+        week_ends=ends,
+        note=note,
+        path_shares_latest=path_shares_latest,
+        instruments_attention_latest=instruments_attention_latest,
+    )
+
+
+def _add_week_deltas(
+    weekly: pd.DataFrame,
+    loss_sets: dict[str, set[Any]],
+    paid_by_week: dict[str, pd.Series],
+) -> pd.DataFrame:
+    out = weekly.copy()
+    for col in (
+        "delta_yult",
+        "delta_n_rows",
+        "n_new_losses",
+        "n_shared_losses",
+        "shared_mean_paid_delta",
+        "ci_yult_includes_0",
+        "why_moved",
+    ):
+        if col not in out.columns:
+            out[col] = np.nan if col != "why_moved" else ""
+
+    ok_mask = (
+        out["status"].eq("ok")
+        if "status" in out.columns
+        else pd.Series(True, index=out.index)
+    )
+    prev_i: Any | None = None
+    for i, row in out.iterrows():
+        if not bool(ok_mask.loc[i]):
+            continue
+        yu = row.get("yult_effect")
+        yu_lo = row.get("yult_ci_low")
+        yu_hi = row.get("yult_ci_high")
+        if pd.notna(yu_lo) and pd.notna(yu_hi):
+            out.at[i, "ci_yult_includes_0"] = bool(yu_lo <= 0 <= yu_hi)
+        if prev_i is None:
+            out.at[i, "why_moved"] = "базовая неделя ряда"
+            prev_i = i
+            continue
+        prev = out.loc[prev_i]
+        out.at[i, "delta_yult"] = (
+            float(yu) - float(prev["yult_effect"])
+            if pd.notna(yu) and pd.notna(prev["yult_effect"])
+            else np.nan
+        )
+        out.at[i, "delta_n_rows"] = (
+            float(row["n_rows"]) - float(prev["n_rows"])
+            if pd.notna(row.get("n_rows")) and pd.notna(prev.get("n_rows"))
+            else np.nan
+        )
+        key = str(row["week_end"])
+        prev_key = str(prev["week_end"])
+        cur_losses = loss_sets.get(key, set())
+        prev_losses = loss_sets.get(prev_key, set())
+        shared = cur_losses & prev_losses
+        new = cur_losses - prev_losses
+        out.at[i, "n_new_losses"] = len(new)
+        out.at[i, "n_shared_losses"] = len(shared)
+        if shared and key in paid_by_week and prev_key in paid_by_week:
+            cur_paid = paid_by_week[key].reindex(list(shared))
+            prev_paid = paid_by_week[prev_key].reindex(list(shared))
+            out.at[i, "shared_mean_paid_delta"] = float(
+                (cur_paid - prev_paid).mean()
+            )
+        parts = []
+        dy = out.at[i, "delta_yult"]
+        if pd.notna(dy):
+            parts.append(f"ΔYult={dy:+,.0f}₽".replace(",", " "))
+        dn = out.at[i, "delta_n_rows"]
+        if pd.notna(dn):
+            parts.append(f"ΔN={dn:+.0f}")
+        nn = out.at[i, "n_new_losses"]
+        if pd.notna(nn):
+            parts.append(f"new={int(nn)}")
+        spd = out.at[i, "shared_mean_paid_delta"]
+        if pd.notna(spd):
+            parts.append(f"shared_paidΔ={spd:+,.0f}₽".replace(",", " "))
+        out.at[i, "why_moved"] = "; ".join(parts)
+        prev_i = i
+    return out
+
+
+def _filial_delta_table(
+    weekly: pd.DataFrame,
+    contrib_by_week: dict[str, pd.DataFrame],
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    ok_weeks = (
+        weekly.loc[weekly["status"].eq("ok"), "week_end"].astype(str).tolist()
+        if "status" in weekly.columns
+        else []
+    )
+    for prev_key, key in zip(ok_weeks, ok_weeks[1:]):
+        prev = contrib_by_week.get(prev_key)
+        cur = contrib_by_week.get(key)
+        if prev is None or cur is None or prev.empty or cur.empty:
+            continue
+        merged = cur.merge(prev, on="filial", how="outer", suffixes=("_cur", "_prev"))
+        for col in (
+            "n_cur",
+            "n_prev",
+            "effect_cur",
+            "effect_prev",
+            "contribution_cur",
+            "contribution_prev",
+        ):
+            if col not in merged.columns:
+                merged[col] = np.nan
+        merged["n_cur"] = merged["n_cur"].fillna(0)
+        merged["n_prev"] = merged["n_prev"].fillna(0)
+        merged["contribution_cur"] = merged["contribution_cur"].fillna(0.0)
+        merged["contribution_prev"] = merged["contribution_prev"].fillna(0.0)
+        merged["delta_contribution"] = (
+            merged["contribution_cur"] - merged["contribution_prev"]
+        )
+        top = merged.reindex(
+            merged["delta_contribution"].abs().sort_values(ascending=False).index
+        ).head(5)
+        for rec in top.to_dict("records"):
+            rows.append(
+                {
+                    "prev_week_end": prev_key,
+                    "week_end": key,
+                    "filial": rec["filial"],
+                    "n_prev": rec["n_prev"],
+                    "n_cur": rec["n_cur"],
+                    "effect_prev": rec.get("effect_prev"),
+                    "effect_cur": rec.get("effect_cur"),
+                    "delta_contribution": rec["delta_contribution"],
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def save_weekly_outputs(
+    series: WeeklySeriesResult,
+    data_dir: str | Path,
+    *,
+    weekly_html_name: str | None = None,
+) -> Path:
+    """Записать общий ``fin_effect_weekly.html`` в ``data_dir`` (без CSV)."""
+    data_dir = Path(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    html_path = data_dir / (weekly_html_name or WEEKLY_HTML_FILENAME)
+    html_path.write_text(build_weekly_html(series), encoding="utf-8")
+    return html_path
+
+
+def build_weekly_html(series: WeeklySeriesResult) -> str:
+    """HTML: понедельные показатели, Δ control/model, топ убытков и филиалов."""
+    generated = datetime.now().strftime("%Y-%m-%d %H:%M")
+    show_cols = [
+        c
+        for c in (
+            "week_end",
+            "status",
+            "n_rows",
+            "n_control",
+            "n_model",
+            "yult_effect",
+            "delta_yult",
+            "ci_yult_includes_0",
+            "n_new_losses",
+            "shared_mean_paid_delta",
+            "annual_window_yult",
+            "annual_pilot_current_yult",
+            "annual_network_current_yult",
+            "annual_network_full_yult",
+            "annual_network_full_compliance_yult",
+            "why_moved",
+            "reason",
+        )
+        if c in series.weekly.columns
+    ]
+    weekly_show = series.weekly[show_cols].copy()
+    return f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"/>
+  <title>Понедельный финэффект</title>
+  <style>{_CSS}</style>
+</head>
+<body>
+<div class="page">
+  <h1>Понедельный ряд финансового эффекта</h1>
+  <p class="sub">Сформировано {escape(generated)} · версия {FORMULA_VERSION}</p>
+  <div class="card">
+    <p>{escape(series.note)}</p>
+    <p>Стартовое окно пилота → week_end (кумулятивно). Частота: W-SUN + финальный as_of.</p>
+    {_formula(
+        "Общая логика ряда",
+        [
+            "Срез week_end: инциденты с ДатаЗаявления ≤ week_end, t_calc = week_end",
+            "<b>Yult</b> = paid + факт ПСР + NPV(остаток хвоста); paid = Σ СуммаПлатежа <b>из текущей витрины</b> "
+            "(не архив платежей на ту дату)",
+            "<b>ITT(H)</b> = Σ<sub>f</sub> w<sub>f</sub>·(Ȳ<sub>H</sub>(control,f) − Ȳ<sub>H</sub>(model,f)), "
+            "w<sub>f</sub> = N<sub>f</sub>/Σ N<sub>g</sub>",
+        ],
+        "Плюс ITT = control дороже model = экономия модели.",
+    )}
+  </div>
+  <h2>Главные показатели</h2>
+  <div class="card">
+    {_table(
+      weekly_show,
+      columns={
+        "week_end": _c("week_end", "Конец недели / финальный as_of-срез"),
+        "status": _c("status", "Статус среза: ok, skipped_small_n или error"),
+        "n_rows": _c(
+            "n",
+            "Число инцидентов в кумулятивном окне",
+            "count(incidents | ДатаЗаявления ≤ week_end)",
+        ),
+        "n_control": _c(
+            "n_c",
+            "Число инцидентов control",
+            "count(group = control)",
+        ),
+        "n_model": _c(
+            "n_m",
+            "Число инцидентов model",
+            "count(group = model)",
+        ),
+        "yult_effect": _c(
+            "ITT Yult",
+            "Стратифицированный ITT по Yult, ₽/инцидент",
+            "Σ_f w_f · (mean_c,f − mean_m,f), YH = Yult",
+        ),
+        "delta_yult": _c(
+            "ΔYult",
+            "Изменение ITT Yult к предыдущей ok-неделе",
+            "yult_effect(week) − yult_effect(prev)",
+        ),
+        "ci_yult_includes_0": _c(
+            "CI∋0",
+            "true, если 95% CI ITT Yult содержит 0",
+            "ci_low ≤ 0 ≤ ci_high",
+        ),
+        "n_new_losses": _c(
+            "new",
+            "Число новых инцидентов относительно prev",
+            "|incident_ids(week) ∖ incident_ids(prev)|",
+        ),
+        "shared_mean_paid_delta": _c(
+            "Δpaid shared",
+            "Среднее изменение оплаты по общим инцидентам",
+            "mean_i∈shared (paid_i,week − paid_i,prev)",
+        ),
+        "annual_window_yult": _c(
+            "окно Yult",
+            "Эффект за период работы модели (50/50)",
+            "yult_effect × n_model",
+        ),
+        "annual_pilot_current_yult": _c(
+            "год пилот 50/50",
+            "Годовой эффект на пилоте 50/50",
+            "yult_effect × share_model × N_year",
+        ),
+        "annual_network_current_yult": _c(
+            "год все филиалы 50/50",
+            "Годовой эффект все филиалы (50/50)",
+            "yult_effect × N_model_cur × network_multiplier",
+        ),
+        "annual_network_full_yult": _c(
+            "год все филиалы 100%",
+            "Годовой эффект все филиалы (100%)",
+            "annual_pilot_full_yult × network_multiplier",
+        ),
+        "annual_network_full_compliance_yult": _c(
+            "год без людей",
+            "Годовой эффект без участия людей",
+            "ITT_100 × N_year × network_multiplier",
+        ),
+        "agreement_share_control": _c(
+            "согл. control %",
+            "Доля соглашений в control, %",
+        ),
+        "agreement_share_model": _c(
+            "согл. model %",
+            "Доля соглашений в model, %",
+        ),
+        "agreement_share_lift_pp": _c(
+            "Δ согл. п.п.",
+            "Изменение доли соглашений: model − control, п.п.",
+        ),
+        "pretension_share_control": _c(
+            "прет. control %",
+            "Доля претензий в control, %",
+        ),
+        "pretension_share_model": _c(
+            "прет. model %",
+            "Доля претензий в model, %",
+        ),
+        "pretension_share_lift_pp": _c(
+            "Δ прет. п.п.",
+            "Изменение доли претензий: model − control, п.п.",
+        ),
+        "fu_share_control": _c("ФУ control %", "Доля ФУ в control, %"),
+        "fu_share_model": _c("ФУ model %", "Доля ФУ в model, %"),
+        "fu_share_lift_pp": _c(
+            "Δ ФУ п.п.",
+            "Изменение доли ФУ: model − control, п.п.",
+        ),
+        "court_share_control": _c("суд control %", "Доля суда в control, %"),
+        "court_share_model": _c("суд model %", "Доля суда в model, %"),
+        "court_share_lift_pp": _c(
+            "Δ суд п.п.",
+            "Изменение доли суда: model − control, п.п.",
+        ),
+        "why_moved": _c("why", "Краткая сводка причин сдвига недели"),
+        "reason": _c("reason", "Текст ошибки или причина skip"),
+      },
+      rows=[
+        "Одна строка = кумулятивный срез пилота от старта до week_end.",
+        "Первая ok-неделя — база ряда (delta_* пустые).",
+      ],
+      notes=[
+        "Платежи на всех срезах — из одной текущей выгрузки витрины: прошлые недели "
+        "могут «пересчитаться», если СуммаПлатежа дописалась.",
+      ],
+    )}
+  </div>
+  <h2>Куда уехали control и model</h2>
+  <div class="card">
+    {_formula(
+        "Связь средних групп и Δ ITT",
+        [
+            "<b>ITT</b> ≈ mean(control) − mean(model)  (здесь без стратификации по филиалам)",
+            "<b>Δmean_control</b> = mean_control(week) − mean_control(prev)",
+            "<b>Δmean_model</b> = mean_model(week) − mean_model(prev)",
+            "<b>itt_contrib_control</b> = Δmean_control",
+            "<b>itt_contrib_model</b> = −Δmean_model",
+            "<b>delta_itt_unstratified</b> = itt_contrib_control + itt_contrib_model",
+        ],
+        "Если model подешевел (Δmean_model &lt; 0), вклад model в Δ ITT положительный: "
+        "−(отрицательное) = плюс. Это не «ошибка знака».",
+    )}
+    {_table(
+      series.group_deltas,
+      columns={
+        "prev_week_end": _c("пред. неделя", "Конец предыдущей ok-недели"),
+        "week_end": _c("тек. неделя", "Конец текущей ok-недели"),
+        "mean_control_prev": _c(
+            "mean_c prev",
+            "Средний Yult control на prev",
+            "mean(Yult | control, prev)",
+        ),
+        "mean_control_cur": _c(
+            "mean_c cur",
+            "Средний Yult control на текущей",
+            "mean(Yult | control, week)",
+        ),
+        "delta_mean_control": _c(
+            "Δmean_c",
+            "Изменение среднего Yult control",
+            "mean_control_cur − mean_control_prev",
+        ),
+        "n_control_prev": _c("n_c prev", "N control на prev"),
+        "n_control_cur": _c("n_c cur", "N control на текущей"),
+        "mean_model_prev": _c(
+            "mean_m prev",
+            "Средний Yult model на prev",
+            "mean(Yult | model, prev)",
+        ),
+        "mean_model_cur": _c(
+            "mean_m cur",
+            "Средний Yult model на текущей",
+            "mean(Yult | model, week)",
+        ),
+        "delta_mean_model": _c(
+            "Δmean_m",
+            "Изменение среднего Yult model",
+            "mean_model_cur − mean_model_prev",
+        ),
+        "n_model_prev": _c("n_m prev", "N model на prev"),
+        "n_model_cur": _c("n_m cur", "N model на текущей"),
+        "itt_contrib_control": _c(
+            "вклад c",
+            "Вклад control в Δ ITT без страт; «+» = control подорожал",
+            "itt_contrib_control = delta_mean_control",
+        ),
+        "itt_contrib_model": _c(
+            "вклад m",
+            "Вклад model в Δ ITT без страт; «+» = model подешевел",
+            "itt_contrib_model = −delta_mean_model",
+        ),
+        "delta_itt_unstratified": _c(
+            "ΔITT без страт",
+            "Сумма вкладов групп без весов филиалов",
+            "itt_contrib_control + itt_contrib_model",
+        ),
+        "delta_yult_stratified": _c(
+            "ΔITT страт",
+            "Фактический Δ ITT Yult со стратификацией (из главной таблицы)",
+            "delta_yult из ряда weekly",
+        ),
+        "dominant_group": _c(
+            "лидер",
+            "Группа с большим |Δmean|",
+            "argmax(|delta_mean_control|, |delta_mean_model|)",
+        ),
+        "readout": _c("readout", "Текстовая расшифровка знаков и вкладов"),
+      },
+      rows=[
+        "Одна строка на пару соседних ok-недель.",
+      ],
+      formulas=[
+        "Пример: mean_model 142k → 131k ⇒ Δmean_m = −11k ⇒ вклад m = −(−11k) = +11k",
+      ],
+      notes=[
+        "delta_itt_unstratified может отличаться от delta_yult_stratified из-за весов филиалов.",
+      ],
+    )}
+  </div>
+  <h2>Топ инцидентов по вкладу в Δ ITT</h2>
+  <div class="card">
+    {_formula(
+        "Оценка вклада инцидента (диагностика, не точная декомпозиция)",
+        [
+            "<b>sign</b> = +1 для control, −1 для model "
+            "(потому что ITT = mean_control − mean_model)",
+            "<b>new_incident</b>: estimated_itt_pull = sign × (Yult − mean_group_prev) / (N_group_prev + 1)",
+            "<b>payment_update</b>: estimated_itt_pull = sign × Δpaid / N_group_cur, "
+            "только если |Δpaid| ≥ 1 ₽",
+            "В топ: до {TOP_LOSS_DRIVERS_PER_KIND} new_incident и до "
+            "{TOP_LOSS_DRIVERS_PER_KIND} payment_update с наибольшим |pull|",
+        ],
+        "paid_prev / delta_paid пустые у new_incident: на прошлой неделе инцидента ещё не было.",
+    )}
+    {_table(
+      series.loss_drivers,
+      columns={
+        "prev_week_end": _c("пред. неделя", "Конец предыдущей ok-недели"),
+        "week_end": _c("тек. неделя", "Конец текущей ok-недели"),
+        "driver_kind": _c(
+            "тип",
+            "new_incident (новый) или payment_update (Δ оплаты)",
+        ),
+        "incident_id": _c("incident", "Номер инцидента — ключ единицы ITT"),
+        "loss_ids": _c("LossID", "LossID внутри инцидента через «; »"),
+        "group": _c("group", "control или model после схлопывания Result"),
+        "filial": _c("filial", "Филиал (мода по убыткам инцидента)"),
+        "application_date": _c(
+            "дата заявл.",
+            "Мин. ДатаЗаявления по убыткам инцидента",
+        ),
+        "yult": _c(
+            "Yult",
+            "Yult инцидента на текущем срезе, ₽",
+            "paid + observed_PSR + NPV(remaining)",
+        ),
+        "paid_prev": _c(
+            "paid prev",
+            "Оплата на prev; пусто у new_incident",
+            "paid на срезе prev_week_end",
+        ),
+        "paid_cur": _c(
+            "paid cur",
+            "Оплата на текущем срезе, ₽",
+            "paid на срезе week_end",
+        ),
+        "delta_paid": _c(
+            "Δpaid",
+            "Изменение оплаты; пусто у new_incident",
+            "paid_cur − paid_prev",
+        ),
+        "estimated_itt_pull": _c(
+            "вклад ≈",
+            "Оценка вклада в Δ ITT, ₽ (без страт. по филиалам)",
+            "new: sign×(Yult−mean_group_prev)/(N_prev+1); "
+            "update: sign×Δpaid/N_cur; sign=+1 control, −1 model",
+        ),
+        "severity": _c(
+            "severity",
+            "Соглашение / претензия / ФУ / суд / OD / age",
+        ),
+      },
+      rows=[
+        "На пару недель: new_ids = cur∖prev и shared с |Δpaid|≥1.",
+        f"В топ: до {TOP_LOSS_DRIVERS_PER_KIND} new_incident и до "
+        f"{TOP_LOSS_DRIVERS_PER_KIND} payment_update по |estimated_itt_pull|.",
+      ],
+      formulas=[
+        "Пример new control Yult=400, mean_prev=100, N_prev=2: pull = +1×(400−100)/3 = +100",
+        "Пример payment_update model Δpaid=−60, N=2: pull = −1×(−60)/2 = +30",
+      ],
+      notes=[
+        "Приближение без стратификации; точный ITT — в главной таблице и блоке филиалов.",
+      ],
+    )}
+  </div>
+  <h2>Топ филиалов по вкладу в Δ Yult</h2>
+  <div class="card">
+    {_formula(
+        "Вклад филиала в стратифицированный ITT",
+        [
+            "<b>effect_f</b> = mean(Yult|control,f) − mean(Yult|model,f)",
+            "<b>w_f</b> = N<sub>f</sub> / Σ<sub>g</sub> N<sub>g</sub>  (N — все eligible инциденты филиала)",
+            "<b>contribution_f</b> = w_f × effect_f",
+            "<b>delta_contribution</b> = contribution_f(week) − contribution_f(prev)",
+        ],
+        "В топ — до 5 филиалов с наибольшим |delta_contribution| на пару недель.",
+    )}
+    {_table(
+      series.filial_deltas,
+      columns={
+        "prev_week_end": _c("пред. неделя", "Конец предыдущей ok-недели"),
+        "week_end": _c("тек. неделя", "Конец текущей ok-недели"),
+        "filial": _c("filial", "Филиал"),
+        "n_prev": _c("n prev", "N инцидентов филиала на prev"),
+        "n_cur": _c("n cur", "N инцидентов филиала на текущей"),
+        "effect_prev": _c(
+            "ITT_f prev",
+            "Локальный ITT Yult филиала на prev",
+            "mean(Yult|control,f,prev) − mean(Yult|model,f,prev)",
+        ),
+        "effect_cur": _c(
+            "ITT_f cur",
+            "Локальный ITT Yult филиала на текущей",
+            "mean(Yult|control,f,week) − mean(Yult|model,f,week)",
+        ),
+        "delta_contribution": _c(
+            "Δ вклад",
+            "Изменение вклада филиала в страт. ITT; «+» усилил экономию",
+            "w_f,week·effect_cur − w_f,prev·effect_prev",
+        ),
+      },
+      rows=[
+        "До 5 филиалов с наибольшим |delta_contribution| на пару ok-недель.",
+      ],
+      notes=[
+        "w_f = N_f / Σ_g N_g; сумма Δ вкладов близка к delta_yult "
+        "(с учётом появления/исчезновения филиалов).",
+      ],
+    )}
+  </div>
+</div>
+</body>
+</html>
+"""
+
+
+__all__ = [
+    "PILOT_START_DEFAULT",
+    "SNAPSHOT_FILENAME",
+    "TOP_LOSS_DRIVERS_PER_KIND",
+    "WEEKLY_HTML_FILENAME",
+    "WeeklySeriesResult",
+    "append_snapshot_log",
+    "build_weekly_html",
+    "filter_monitoring_by_application_date",
+    "load_snapshot_log",
+    "run_weekly_monitoring_series",
+    "save_weekly_outputs",
+    "snapshot_row_from_result",
+]
