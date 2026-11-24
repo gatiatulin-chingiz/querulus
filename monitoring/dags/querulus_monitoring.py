@@ -324,6 +324,8 @@ echo "=== [{label}] DONE ==="
             env_vars=env_vars,
             cmds=["bash", "-cx", bash],
             on_finish_action="delete_pod",
+            # Clear/retry не должен цепляться к старому Failed-pod (иначе нет [base] логов)
+            reattach_on_restart=False,
             in_cluster=True,
             do_xcom_push=False,
             get_logs=True,
