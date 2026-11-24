@@ -6,6 +6,9 @@ Reads already-written metrics (no recalculation). Дайджест: послед
 Секреты SMTP — из Airflow Connection (EMAIL_LOGIN / EMAIL_PASSWORD).
 Получатели — дефолты в ``pipeline.config`` / ``settings`` (env перекрывает).
 
+SMTP через stdlib + pretty_html_table (без ``outboxml.core.email`` —
+на контуре outboxml ставится ``--no-deps`` и тянет polars/plots).
+
   ALERT_DRY_RUN=1 — build mail + save HTML, skip SMTP
   ALERT_RESULTS_DIR — каталог для email.html
 """
@@ -13,13 +16,17 @@ from __future__ import annotations
 
 import logging
 import os
+import smtplib
+import ssl
 import sys
 import tempfile
 from dataclasses import dataclass
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 
 import pandas as pd
-from outboxml.core.email import EMailMonitoring
+from pretty_html_table import build_table
 from sqlalchemy import text
 
 _PIPELINE_ROOT = Path(__file__).resolve().parent
@@ -56,7 +63,7 @@ _TABLE_COLS = [
 
 @dataclass
 class _EmailEnvConfig:
-    """Attrs expected by outboxml.dsml.mailing.Mail / EMail."""
+    """SMTP + получатели (как ожидал outboxml Mail)."""
 
     email_smtp_server: str
     email_port: int
@@ -67,8 +74,68 @@ class _EmailEnvConfig:
     results_path: str
 
 
-class QuerulusDriftAlertMail(EMailMonitoring):
+class _HtmlMail:
+    """Минимальный HTML-mail без outboxml (smtplib + pretty_html_table)."""
+
+    _BODY_START = (
+        "<html><head><meta charset=\"utf-8\"><style>"
+        "p,font{font-family:sans-serif,'Times New Roman',Times,serif;}"
+        "</style></head><body>"
+    )
+
+    def __init__(self, config: _EmailEnvConfig) -> None:
+        self.config = config
+        self.msg = MIMEMultipart()
+        self.subject = ""
+        self.body = self._BODY_START
+        self.signature = (
+            "<p><strong><br />С уважением,<br />Искусственный Интеллект</strong></p>"
+        )
+
+    def add_email_subject(self, subject: str) -> None:
+        self.subject = subject
+
+    def add_text(self, text: str, n_line_breaks: int = 0) -> None:
+        self.body += (
+            "<font>"
+            + text.replace("\n", "<br>")
+            + "</font>"
+            + "<br>" * n_line_breaks
+        )
+
+    def add_pandas_table(self, table: pd.DataFrame, *, params: dict | None = None) -> None:
+        self.body += build_table(table, color="blue_dark", **(params or {}))
+
+    def save_html(self) -> Path:
+        html = self.body + self.signature + "</body></html>"
+        out = Path(self.config.results_path) / "email.html"
+        out.write_text(html, encoding="utf-8")
+        return out
+
+    def send(self) -> None:
+        self.body = self.body + self.signature
+        self.msg["From"] = self.config.email_sender
+        self.msg["To"] = "; ".join(self.config.email_receivers)
+        self.msg["Subject"] = self.subject
+        self.msg.attach(MIMEText(self.body, "html"))
+        with smtplib.SMTP(
+            host=self.config.email_smtp_server, port=self.config.email_port
+        ) as server:
+            server.starttls(context=ssl._create_unverified_context())
+            server.login(self.config.email_login, self.config.email_pass)
+            server.sendmail(
+                self.config.email_sender,
+                self.config.email_receivers,
+                self.msg.as_string(),
+            )
+
+
+class QuerulusDriftAlertMail:
     """Weekly DataDrift digest for Querulus."""
+
+    def __init__(self, config: _EmailEnvConfig) -> None:
+        self.config = config
+        self.mail = _HtmlMail(config)
 
     def send_report(
         self,
@@ -77,9 +144,10 @@ class QuerulusDriftAlertMail(EMailMonitoring):
         psi_threshold: float,
         dry_run: bool = False,
     ) -> None:
-        self.base_mail(
-            header_name="Querulus Monitoring (weekly)",
-            text="Еженедельный отчёт по мониторингу модели сутяжничества",
+        self.mail.add_email_subject("Querulus Monitoring (weekly)")
+        self.mail.add_text(
+            "Еженедельный отчёт по мониторингу модели сутяжничества",
+            n_line_breaks=2,
         )
         self.mail.add_text(
             "Произведён расчёт датадрифта (полный train, фичи cf∪rg) "
@@ -90,7 +158,7 @@ class QuerulusDriftAlertMail(EMailMonitoring):
         if drift_df is not None and not drift_df.empty and "date" in drift_df.columns:
             run_date = str(drift_df["date"].iloc[0])
         self.mail.add_text(
-            f"Дрифт за последний прогон"
+            "Дрифт за последний прогон"
             + (f" ({run_date})" if run_date else "")
             + f", PSI > {psi_threshold}:",
             n_line_breaks=1,
@@ -104,7 +172,9 @@ class QuerulusDriftAlertMail(EMailMonitoring):
         else:
             self.mail.add_pandas_table(
                 table,
-                params=dict(text_align="right", font_family="sans-serif", width="180px"),
+                params=dict(
+                    text_align="right", font_family="sans-serif", width="180px"
+                ),
             )
         self.mail.add_text(
             "PSI (Population Stability Index): изменение распределения данных.",
@@ -115,10 +185,10 @@ class QuerulusDriftAlertMail(EMailMonitoring):
             n_line_breaks=1,
         )
         if dry_run:
-            self.save_mail_as_html()
-            logger.info("ALERT_DRY_RUN=1 — SMTP skipped, html in %s", self.config.results_path)
+            path = self.mail.save_html()
+            logger.info("ALERT_DRY_RUN=1 — SMTP skipped, html in %s", path)
             return
-        self.send()
+        self.mail.send()
 
     def _prepare_drift_df(
         self, df: pd.DataFrame, *, psi_threshold: float
@@ -149,7 +219,9 @@ def _load_email_config() -> _EmailEnvConfig:
     settings = load_settings()
     receivers = list(settings.email_receivers)
     if not receivers:
-        raise ValueError("email_receivers empty (DEFAULT_EMAIL_RECEIVERS / EMAIL_RECEIVERS)")
+        raise ValueError(
+            "email_receivers empty (DEFAULT_EMAIL_RECEIVERS / EMAIL_RECEIVERS)"
+        )
 
     login = os.environ.get("EMAIL_LOGIN", "").strip()
     password = os.environ.get("EMAIL_PASSWORD", "").strip()
