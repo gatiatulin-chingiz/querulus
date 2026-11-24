@@ -1,19 +1,54 @@
 """Чтение reference-датасета из Hive/Hadoop (как BUU monitoring_buu-master).
 
 Контурный образ Airflow/Spark: Hive metastore + hdfs dfs -get.
-Spark-сессия без SPARK_HOME (jars из wheel pyspark + hive lib).
-
 Паттерн: spark.table / spark.sql → parquet на HDFS → hdfs get → pd.read_parquet.
+
+``pyspark`` в venv обычно нет: берём модули из ``$SPARK_HOME/python``
+(в DAG: ``SPARK_HOME=/usr/local/spark``).
 """
 from __future__ import annotations
 
+import glob
 import os
 import shutil
 import subprocess
+import sys
 from typing import List, Optional
 
 import pandas as pd
-from pyspark.sql import SparkSession
+
+
+def _ensure_pyspark() -> None:
+    """Импорт pyspark из venv или из SPARK_HOME (контурный образ)."""
+    try:
+        import pyspark  # noqa: F401
+
+        return
+    except ImportError:
+        pass
+
+    spark_home = os.environ.get("SPARK_HOME", "/usr/local/spark")
+    py_dir = os.path.join(spark_home, "python")
+    lib_dir = os.path.join(py_dir, "lib")
+    for path in (py_dir, lib_dir):
+        if os.path.isdir(path) and path not in sys.path:
+            sys.path.insert(0, path)
+    for z in sorted(glob.glob(os.path.join(lib_dir, "py4j-*.zip"))):
+        if z not in sys.path:
+            sys.path.insert(0, z)
+
+    try:
+        import pyspark  # noqa: F401
+    except ImportError as exc:
+        raise ModuleNotFoundError(
+            "pyspark not in venv and not found under "
+            f"SPARK_HOME={spark_home!r} (expected {py_dir}). "
+            "Set SPARK_HOME or pip install pyspark."
+        ) from exc
+
+
+_ensure_pyspark()
+from pyspark.sql import SparkSession  # noqa: E402
 
 
 class HadoopExtractor:
