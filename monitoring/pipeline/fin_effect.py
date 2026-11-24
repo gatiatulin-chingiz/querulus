@@ -2,7 +2,8 @@
 
 Источники (prod) — это НЕ Oracle SPR:
   * monitoring — OISUU ``ВитринаСутяжность`` (или файл FIN_EFFECT_MONITORING_PATH)
-  * retro      — обязательный файл FIN_EFFECT_RETRO_PATH (parquet/csv)
+  * retro      — Hive train slot=main из ``DEFAULT_DRIFT_MODELS``
+    (та же таблица, что datadrift); override: FIN_EFFECT_RETRO_PATH
 
 Расчёт — пакет ``querulus.fin_effect`` (ITT / coverage / annual / paths).
 
@@ -34,6 +35,7 @@ _QUERULUS_SRC = _PIPELINE_ROOT.parent.parent / "src"
 if _QUERULUS_SRC.is_dir() and str(_QUERULUS_SRC) not in sys.path:
     sys.path.insert(0, str(_QUERULUS_SRC))
 
+from pipeline.config import DEFAULT_DRIFT_MODELS
 from pipeline.settings import Settings, load_settings
 from pipeline.db import connect_oisuu
 from pipeline.write_sql import get_engine, write_append_guarded
@@ -530,7 +532,7 @@ def _first_col(df: pd.DataFrame, names: tuple[str, ...]) -> str | None:
     return next((n for n in names if n in df.columns), None)
 
 
-# --- extract (prod: OISUU vittrina + retro file) -------------------------------
+# --- extract (prod: OISUU vittrina + Hive train as retro) ----------------------
 
 
 def _read_table(path: Path) -> pd.DataFrame:
@@ -540,6 +542,40 @@ def _read_table(path: Path) -> pd.DataFrame:
     if path.suffix.lower() in {".parquet", ".pq"}:
         return pd.read_parquet(path)
     return pd.read_csv(path)
+
+
+def _main_hive_table() -> str:
+    """Hive train для slot=main — тот же, что datadrift (DEFAULT_DRIFT_MODELS)."""
+    override = os.environ.get("FIN_EFFECT_RETRO_HIVE", "").strip()
+    if override:
+        return override
+    for model in DEFAULT_DRIFT_MODELS:
+        if str(model.get("slot", "")) == FIN_EFFECT_SLOT:
+            hive = str(model.get("hive", "")).strip()
+            if hive:
+                return hive
+    raise ValueError(
+        f"No hive for slot={FIN_EFFECT_SLOT!r} in DEFAULT_DRIFT_MODELS "
+        "(or set FIN_EFFECT_RETRO_HIVE / FIN_EFFECT_RETRO_PATH)."
+    )
+
+
+def _load_retro(settings: Settings) -> pd.DataFrame:
+    """Ретро: файл (override) или Hive train main как у datadrift."""
+    if settings.fin_effect_retro_path:
+        df = _read_table(Path(settings.fin_effect_retro_path))
+        logger.info(
+            "fin_effect retro ← file %s || rows=%s",
+            settings.fin_effect_retro_path,
+            len(df),
+        )
+        return df
+
+    from pipeline.datadrift import load_reference_dataset
+
+    hive = _main_hive_table()
+    logger.info("fin_effect retro ← Hive %s (same as datadrift train)", hive)
+    return load_reference_dataset(settings, hive_table=hive)
 
 
 def _load_monitoring_vitrina(settings: Settings) -> pd.DataFrame:
@@ -582,15 +618,10 @@ def load_fin_effect_jobs(settings: Settings) -> list[FinEffectJob]:
 
     По умолчанию stem/slot — константы ``FIN_EFFECT_STEM`` / ``FIN_EFFECT_SLOT``.
     Опционально ``FIN_EFFECT_STEMS`` (csv) для истории смен.
+    Retro: Hive train main (как datadrift) или ``FIN_EFFECT_RETRO_PATH``.
     """
-    if not settings.fin_effect_retro_path:
-        raise ValueError(
-            "FIN_EFFECT_RETRO_PATH required (csv/parquet ретро-выборки). "
-            "Monitoring берётся из OISUU ВитринаСутяжность "
-            "(или FIN_EFFECT_MONITORING_PATH)."
-        )
     monitoring = _load_monitoring_vitrina(settings)
-    retro = _read_table(Path(settings.fin_effect_retro_path))
+    retro = _load_retro(settings)
     stems_raw = os.environ.get("FIN_EFFECT_STEMS", "").strip()
     if stems_raw:
         stems = [s.strip() for s in stems_raw.split(",") if s.strip()]
@@ -623,7 +654,7 @@ def main() -> int:
     """Точка входа: extract → weekly snapshots → wide append в Motor."""
     settings = load_settings()
     logger.info(
-        "fin_effect ← OISUU vittrina + retro → %s.%s",
+        "fin_effect ← OISUU vittrina + Hive/file retro → %s.%s",
         settings.schema,
         settings.table_fin_effect,
     )

@@ -64,7 +64,7 @@ datadrift:
 	@echo "=== datadrift ==="
 	./venv/bin/python3 datadrift.py
 
-# Фин.эффект: OISUU-витрина (+ retro path) -> Motor
+# Фин.эффект: OISUU-витрина + Hive train (main) как retro -> Motor
 fin_effect:
 	@echo "=== fin_effect ==="
 	./venv/bin/python3 fin_effect.py

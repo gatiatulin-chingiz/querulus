@@ -263,7 +263,7 @@ def _build_k8s_dag():
         "EMAIL_LOGIN": email.login or "",
         "EMAIL_PASSWORD": email.password or "",
     }
-    # Опционально: путь к ретро-файлу фин.эффекта (Variable → env)
+    # Опционально: файл-override ретро (по умолчанию Hive train main = datadrift)
     retro_path = Variable.get("querulus_fin_effect_retro_path", default_var="")
     if retro_path:
         user_env["FIN_EFFECT_RETRO_PATH"] = retro_path
