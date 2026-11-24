@@ -19,7 +19,6 @@ from typing import Iterable
 
 import numpy as np
 import pandas as pd
-from outboxml.datadrift import DataDrift as OutboxmlDataDrift
 
 _PIPELINE_ROOT = Path(__file__).resolve().parent
 _MONITORING_ROOT = _PIPELINE_ROOT.parent
@@ -65,17 +64,81 @@ ARCHIVE_COLS = [
 ]
 
 
-class QuerulusDataDrift(OutboxmlDataDrift):
-    """OutBoxML DataDrift + безопасные категориальные коды.
+class QuerulusDataDrift:
+    """PSI/KL/JS без зависимости от outboxml.datadrift (на контуре outboxml тянет polars/CUDA).
 
-    Базовый outboxml падает/искажает метрики, если в prod появились категории,
-    которых не было в train. Здесь train∪test → общий словарь кодов.
+    Категории: общий словарь train∪test → коды (иначе падает на новых значениях prod).
     """
 
-    def __init__(self, *args, dif_len_string: int = 100, **kwargs):
-        super().__init__(*args, **kwargs)
-        # длина строк dif_train / dif_test (списки уникальных значений)
+    def __init__(
+        self,
+        full_calc: bool = False,
+        columns_to_exclude: list | None = None,
+        n_bins: int = 100,
+        dif_len_string: int = 100,
+    ):
+        self.full_calc = full_calc
+        self.columns_to_exclude = columns_to_exclude or []
+        self.n_bins = n_bins
         self.dif_len_string = dif_len_string
+        self.types_dict: dict = {}
+
+    def _calculate_psi(self, train_sample, test_sample, n_bins):
+        e, p = self.compute_probs(train_sample, n=n_bins)
+        _, q = self.compute_probs(test_sample, n=e[:-1])
+        res = pd.Series((p - q) * np.log(p / q))
+        return res[res != np.inf].sum()
+
+    def _calculate_js_divirgence(self, train_sample, test_sample, n_bins):
+        e, p = self.compute_probs(train_sample, n=n_bins)
+        _, q = self.compute_probs(test_sample, n=e)
+        pairs = self.support_intersection(p, q)
+        p, q = self.get_probs(pairs)
+        m = 0.5 * (p + q)
+        return 0.5 * np.sum(p * np.log(p / m)) + 0.5 * np.sum(q * np.log(q / m))
+
+    def _calculate_kl_divirgence(self, train_sample, test_sample, n_bins):
+        e, p = self.compute_probs(train_sample, n=n_bins)
+        _, q = self.compute_probs(test_sample, n=e)
+        pairs = self.support_intersection(p, q)
+        p, q = self.get_probs(pairs)
+        return np.sum(p * np.log(p / q))
+
+    @staticmethod
+    def get_probs(list_of_tuples):
+        p = np.array([pair[0] for pair in list_of_tuples])
+        q = np.array([pair[1] for pair in list_of_tuples])
+        return p, q
+
+    @staticmethod
+    def support_intersection(p, q):
+        return list(filter(lambda x: (x[0] != 0) & (x[1] != 0), zip(p, q)))
+
+    def compute_probs(self, data, n=10):
+        if isinstance(data, np.ndarray):
+            data = pd.Series(data)
+        if data.dtype == object:
+            data = pd.to_numeric(data, errors="coerce")
+        h, e = np.histogram(data[data.notna()], n)
+        p = h / data.shape[0]
+        e = np.append(e, np.nan)
+        p = np.append(p, data.sum() / data.shape[0])
+        return e, p
+
+    def _full_calculation(self, base_data: pd.DataFrame, control_data: pd.DataFrame) -> pd.DataFrame:
+        result = pd.DataFrame()
+        for column, col_type in self.types_dict.items():
+            try:
+                res = self._drift_calc(
+                    base_data[column],
+                    control_data[column],
+                    label=column,
+                    type=col_type,
+                )
+                result = pd.concat([result, pd.Series(res, name=column)], axis=1)
+            except Exception as exc:
+                logger.error("Error while calculating datadrift for %s || %s", column, exc)
+        return result
 
     def _drift_calc(
         self, base: pd.Series, control: pd.Series, label: str, type: str = "CATEGORICAL"
