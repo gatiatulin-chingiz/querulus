@@ -1,7 +1,9 @@
 """Чтение reference-датасета из Hive/Hadoop (как BUU monitoring_buu-master).
 
-Контурный образ Airflow/Spark: Hive metastore + hdfs dfs -get.
-Паттерн: spark.table / spark.sql → parquet на HDFS → hdfs get → pd.read_parquet.
+Контурный образ Airflow/Spark: Hive metastore → Spark DataFrame → pandas.
+Раньше писали parquet в HDFS ``/tmp/...`` + ``hdfs dfs -get`` — на контуре
+ломается (lease / FileNotFound) и конфликтует, когда ``datadrift`` и
+``fin_effect`` параллельно пишут одно и то же имя. Берём ``toPandas()``.
 
 ``pyspark`` в venv обычно нет: берём модули из ``$SPARK_HOME/python``
 (в DAG: ``SPARK_HOME=/usr/local/spark``).
@@ -10,8 +12,6 @@ from __future__ import annotations
 
 import glob
 import os
-import shutil
-import subprocess
 import sys
 from typing import List, Optional
 
@@ -68,7 +68,7 @@ class HadoopExtractor:
         self.source = source
         self.sql_query = sql_query
         self.columns = columns
-        self.to_df = to_df
+        self.to_df = to_df  # legacy name; HDFS cache больше не используем
         self.app_name = app_name
         self.metastore_jars = metastore_jars
         self.metastore_version = metastore_version
@@ -77,14 +77,7 @@ class HadoopExtractor:
         if source is None and sql_query is None:
             raise ValueError("Either 'sql_query' or 'source' must be provided.")
 
-    def _drop_local(self, path: str) -> None:
-        if os.path.exists(path):
-            if os.path.isdir(path):
-                shutil.rmtree(path)
-            else:
-                os.remove(path)
-
-    def spark_to_pandas_parquet(self) -> pd.DataFrame:
+    def spark_to_pandas(self) -> pd.DataFrame:
         if "JAVA_HOME" not in os.environ:
             os.environ["JAVA_HOME"] = self.java_home
         os.environ["PATH"] = f"{os.environ['JAVA_HOME']}/bin:{os.environ['PATH']}"
@@ -123,14 +116,13 @@ class HadoopExtractor:
                 if cols:
                     df = df.select(*cols)
 
-            self._drop_local(self.to_df)
-            hdfs_path = f"/tmp/{self.to_df}"
-            df.write.mode("overwrite").parquet(hdfs_path)
-            subprocess.run(f"hdfs dfs -get {hdfs_path}", shell=True, check=True)
-            return pd.read_parquet(self.to_df)
+            return df.toPandas()
         finally:
             spark.stop()
-            self._drop_local(self.to_df)
+
+    def spark_to_pandas_parquet(self) -> pd.DataFrame:
+        """Совместимость со старым именем; HDFS parquet больше не пишем."""
+        return self.spark_to_pandas()
 
     def extract_dataset(self) -> pd.DataFrame:
-        return self.spark_to_pandas_parquet()
+        return self.spark_to_pandas()
