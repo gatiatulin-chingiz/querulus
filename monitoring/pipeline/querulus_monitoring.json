@@ -164,7 +164,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT TOP 200 [date], model_name, model_version, track, col, [TYPE],\n  ROUND(CAST([PSI] AS FLOAT), 4) AS [PSI], ROUND(CAST([KL] AS FLOAT), 4) AS [KL],\n  ROUND(CAST([NaN_train] AS FLOAT), 4) AS [NaN_train], ROUND(CAST([NaN_test] AS FLOAT), 4) AS [NaN_test],\n  mode_train, mode_test, mean_train, mean_test,\n  dif_train AS [только в train],\n  dif_test AS [только в test]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND [PSI] > 0.3\nORDER BY [PSI] DESC",
+          "rawSql": "SELECT TOP 200 [date], model_name, model_version, track, col, [TYPE],\n  ROUND(CAST([PSI] AS FLOAT), 4) AS [PSI], ROUND(CAST([KL] AS FLOAT), 4) AS [KL],\n  ROUND(CAST([NaN_train] AS FLOAT), 4) AS [NaN_train], ROUND(CAST([NaN_test] AS FLOAT), 4) AS [NaN_test],\n  mode_train, mode_test, mean_train, mean_test,\n  dif_train AS [только в train],\n  dif_test AS [только в test]\nFROM [agrafana].[Querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND [PSI] > 0.3\nORDER BY [PSI] DESC",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -190,7 +190,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT\n  CAST([date] AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_name, ''), stem) + N' | ' + col AS metric,\n  CAST(AVG([PSI]) AS FLOAT) AS [value]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\nGROUP BY CAST([date] AS DATETIME2), COALESCE(NULLIF(model_name, ''), stem) + N' | ' + col\nORDER BY 1",
+          "rawSql": "SELECT\n  CAST([date] AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_name, ''), stem) + N' | ' + col AS metric,\n  CAST(AVG([PSI]) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\nGROUP BY CAST([date] AS DATETIME2), COALESCE(NULLIF(model_name, ''), stem) + N' | ' + col\nORDER BY 1",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -240,7 +240,7 @@
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT\n  CAST([date] AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_name, ''), stem) AS metric,\n  CAST(MAX([PSI]) AS FLOAT) AS [value]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\nGROUP BY CAST([date] AS DATETIME2), COALESCE(NULLIF(model_name, ''), stem)\nORDER BY 1",
+          "rawSql": "SELECT\n  CAST([date] AS DATETIME2) AS [time],\n  COALESCE(NULLIF(model_name, ''), stem) AS metric,\n  CAST(MAX([PSI]) AS FLOAT) AS [value]\nFROM [agrafana].[Querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\nGROUP BY CAST([date] AS DATETIME2), COALESCE(NULLIF(model_name, ''), stem)\nORDER BY 1",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -286,7 +286,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT model_name, model_version,\n  COUNT(*) AS [признаков],\n  ROUND(CAST(MAX([PSI]) AS FLOAT), 4) AS [макс PSI],\n  SUM(CASE WHEN [PSI] > 0.3 THEN 1 ELSE 0 END) AS [PSI>0.3]\nFROM [agrafana].[querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND [date] = (SELECT MAX([date]) FROM [agrafana].[querulus_DataDrift])\nGROUP BY model_name, model_version\nORDER BY model_name",
+          "rawSql": "SELECT model_name, model_version,\n  COUNT(*) AS [признаков],\n  ROUND(CAST(MAX([PSI]) AS FLOAT), 4) AS [макс PSI],\n  SUM(CASE WHEN [PSI] > 0.3 THEN 1 ELSE 0 END) AS [PSI>0.3]\nFROM [agrafana].[Querulus_DataDrift]\nWHERE stem IN (${model:sqlstring})\n  AND [date] = (SELECT MAX([date]) FROM [agrafana].[Querulus_DataDrift])\nGROUP BY model_name, model_version\nORDER BY model_name",
           "editorMode": "code",
           "rawQuery": true
         }
@@ -751,7 +751,7 @@
           "type": "mssql",
           "uid": "querulus_mssql"
         },
-        "query": "SELECT DISTINCT stem AS __text, stem AS __value FROM (\n  SELECT stem FROM [agrafana].[Querulus_errors]\n  UNION\n  SELECT stem FROM [agrafana].[Querulus_FinEffect]\n  UNION\n  SELECT stem FROM [agrafana].[querulus_DataDrift]\n) t ORDER BY 1",
+        "query": "SELECT DISTINCT stem AS __text, stem AS __value FROM (\n  SELECT stem FROM [agrafana].[Querulus_errors]\n  UNION\n  SELECT stem FROM [agrafana].[Querulus_FinEffect]\n  UNION\n  SELECT stem FROM [agrafana].[Querulus_DataDrift]\n) t ORDER BY 1",
         "includeAll": true,
         "multi": true,
         "refresh": 2,

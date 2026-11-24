@@ -14,7 +14,7 @@ from __future__ import annotations
 # --- целевые таблицы Motor.agrafana ------------------------------------------
 SCHEMA = "agrafana"
 TABLE_ERRORS = "Querulus_errors"
-TABLE_DRIFT = "querulus_DataDrift"
+TABLE_DRIFT = "Querulus_DataDrift"
 TABLE_FIN_EFFECT = "Querulus_FinEffect"
 
 # =============================================================================

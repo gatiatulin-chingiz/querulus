@@ -31,9 +31,9 @@ BEGIN
 END
 GO
 
-IF OBJECT_ID(N'[agrafana].[querulus_DataDrift]', N'U') IS NULL
+IF OBJECT_ID(N'[agrafana].[Querulus_DataDrift]', N'U') IS NULL
 BEGIN
-    CREATE TABLE [agrafana].[querulus_DataDrift] (
+    CREATE TABLE [agrafana].[Querulus_DataDrift] (
         [model_name] NVARCHAR(256) NULL,
         [model_version] NVARCHAR(256) NULL,
         [date] DATE NULL,

@@ -1,4 +1,4 @@
-"""DataDrift: Hive reference (main+second) + Oracle SPR → querulus_DataDrift.
+"""DataDrift: Hive reference (main+second) + Oracle SPR → Querulus_DataDrift.
 
 Источники (prod):
   * train — Hive на каждую модель из ``DEFAULT_DRIFT_MODELS`` (полный train);

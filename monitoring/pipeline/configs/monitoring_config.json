@@ -3,7 +3,7 @@
   "prod_models_path": "prod_models",
   "pickle_name": "querulus",
   "dashboard_name": "querulus",
-  "grafana_table_name": "querulus_DataDrift",
+  "grafana_table_name": "Querulus_DataDrift",
   "extrapolation_period": 4,
   "target_column": "TARGET"
 }

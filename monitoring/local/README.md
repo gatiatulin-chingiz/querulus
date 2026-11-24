@@ -12,7 +12,7 @@
 
 **Pipeline:**
 - `pipeline/errors.py` → `Querulus_errors`
-- `pipeline/datadrift.py` → `querulus_DataDrift` (OutBoxML)
+- `pipeline/datadrift.py` → `Querulus_DataDrift` (OutBoxML)
 - `pipeline/fin_effect.py` → `Querulus_FinEffect` (wide: `week_start, stem, slot, filial`)
 - `pipeline/alert_email.py` → weekly mail (DAG: пн 09:00 после metrics; локально `ALERT_DRY_RUN=1`)
 
@@ -77,7 +77,7 @@ python ../pipeline/fin_effect.py
 ## Tables (`Motor.agrafana`)
 
 - `Querulus_errors` — replace
-- `querulus_DataDrift` — append (guard `date+model_name+track`)
+- `Querulus_DataDrift` — append (guard `date+model_name+track`)
 - `Querulus_FinEffect` — replace, grain `(week_start, stem, slot, filial)`
 
 ## Notes

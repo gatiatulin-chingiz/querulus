@@ -6,7 +6,7 @@
 ALTER / DROP не делаем: недостающие колонки — вручную или пересоздать таблицу.
 
 Таблицы:
-  Querulus_errors, querulus_DataDrift, Querulus_FinEffect.
+  Querulus_errors, Querulus_DataDrift, Querulus_FinEffect.
 """
 from __future__ import annotations
 

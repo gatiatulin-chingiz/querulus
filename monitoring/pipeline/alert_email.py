@@ -1,4 +1,4 @@
-"""Weekly email alert from querulus_DataDrift (MSSQL agrafana).
+"""Weekly email alert from Querulus_DataDrift (MSSQL agrafana).
 
 Reads already-written metrics (no recalculation). Дайджест: последний
 ``date`` в Motor, строки с PSI выше порога (без усреднения).
@@ -181,7 +181,7 @@ def _load_email_config() -> _EmailEnvConfig:
 
 
 def _fetch_latest_drift() -> pd.DataFrame:
-    """Только строки с максимальным date в querulus_DataDrift."""
+    """Только строки с максимальным date в Querulus_DataDrift."""
     settings = load_settings()
     engine = get_engine(settings.grafana_sqlalchemy_url)
     sql = text(
