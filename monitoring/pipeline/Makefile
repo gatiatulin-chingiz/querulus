@@ -16,6 +16,10 @@
 PIPE := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 export PYTHONPATH := $(PIPE):$(PIPE)/src:$(PIPE)/../..:$(PIPE)/../../src:$(PYTHONPATH)
 
+# PIP_* — длинный timeout: repo.vsk.ru иногда рвёт большие wheel (nvidia-nccl и т.п.)
+export PIP_DEFAULT_TIMEOUT ?= 300
+PIP_EXTRA := --extra-index-url https://repo.vsk.ru/repository/pipdiligence/simple --trusted-host repo.vsk.ru --default-timeout=$(PIP_DEFAULT_TIMEOUT)
+
 # Создать виртуальное окружение и поставить зависимости с VSK PyPI
 venv:
 	echo $@ processing...
@@ -23,12 +27,14 @@ venv:
 	venv/bin/python3 -m pip config set global.index-url 'http://repo.vsk.ru/repository/pypi.org/simple'
 	venv/bin/python3 -m pip config set global.extra-index-url 'https://repo.vsk.ru/repository/pipdiligence/simple'
 	venv/bin/python3 -m pip config set global.trusted-host 'repo.vsk.ru'
-	# 1) pip + setuptools (pkg_resources) до любых тяжёлых пакетов
+	# 1) pip + setuptools (pkg_resources)
 	venv/bin/python3 -m pip install --upgrade pip setuptools wheel
-	# 2) pyarrow ТОЛЬКО wheel — иначе на контуре: Failed to build + pkg_resources
-	./venv/bin/pip3 install --extra-index-url https://repo.vsk.ru/repository/pipdiligence/simple --trusted-host repo.vsk.ru --only-binary=pyarrow "pyarrow>=14.0,<20"
-	# 3) остальное
-	./venv/bin/pip3 install --extra-index-url https://repo.vsk.ru/repository/pipdiligence/simple --trusted-host repo.vsk.ru -r requirements.txt
+	# 2) pyarrow ТОЛЬКО wheel
+	./venv/bin/pip3 install $(PIP_EXTRA) --only-binary=pyarrow "pyarrow>=14.0,<20"
+	# 3) лёгкие зависимости без outboxml
+	./venv/bin/pip3 install $(PIP_EXTRA) -r requirements.txt
+	# 4) outboxml без transitive CUDA/torch (nvidia-nccl ~GB, timeout на контуре)
+	./venv/bin/pip3 install $(PIP_EXTRA) --no-deps "outboxml>=0.10.1"
 
 # Заглушка под BUU-контракт (у нас данные не из git-fetch)
 fetch:
