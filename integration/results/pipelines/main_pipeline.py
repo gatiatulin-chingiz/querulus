@@ -53,7 +53,7 @@ INPUT_REQUIRED_COLUMNS: List[str] = [
     "IS_TOTAL",
     "VICTIM_VEHICLE_AGE",
     "REGION",
-    "VICTIM_TS_REGION",
+    "VICTIM_OBJECT_REG_NUM",
     "VICTIM_VEHICLE_BRAND",
     "VICTIM_VEHICLE_COUNTRY",
     "EVENT_DATE",
@@ -82,6 +82,39 @@ def load_ts_country_by_brand(models_dir: Path) -> Dict[str, str]:
     return {k.upper(): v.upper() for k, v in brands_raw.items()}
 
 # reviewed
+def load_dict_lpr(models_dir: Path) -> Dict[str, str]:
+    """Код региона ГРЗ → название из ``Other_dicts.json`` / ``dict_LPR``."""
+    path = Path(models_dir) / "Other_dicts.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"Нет Other_dicts.json: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not payload:
+        raise ValueError(f"Пустой Other_dicts.json: {path}")
+    raw = payload.get("dict_LPR")
+    if not raw:
+        raise ValueError(f"Нет dict_LPR в {path}")
+    return {str(k): str(v) for k, v in raw.items()}
+
+# reviewed
+def fget_region_from_lp(lp: Any, dict_lpr: Dict[str, str]) -> str:
+    """Регион регистрации ТС по госномеру (как на обучении: последние 2 цифры)."""
+    lp = str(lp)
+    if len(lp) > 6:
+        if lp[-2:].isdigit():
+            temp: Any = int(lp[-2:])
+        else:
+            temp = -1
+    else:
+        temp = np.nan
+    if type(temp) == int:
+        if temp > 0:
+            if str(temp) in dict_lpr:
+                return dict_lpr[str(temp)]
+            return "Неизвестно"
+        return "Неизвестно"
+    return "Неизвестно"
+
+# reviewed
 def _require_columns(df: pd.DataFrame, columns: List[str], role: str) -> None:
     missing = [c for c in columns if c not in df.columns]
     if missing:
@@ -103,6 +136,7 @@ def _prepare_vector_upper(features_values: List[Dict]) -> pd.DataFrame:
 def _coerce_and_enrich(
     df: pd.DataFrame,
     ts_country_by_brand: Dict[str, str],
+    dict_lpr: Dict[str, str],
 ) -> pd.DataFrame:
     out = df.copy()
     for col in DATE_INPUT_COLUMNS:
@@ -125,6 +159,11 @@ def _coerce_and_enrich(
     out["VIC_TS_COUNTRY"] = out["VICTIM_VEHICLE_BRAND"].map(
         lambda x: ts_country_by_brand.get(x, "OTHER") if isinstance(x, str) else "OTHER"
     )
+    out["VICTIM_TS_REGION"] = (
+        out["VICTIM_OBJECT_REG_NUM"]
+        .map(lambda x: fget_region_from_lp(x, dict_lpr))
+        .str.upper()
+    )
     return out
 
 # reviewed
@@ -140,11 +179,12 @@ def _validate_derived_dates_strict(df: pd.DataFrame) -> None:
 def preprocess(
     features_values: List[Dict],
     ts_country_by_brand: Dict[str, str],
+    dict_lpr: Dict[str, str],
 ) -> pd.DataFrame:
     """UPPER → required columns → enrich → даты (без FE/CPI)."""
     df = _prepare_vector_upper(features_values)
     _require_columns(df, INPUT_REQUIRED_COLUMNS, "input")
-    df = _coerce_and_enrich(df, ts_country_by_brand)
+    df = _coerce_and_enrich(df, ts_country_by_brand, dict_lpr)
     _validate_derived_dates_strict(df)
     return df
 

@@ -112,6 +112,7 @@ class Registry:
     models: Dict[str, Tuple[Any, Any]]
     calibrators: Dict[str, Tuple[Any, Any]]
     ts_country_by_brand: Dict[str, Dict[str, str]]
+    dict_lpr: Dict[str, Dict[str, str]]
     submodel_names: Dict[str, Dict[str, str]]
     models_json_mtime: float
     loaded_at: str
@@ -208,6 +209,7 @@ def load_registry(models_dir: Path) -> Registry:
     models: Dict[str, Tuple[Any, Any]] = {}
     calibrators: Dict[str, Tuple[Any, Any]] = {}
     ts_country_by_brand: Dict[str, Dict[str, str]] = {}
+    dict_lpr: Dict[str, Dict[str, str]] = {}
     submodel_names: Dict[str, Dict[str, str]] = {}
 
     for stem, raw in read_json_object(models_dir, MODELS_JSON).items():
@@ -243,6 +245,7 @@ def load_registry(models_dir: Path) -> Registry:
         versions[stem] = str(version)
         models[stem] = (clf_model, rg_model)
         ts_country_by_brand[stem] = module.load_ts_country_by_brand(models_dir)
+        dict_lpr[stem] = module.load_dict_lpr(models_dir)
         submodel_names[stem] = {
             "clf": _model_name(clf_model),
             "rg": _model_name(rg_model),
@@ -258,6 +261,7 @@ def load_registry(models_dir: Path) -> Registry:
         models=models,
         calibrators=calibrators,
         ts_country_by_brand=ts_country_by_brand,
+        dict_lpr=dict_lpr,
         submodel_names=submodel_names,
         models_json_mtime=models_json_mtime,
         loaded_at=loaded_at,
@@ -309,6 +313,7 @@ def _preprocess(
     return registry.modules[stem].preprocess(
         features_values,
         registry.ts_country_by_brand[stem],
+        registry.dict_lpr[stem],
     )
 
 # reviewed

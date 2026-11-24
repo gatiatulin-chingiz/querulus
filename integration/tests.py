@@ -63,7 +63,7 @@ def _base_vector(**overrides) -> list[dict]:
         "RECIEVE_METHOD": "почта",
         "FL_PHOTO_VIDEO": 0,
         "PAYMENT_RECIPIENT_TYPE": "иное",
-        "VICTIM_TS_REGION": "москва",
+        "VICTIM_OBJECT_REG_NUM": "А123АА77",
         "LOSS_UNIT_TYPE": "филиал",
         "VICTIM_VEHICLE_CATEGORY": "эконом",
         "VICTIM_VEHICLE_BRAND": "toyota",
@@ -105,20 +105,23 @@ class TestPreprocess(unittest.TestCase):
         cls.main = _load_pipeline("main_pipeline")
         cls.second = _load_pipeline("second_pipeline")
         cls.brands = cls.main.load_ts_country_by_brand(_results_dir())
+        cls.dict_lpr = cls.main.load_dict_lpr(_results_dir())
 
     def test_empty_string_to_nan(self):
         df = self.main._prepare_vector_upper(_base_vector())
         self.assertTrue(pd.isna(df["EMPTY_COL"].iloc[0]))
 
     def test_main_no_fe_real(self):
-        df = self.main.preprocess(_base_vector(), self.brands)
+        df = self.main.preprocess(_base_vector(), self.brands, self.dict_lpr)
         self.assertNotIn("FE_VALUE_BEFORE_WITH_REAL_2022", df.columns)
         self.assertIn("VIC_TS_COUNTRY", df.columns)
+        self.assertEqual(df["VICTIM_TS_REGION"].iloc[0], "МОСКВА")
 
     def test_second_has_fe(self):
-        df = self.second.preprocess(_base_vector(), self.brands)
+        df = self.second.preprocess(_base_vector(), self.brands, self.dict_lpr)
         self.assertIn("FE_VALUE_BEFORE_WITH_REAL_2022", df.columns)
         self.assertIn("FE_SHARE_WORK_TIER", df.columns)
+        self.assertEqual(df["VICTIM_TS_REGION"].iloc[0], "МОСКВА")
 
 
 class TestMaskAndCal(unittest.TestCase):
