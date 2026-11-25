@@ -22,12 +22,15 @@ TABLE_FIN_EFFECT = "Querulus_FinEffect"
 # =============================================================================
 # DataDrift: 1 Hive на slot (полный train), 1 расчёт на slot.
 # features = union(cf, rg); без среза по таргету; track в datadrift.py = "all".
+# Pickle {stem}.pickle → pipeline/models/ (или DRIFT_MODELS_DIR) — model_config
+# для prepare_dataset на train; см. pipeline/models/README.md.
 
 DEFAULT_DRIFT_MODELS: tuple[dict, ...] = (
     {
         "slot": "main",
         "stem": "querulus_ansamble_2026_04_18_v1",
         "hive": "models.querulus_ansamble_2026_04_18_v1",
+        # optional: "pickle": "querulus_ansamble_2026_04_18_v1.pickle",
         # cf_3 ∪ rg_3
         "features": (
             "AMOUNT_REPAIR",

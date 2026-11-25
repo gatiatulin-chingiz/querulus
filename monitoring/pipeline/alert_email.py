@@ -278,16 +278,20 @@ def _fetch_latest_drift() -> pd.DataFrame:
 
 
 def main() -> int:
-    settings = load_settings()
     dry = os.environ.get("ALERT_DRY_RUN", "").strip().lower() in {"1", "true", "yes"}
-
-    drift = _fetch_latest_drift()
-    mail = QuerulusDriftAlertMail(config=_load_email_config())
-    mail.send_report(
-        drift,
-        psi_threshold=settings.psi_threshold,
-        dry_run=dry,
-    )
+    try:
+        settings = load_settings()
+        drift = _fetch_latest_drift()
+        mail = QuerulusDriftAlertMail(config=_load_email_config())
+        mail.send_report(
+            drift,
+            psi_threshold=settings.psi_threshold,
+            dry_run=dry,
+        )
+    except Exception:
+        # Полный traceback в stdout pod — UI часто не отдаёт логи (http://:8793)
+        logger.exception("alert_email FAILED")
+        raise
     logger.info("alert_email done || dry_run=%s", dry)
     return 0
 

@@ -1,12 +1,13 @@
 """DataDrift: Hive reference (main+second) + Oracle SPR → Querulus_DataDrift.
 
 Источники (prod):
-  * train — Hive на каждую модель из ``DEFAULT_DRIFT_MODELS`` (полный train);
+  * train — Hive на модель из ``DEFAULT_DRIFT_MODELS``, затем
+    ``prepare_dataset`` по ``model_config`` из ``{stem}.pickle``
+    (каталог ``pipeline/models/`` или ``DRIFT_MODELS_DIR``);
   * prod — Oracle ``spr_uu_json_log``:
     ``MODEL::UU_QUERULUS → SPR_UU::QUERULUS``, фичи из
-    ``main/second_response.df.output`` (legacy) или ``output_outboxml``
-    (новый integration-сервис);
-  * фичи — ``config.features ∩ train.columns ∩ prod.columns``;
+    ``main/second_response.df.output`` (legacy) или ``output_outboxml``;
+  * фичи — ``config.features ∩ train_prepared ∩ prod``;
     отсутствующие фичи → warning в лог.
 
 Kerberos: ``kinit`` в DAG до ``make automl``.
@@ -15,10 +16,12 @@ Synthetic — ``local/synthetic/run_datadrift.py``.
 from __future__ import annotations
 
 import logging
+import os
+import pickle
 import sys
 from datetime import date, datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
@@ -43,6 +46,8 @@ logger = logging.getLogger("datadrift")
 META_COLS = {"stem", "slot", "track", "run_date", "model_label", "model_name", "model_version"}
 # Один расчёт на модель (cf∪rg); колонка track для guard/схемы Motor
 DRIFT_TRACK = "all"
+# Pickle stem → [clf, rg]; см. pipeline/models/README.md
+_DEFAULT_MODELS_DIR = _PIPELINE_ROOT / "models"
 
 # Порядок колонок отчёта как в archive MonitoringReport
 ARCHIVE_COLS = [
@@ -424,6 +429,148 @@ def _filter_train_window(df: pd.DataFrame, settings: Settings) -> pd.DataFrame:
     return out
 
 
+def _ensure_mldataworker_alias() -> None:
+    """Prod pickle часто сериализован как mldataworker.*; пакет — outboxml."""
+    try:
+        import outboxml
+        import outboxml.core
+        import outboxml.core.pydantic_models
+    except ImportError as exc:
+        raise ImportError(
+            "outboxml нужен для prepare_dataset / unpickle model_config"
+        ) from exc
+    sys.modules.setdefault("mldataworker", outboxml)
+    sys.modules.setdefault("mldataworker.core", outboxml.core)
+    sys.modules.setdefault(
+        "mldataworker.core.pydantic_models", outboxml.core.pydantic_models
+    )
+    try:
+        import outboxml.core.utils as _utils
+
+        sys.modules.setdefault("mldataworker.core.utils", _utils)
+    except ImportError:
+        pass
+    try:
+        import outboxml.models as _models
+
+        sys.modules.setdefault("mldataworker.models", _models)
+    except ImportError:
+        pass
+
+
+def models_dir() -> Path:
+    """Каталог `{stem}.pickle`: env DRIFT_MODELS_DIR или pipeline/models/."""
+    override = os.environ.get("DRIFT_MODELS_DIR", "").strip()
+    if override:
+        return Path(override)
+    return _DEFAULT_MODELS_DIR
+
+
+def resolve_pickle_path(stem: str, *, pickle_override: str = "") -> Path:
+    """Путь к `{stem}.pickle` (или явный override из config)."""
+    if pickle_override.strip():
+        path = Path(pickle_override.strip())
+        if not path.is_absolute():
+            path = models_dir() / path
+        return path
+    return models_dir() / f"{stem}.pickle"
+
+
+def _model_config_from_result(item: Any):
+    from outboxml.core.pydantic_models import ModelConfig
+
+    if isinstance(item, dict):
+        return ModelConfig.model_validate(item["model_config"])
+    cfg = getattr(item, "model_config", None)
+    if cfg is None:
+        raise TypeError(
+            f"неизвлечён model_config из {type(item).__name__} "
+            "(ожидался dict с model_config или DSManagerResult)"
+        )
+    return ModelConfig.model_validate(cfg)
+
+
+def _combine_prepared_matrices(clf_t: pd.DataFrame, reg_t: pd.DataFrame) -> pd.DataFrame:
+    """Как integration.main._combine_output_matrices (общий столбец → ``__rg``)."""
+    shared = [c for c in reg_t.columns if c in clf_t.columns]
+    if not shared:
+        return pd.concat([clf_t, reg_t], axis=1)
+    reg_part = reg_t.rename(columns={c: f"{c}__rg" for c in shared})
+    return pd.concat([clf_t, reg_part], axis=1)
+
+
+def load_model_pair(stem: str, *, pickle_override: str = "") -> tuple[Any, Any]:
+    """Загрузить ``[clf, rg]`` из pickle сервиса."""
+    _ensure_mldataworker_alias()
+    path = resolve_pickle_path(stem, pickle_override=pickle_override)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Нет pickle для datadrift: {path}. "
+            f"Положите {{stem}}.pickle в {models_dir()} "
+            "(см. pipeline/models/README.md) или задайте DRIFT_MODELS_DIR."
+        )
+    with open(path, "rb") as f:
+        group = pickle.load(f)
+    if not isinstance(group, (list, tuple)) or len(group) < 2:
+        raise ValueError(
+            f"{path.name}: ожидается [clf, rg], получено {type(group).__name__}"
+        )
+    logger.info("pickle loaded || stem=%s || path=%s", stem, path)
+    return group[0], group[1]
+
+
+def prepare_train_like_service(
+    train_raw: pd.DataFrame,
+    *,
+    stem: str,
+    clf: Any,
+    rg: Any,
+) -> pd.DataFrame:
+    """Hive-train → prepare_dataset(clf)+prepare_dataset(rg) → плоскость output_outboxml."""
+    from outboxml.core.data_prepare import prepare_dataset
+
+    clf_cfg = _model_config_from_result(clf)
+    rg_cfg = _model_config_from_result(rg)
+    base = train_raw.copy()
+    logger.info(
+        "prepare_dataset train || stem=%s || rows=%s || cols_in=%s",
+        stem,
+        len(base),
+        len(base.columns),
+    )
+    clf_prep = prepare_dataset(
+        group_name=stem,
+        data=base,
+        train_ind=None,
+        test_ind=None,
+        model_config=clf_cfg,
+        check_prepared=False,
+        calc_corr=False,
+        save_data=False,
+        log=True,
+        raise_on_encoding_error=False,
+    ).data
+    rg_prep = prepare_dataset(
+        group_name=stem,
+        data=base,
+        train_ind=None,
+        test_ind=None,
+        model_config=rg_cfg,
+        check_prepared=False,
+        calc_corr=False,
+        save_data=False,
+        log=True,
+        raise_on_encoding_error=False,
+    ).data
+    out = _combine_prepared_matrices(clf_prep, rg_prep)
+    logger.info(
+        "prepare_dataset train done || stem=%s || cols_out=%s",
+        stem,
+        len(out.columns),
+    )
+    return out
+
+
 def load_reference_dataset(settings: Settings, *, hive_table: str) -> pd.DataFrame:
     """Обучающая выборка одной модели — только Hive (без parquet-fallback)."""
     table = hive_table.strip()
@@ -599,7 +746,12 @@ def main() -> int:
                 stem,
             )
             continue
-        train = load_reference_dataset(settings, hive_table=hive)
+        train_raw = load_reference_dataset(settings, hive_table=hive)
+        pickle_override = str(model.get("pickle") or "")
+        clf, rg = load_model_pair(stem, pickle_override=pickle_override)
+        train = prepare_train_like_service(
+            train_raw, stem=stem, clf=clf, rg=rg
+        )
         features = resolve_drift_features(configured, train, prod, stem=stem)
         part = compute_datadrift(
             train,

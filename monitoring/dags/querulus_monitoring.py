@@ -35,6 +35,9 @@ tags = ["BUU_projects", "querulus", "monitoring"]
 task_name = "querulus_monitoring"
 # True → после prepare pod спит 1ч (можно зайти kubectl exec и посмотреть файлы)
 DEBUG = False
+# True → alert_email в любой день (без Airflow Variable / env на scheduler).
+# После проверки верни False — иначе письмо будет каждый daily run.
+FORCE_ALERT = True
 
 # Contour GitLab: clone → каталог querulus_monitoring/ (= корень pipeline)
 git_path = Variable.get(
@@ -60,18 +63,21 @@ default_args = {
 DAG_MODE = os.environ.get("QUERULUS_DAG_MODE", "k8s").strip().lower()
 
 
-def _is_monday_alert(**context) -> bool:
-    """ShortCircuit: письмо только в ALERT_WEEKDAY (0=пн) или ALERT_FORCE.
+def _truthy(raw: str) -> bool:
+    return (raw or "").strip().lower() in {"1", "true", "yes"}
 
-    Если вернёт False — Airflow НЕ запустит downstream (alert_email).
+
+def _is_monday_alert(**context) -> bool:
+    """ShortCircuit: письмо только в ALERT_WEEKDAY (0=пн) или force.
+
+    Force (любой weekday), в порядке приоритета:
+      1) константа ``FORCE_ALERT`` в этом файле (без доступа к Variables)
+      2) env ``ALERT_FORCE`` на scheduler/worker
+
+    Если False — Airflow НЕ запустит downstream (alert_email).
     Это не pod: выполняется на scheduler/worker Airflow.
     """
-    force = os.environ.get("ALERT_FORCE", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    if force:
+    if FORCE_ALERT or _truthy(os.environ.get("ALERT_FORCE", "")):
         return True
     weekday = int(os.environ.get("ALERT_WEEKDAY", "0") or "0")
     when = context.get("data_interval_end") or context["logical_date"]
@@ -323,7 +329,9 @@ echo "=== [{label}] DONE ==="
             volume_mounts=volume_mount,
             env_vars=env_vars,
             cmds=["bash", "-cx", bash],
-            on_finish_action="delete_pod",
+            # Удаляем только успешные: при fail pod остаётся → kubectl logs
+            # (UI часто отдаёт пустой http://:8793 — hostname log-server не задан)
+            on_finish_action="delete_succeeded_pod",
             # Clear/retry не должен цепляться к старому Failed-pod (иначе нет [base] логов)
             reattach_on_restart=False,
             in_cluster=True,
