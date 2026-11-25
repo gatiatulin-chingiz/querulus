@@ -480,21 +480,21 @@ class _DriftConfigUnpickler(pickle.Unpickler):
 
     @staticmethod
     def _stub(name: str) -> type:
-        def _setstate(self, state):  # noqa: ANN001
-            if isinstance(state, dict):
-                self.__dict__.update(state)
-            else:
-                self._state = state
+        """Заглушка без ``__slots__`` — нужен ``__dict__`` для __setstate__."""
 
-        return type(
-            name,
-            (),
-            {
-                "__init__": lambda self, *a, **k: None,
-                "__setstate__": _setstate,
-                "__slots__": (),
-            },
-        )
+        class _Stub:
+            def __init__(self, *args, **kwargs):  # noqa: ANN001, ARG002
+                pass
+
+            def __setstate__(self, state):  # noqa: ANN001
+                if isinstance(state, dict):
+                    self.__dict__.update(state)
+                else:
+                    self._state = state
+
+        _Stub.__name__ = name
+        _Stub.__qualname__ = name
+        return _Stub
 
     def find_class(self, module: str, name: str):  # noqa: ANN201
         if any(module == p or module.startswith(p + ".") for p in self._STUB_PREFIXES):
