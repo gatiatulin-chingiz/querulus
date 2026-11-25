@@ -24,6 +24,7 @@ if str(_PIPELINE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PIPELINE_ROOT))
 import _bootstrap_path  # noqa: F401 — monorepo + standalone GitLab clone
 
+from pipeline.config import errors_kind_meta
 from pipeline.settings import Settings, load_settings
 from pipeline.db import connect_oisuu
 from pipeline.write_sql import get_engine, write_append_guarded
@@ -80,12 +81,20 @@ def load_errors_frame(settings: Settings) -> pd.DataFrame:
     """Боевая выгрузка ошибок из OISUU.
 
     ``РезультатПроверки = -1`` — сбой/ошибка модели (не успешный score).
-    Окно: ``ERRORS_LOOKBACK_DAYS``. Опционально ``ERRORS_MODEL_KINDS`` (ВидМодели IN …).
+    Окно: ``ERRORS_LOOKBACK_DAYS``.
+    Фильтр ``ВидМодели``: ``ERRORS_MODEL_KINDS`` или default «Сутяжничество {slot}».
     """
     since = (datetime.now() - timedelta(days=settings.errors_lookback_days)).strftime(
         "%Y-%m-%d"
     )
-    sql = """
+    kinds = tuple(settings.errors_model_kinds)
+    if not kinds:
+        raise ValueError(
+            "errors_model_kinds empty — set ERRORS_MODEL_KINDS or "
+            "DEFAULT_ERRORS_MODEL_KINDS in config.py"
+        )
+    placeholders = ",".join("?" for _ in kinds)
+    sql = f"""
         SELECT
             ДатаПроверки,
             LossNumber,
@@ -100,12 +109,9 @@ def load_errors_frame(settings: Settings) -> pd.DataFrame:
         FROM [OISUU_report].[dbo].[oisuu81_t_MatemModelsLogs] WITH (NOLOCK)
         WHERE РезультатПроверки = -1
           AND ДатаПроверки >= ?
+          AND ВидМодели IN ({placeholders})
     """
-    params: list = [since]
-    if settings.errors_model_kinds:
-        placeholders = ",".join("?" for _ in settings.errors_model_kinds)
-        sql += f"\n          AND ВидМодели IN ({placeholders})"
-        params.extend(settings.errors_model_kinds)
+    params: list = [since, *kinds]
 
     conn = connect_oisuu(settings)
     try:
@@ -155,18 +161,20 @@ def _normalize_raw(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("errors frame needs error_text or ОписаниеОшибки")
     work["error_text"] = work["error_text"].fillna("").astype(str)
     work.loc[work["error_text"].str.strip() == "", "error_text"] = "Ответа нет."
-    # stem/slot/label — для Grafana-фильтра «Модель»; без них берём ВидМодели
+    # stem/slot/label — из ВидМодели через DEFAULT_DRIFT_MODELS (не копируем kind в stem)
     if "model_kind" not in work.columns:
-        work["model_kind"] = work["stem"] if "stem" in work.columns else "unknown"
+        work["model_kind"] = "unknown"
     work["model_kind"] = work["model_kind"].fillna("unknown").astype(str)
+    meta = work["model_kind"].map(errors_kind_meta)
     if "stem" not in work.columns:
-        work["stem"] = work["model_kind"]
-    if "model_label" not in work.columns:
-        work["model_label"] = work["stem"].astype(str)
+        work["stem"] = meta.map(lambda m: m["stem"])
     if "slot" not in work.columns:
-        work["slot"] = ""
+        work["slot"] = meta.map(lambda m: m["slot"])
+    if "model_label" not in work.columns:
+        work["model_label"] = meta.map(lambda m: m["model_label"])
     if "model_version" not in work.columns:
         work["model_version"] = ""
+    work["model_version"] = work["model_version"].fillna("").astype(str)
     work["error_head"] = work["error_text"].map(traceback_head)
     work["error_fingerprint"] = work["error_text"].map(traceback_fingerprint)
     return work

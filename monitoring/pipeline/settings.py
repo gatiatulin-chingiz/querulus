@@ -14,6 +14,7 @@ from pipeline.config import (
     DEFAULT_DRIFT_MODELS,
     DEFAULT_EMAIL_RECEIVERS,
     DEFAULT_ERRORS_LOOKBACK_DAYS,
+    DEFAULT_ERRORS_MODEL_KINDS,
     DEFAULT_PSI_THRESHOLD,
     DEFAULT_REFERENCE_TRAIN_END,
     DEFAULT_REFERENCE_TRAIN_START,
@@ -174,7 +175,8 @@ def load_settings() -> Settings:
         errors_lookback_days=_env_int(
             "ERRORS_LOOKBACK_DAYS", default=DEFAULT_ERRORS_LOOKBACK_DAYS
         ),
-        errors_model_kinds=_split_csv(_env("ERRORS_MODEL_KINDS")),
+        errors_model_kinds=_split_csv(_env("ERRORS_MODEL_KINDS"))
+        or DEFAULT_ERRORS_MODEL_KINDS,
         fin_effect_monitoring_path=_env("FIN_EFFECT_MONITORING_PATH"),
         fin_effect_retro_path=_env("FIN_EFFECT_RETRO_PATH"),
         email_receivers=receivers,

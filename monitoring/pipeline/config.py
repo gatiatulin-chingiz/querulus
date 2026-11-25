@@ -87,6 +87,12 @@ DEFAULT_REFERENCE_TRAIN_END = ""
 DEFAULT_PSI_THRESHOLD = 0.3
 DEFAULT_DRIFT_LOOKBACK_DAYS = 14
 DEFAULT_ERRORS_LOOKBACK_DAYS = 14
+
+# ВидМодели в oisuu81_t_MatemModelsLogs (1С). Без фильтра в Querulus_errors
+# попадали чужие модели (Аукционы / Суброгация / …). Override: ERRORS_MODEL_KINDS.
+DEFAULT_ERRORS_MODEL_KINDS: tuple[str, ...] = tuple(
+    f"Сутяжничество {m['slot']}" for m in DEFAULT_DRIFT_MODELS
+)
 # =============================================================================
 
 DEFAULT_EMAIL_RECEIVERS = (
@@ -94,3 +100,20 @@ DEFAULT_EMAIL_RECEIVERS = (
     "AVBondarev@vsk.ru",
     "Matsera@VSK.RU",
 )
+
+
+def errors_kind_meta(model_kind: str) -> dict[str, str]:
+    """ВидМодели → stem/slot/label из DEFAULT_DRIFT_MODELS."""
+    kind = (model_kind or "").strip()
+    for model in DEFAULT_DRIFT_MODELS:
+        slot = str(model.get("slot", ""))
+        expected = f"Сутяжничество {slot}"
+        if kind == expected or kind.lower() == expected.lower():
+            stem = str(model.get("stem", ""))
+            return {
+                "slot": slot,
+                "stem": stem,
+                "model_label": str(model.get("label") or stem),
+            }
+    return {"slot": "", "stem": kind or "unknown", "model_label": kind or "unknown"}
+
