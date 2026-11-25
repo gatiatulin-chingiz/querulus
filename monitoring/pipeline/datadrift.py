@@ -2,8 +2,11 @@
 
 Источники (prod):
   * train — Hive на каждую модель из ``DEFAULT_DRIFT_MODELS`` (полный train);
-  * prod — Oracle ``spr_uu_json_log`` (+ expand JSON), один снимок на все модели.
-  * фичи — ``config.features ∩ train.columns ∩ prod.columns`` (cf∪rg в config);
+  * prod — Oracle ``spr_uu_json_log``:
+    ``MODEL::UU_QUERULUS → SPR_UU::QUERULUS``, фичи из
+    ``main/second_response.df.output`` (legacy) или ``output_outboxml``
+    (новый integration-сервис);
+  * фичи — ``config.features ∩ train.columns ∩ prod.columns``;
     отсутствующие фичи → warning в лог.
 
 Kerberos: ``kinit`` в DAG до ``make automl``.
@@ -28,8 +31,8 @@ import _bootstrap_path  # noqa: F401 — monorepo + standalone GitLab clone
 from pipeline.settings import Settings, load_settings
 from pipeline.db import (
     connect_oracle,
-    expand_json_column,
-    query_querulus_request_logs,
+    expand_querulus_model_output,
+    query_querulus_model_logs,
 )
 from pipeline.write_sql import get_engine, write_append_guarded
 
@@ -449,38 +452,57 @@ def load_reference_dataset(settings: Settings, *, hive_table: str) -> pd.DataFra
     return _filter_train_window(df, settings)
 
 
-def _load_prod_oracle_logs(settings: Settings) -> pd.DataFrame:
-    """Боевые логи Querulus из Oracle + разворот JSON_FILE в фичи.
-
-    Фильтр как в ноутбуке DataDrift: убрать EVENT_CREATED_BY_GIBDD_FLAG == 'Да'.
-    Пустые строки → NA (чтобы не считались отдельной категорией).
-    """
+def _load_prod_oracle_raw(settings: Settings) -> pd.DataFrame:
+    """Сырые ответы модели из Oracle (MODEL::UU_QUERULUS → SPR_UU::QUERULUS)."""
     from datetime import timedelta
 
     cutoff = datetime.now() - timedelta(days=settings.drift_lookback_days)
     conn = connect_oracle(settings)
     try:
-        raw = query_querulus_request_logs(conn, min_time_stamp=cutoff)
+        raw = query_querulus_model_logs(conn, min_time_stamp=cutoff)
     finally:
         conn.close()
-
     if raw.empty:
-        logger.warning("Oracle querulus logs empty || since=%s", cutoff)
-        return raw
+        logger.warning("Oracle model→SPR logs empty || since=%s", cutoff)
+    else:
+        logger.info(
+            "Oracle model→SPR raw || rows=%s || since=%s",
+            len(raw),
+            cutoff,
+        )
+    return raw
 
-    # после query колонки lower; на всякий случай принимаем оба регистра
-    json_col = "json_file" if "json_file" in raw.columns else "JSON_FILE"
-    prod = expand_json_column(raw, json_col)
+
+def _prod_features_for_model(
+    raw: pd.DataFrame,
+    *,
+    slot: str,
+    stem: str,
+) -> pd.DataFrame:
+    """Разворот ``*.df.output`` для slot; фильтр GIBDD; пустые строки → NA."""
+    if raw.empty:
+        return raw
+    prod = expand_querulus_model_output(raw, slot=slot, stem=stem)
+    if prod.empty:
+        logger.warning(
+            "prod output empty || slot=%s stem=%s (нет main/second_response.df.output)",
+            slot,
+            stem,
+        )
+        return prod
     for col in prod.columns:
         prod[col] = prod[col].map(
             lambda v: pd.NA if isinstance(v, str) and v == "" else v
         )
     if "EVENT_CREATED_BY_GIBDD_FLAG" in prod.columns:
-        prod = prod.loc[prod["EVENT_CREATED_BY_GIBDD_FLAG"] != "Да"].copy()
+        # в output обычно 0/1; строковый фильтр «Да» — как в старых логах
+        gibdd = prod["EVENT_CREATED_BY_GIBDD_FLAG"]
+        prod = prod.loc[gibdd.astype(str) != "Да"].copy()
     logger.info(
-        "prod logs loaded || rows=%s || since=%s || cols=%s",
+        "prod output || slot=%s stem=%s || rows=%s || cols=%s",
+        slot,
+        stem,
         len(prod),
-        cutoff,
         len(prod.columns),
     )
     return prod
@@ -550,25 +572,33 @@ def main() -> int:
         raise ValueError("DEFAULT_DRIFT_MODELS is empty in pipeline/config.py")
 
     logger.info(
-        "datadrift ← Hive×%s models + Oracle SPR → %s.%s || track=%s",
+        "datadrift ← Hive×%s models + Oracle model→SPR output → %s.%s || track=%s",
         len(settings.drift_models),
         settings.schema,
         settings.table_drift,
         DRIFT_TRACK,
     )
-    prod = _load_prod_oracle_logs(settings)
-    if prod.empty:
+    raw_prod = _load_prod_oracle_raw(settings)
+    if raw_prod.empty:
         logger.warning("Empty prod logs — skip datadrift write")
         return 0
 
     parts: list[pd.DataFrame] = []
     for model in settings.drift_models:
-        slot = model.get("slot", "")
+        slot = str(model.get("slot", "main") or "main")
         stem = str(model.get("stem", ""))
         hive = str(model.get("hive", ""))
         label = str(model.get("label") or stem)
         configured = model.get("features") or ()
         logger.info("datadrift model || slot=%s stem=%s hive=%s", slot, stem, hive)
+        prod = _prod_features_for_model(raw_prod, slot=slot, stem=stem)
+        if prod.empty:
+            logger.warning(
+                "skip model || slot=%s stem=%s — no prod output rows",
+                slot,
+                stem,
+            )
+            continue
         train = load_reference_dataset(settings, hive_table=hive)
         features = resolve_drift_features(configured, train, prod, stem=stem)
         part = compute_datadrift(

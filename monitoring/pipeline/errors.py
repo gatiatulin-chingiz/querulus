@@ -82,7 +82,7 @@ def load_errors_frame(settings: Settings) -> pd.DataFrame:
 
     ``РезультатПроверки = -1`` — сбой/ошибка модели (не успешный score).
     Окно: ``ERRORS_LOOKBACK_DAYS``.
-    Фильтр ``ВидМодели``: ``ERRORS_MODEL_KINDS`` или default «Сутяжничество {slot}».
+    Фильтр ``ВидМодели``: ``ERRORS_MODEL_KINDS`` или default «Сутяжность» (main).
     """
     since = (datetime.now() - timedelta(days=settings.errors_lookback_days)).strftime(
         "%Y-%m-%d"

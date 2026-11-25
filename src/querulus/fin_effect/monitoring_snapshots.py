@@ -686,8 +686,16 @@ class WeeklySeriesResult:
     note: str
     # доли путей на последнем кумулятивном срезе (за весь период)
     path_shares_latest: pd.DataFrame = field(default_factory=pd.DataFrame)
+    # доли путей по всем успешным week_end (для Motor wide)
+    path_shares_weekly: pd.DataFrame = field(default_factory=pd.DataFrame)
+    # ITT по филиалам (ult) на каждом успешном срезе
+    filial_effects_weekly: pd.DataFrame = field(default_factory=pd.DataFrame)
     # филиалы: «без инструментов» model < control (последний срез)
     instruments_attention_latest: pd.DataFrame = field(
+        default_factory=pd.DataFrame
+    )
+    # то же attn по всем week_end, где список непустой
+    instruments_attention_weekly: pd.DataFrame = field(
         default_factory=pd.DataFrame
     )
 
@@ -726,7 +734,10 @@ def run_weekly_monitoring_series(
     loss_by_week: dict[str, pd.DataFrame] = {}
     group_means_by_week: dict[str, dict[str, float]] = {}
     path_shares_latest = pd.DataFrame()
+    path_shares_parts: list[pd.DataFrame] = []
+    filial_effects_parts: list[dict[str, Any]] = []
     instruments_attention_latest = pd.DataFrame()
+    instruments_attn_parts: list[pd.DataFrame] = []
 
     for week_end in ends:
         subset = filter_monitoring_by_application_date(
@@ -780,13 +791,38 @@ def run_weekly_monitoring_series(
         snap["status"] = "ok"
         snap["reason"] = ""
         weekly_rows.append(snap)
-        path_shares_latest = pd.DataFrame(
+        path_week = pd.DataFrame(
             path_share_rows_from_result(result, week_end=week_end)
         )
+        path_shares_latest = path_week
+        if not path_week.empty:
+            path_shares_parts.append(path_week)
+        fe = result.filial_effects
+        if fe is not None and not fe.empty and "horizon" in fe.columns:
+            ult = fe.loc[fe["horizon"].astype(str).eq("ult")]
+            for _, fe_row in ult.iterrows():
+                filial_val = fe_row.get("filial")
+                filial_effects_parts.append(
+                    {
+                        "week_end": key,
+                        "filial": (
+                            str(filial_val) if pd.notna(filial_val) else "(пусто)"
+                        ),
+                        "itt": (
+                            float(fe_row["effect_control_minus_model"])
+                            if pd.notna(fe_row.get("effect_control_minus_model"))
+                            else np.nan
+                        ),
+                        "n_control": int(fe_row.get("n_control", 0) or 0),
+                        "n_model": int(fe_row.get("n_model", 0) or 0),
+                        "n": int(fe_row.get("n", 0) or 0),
+                    }
+                )
         attn = getattr(result, "agreement_instruments_attention", None)
         if attn is not None and not attn.empty:
             instruments_attention_latest = attn.copy()
             instruments_attention_latest["week_end"] = key
+            instruments_attn_parts.append(instruments_attention_latest)
         else:
             instruments_attention_latest = pd.DataFrame()
 
@@ -800,6 +836,21 @@ def run_weekly_monitoring_series(
         )["paid"]
 
     weekly = pd.DataFrame(weekly_rows)
+    path_shares_weekly = (
+        pd.concat(path_shares_parts, ignore_index=True)
+        if path_shares_parts
+        else pd.DataFrame()
+    )
+    filial_effects_weekly = (
+        pd.DataFrame(filial_effects_parts)
+        if filial_effects_parts
+        else pd.DataFrame()
+    )
+    instruments_attention_weekly = (
+        pd.concat(instruments_attn_parts, ignore_index=True)
+        if instruments_attn_parts
+        else pd.DataFrame()
+    )
     empty = WeeklySeriesResult(
         weekly=weekly,
         filial_deltas=pd.DataFrame(),
@@ -808,7 +859,10 @@ def run_weekly_monitoring_series(
         week_ends=ends,
         note="Пустой ряд",
         path_shares_latest=pd.DataFrame(),
+        path_shares_weekly=pd.DataFrame(),
+        filial_effects_weekly=pd.DataFrame(),
         instruments_attention_latest=pd.DataFrame(),
+        instruments_attention_weekly=pd.DataFrame(),
     )
     if weekly.empty:
         return empty
@@ -833,7 +887,10 @@ def run_weekly_monitoring_series(
         week_ends=ends,
         note=note,
         path_shares_latest=path_shares_latest,
+        path_shares_weekly=path_shares_weekly,
+        filial_effects_weekly=filial_effects_weekly,
         instruments_attention_latest=instruments_attention_latest,
+        instruments_attention_weekly=instruments_attention_weekly,
     )
 
 

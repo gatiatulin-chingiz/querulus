@@ -9,7 +9,8 @@
 
 Зерно wide-таблицы: (week_start, stem, slot, filial)
   filial='(все)' → ITT / annual_* / overall coverage / path lifts
-  filial=<имя>  → coverage + path shares + instruments attn
+  filial=<имя>  → coverage + ITT (стратификация) + n_control + path shares
+                  + instruments attn; annual_* остаются NULL (сеть)
 
 Synthetic — только в ``local/synthetic/run_fin_effect.py``.
 """
@@ -203,15 +204,33 @@ def compute_fin_effect_weekly(job: FinEffectJob, **kwargs: Any) -> FinEffectComp
         formula_version=FORMULA_VERSION,
         filter_fn=filter_monitoring_by_application_date,
     )
-    path_shares = _paths_frame(
-        series.path_shares_latest,
+    coverage_filial = _merge_filial_itt(
+        coverage_filial,
+        series.filial_effects_weekly,
         stem=job.stem,
         slot=job.slot,
         model_label=label,
         formula_version=FORMULA_VERSION,
     )
+    paths_src = (
+        series.path_shares_weekly
+        if not series.path_shares_weekly.empty
+        else series.path_shares_latest
+    )
+    path_shares = _paths_frame(
+        paths_src,
+        stem=job.stem,
+        slot=job.slot,
+        model_label=label,
+        formula_version=FORMULA_VERSION,
+    )
+    attn_src = (
+        series.instruments_attention_weekly
+        if not series.instruments_attention_weekly.empty
+        else series.instruments_attention_latest
+    )
     instruments_attention = _instruments_attn_frame(
-        series.instruments_attention_latest,
+        attn_src,
         stem=job.stem,
         slot=job.slot,
         model_label=label,
@@ -470,6 +489,58 @@ def _instruments_attn_frame(
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
     return out
+
+
+def _merge_filial_itt(
+    coverage: pd.DataFrame,
+    filial_effects: pd.DataFrame,
+    *,
+    stem: str,
+    slot: str,
+    model_label: str,
+    formula_version: str,
+) -> pd.DataFrame:
+    """Положить стратифицированный ITT / n_control на строки филиалов.
+
+    annual_* не трогаем — экстраполяция только на сеть («(все)»).
+    n_model в coverage — eligible в ручейке; из effects не перетираем
+    (ITT n_model приходит через path shares при наличии).
+    """
+    if filial_effects is None or filial_effects.empty:
+        return coverage
+    fe = filial_effects.copy()
+    week_col = "week_end" if "week_end" in fe.columns else "week_start"
+    fe["week_start"] = pd.to_datetime(fe[week_col], errors="coerce").dt.date
+    fe["filial"] = fe["filial"].fillna("(пусто)").astype(str)
+    fe["itt"] = pd.to_numeric(fe.get("itt"), errors="coerce")
+    fe["n_control"] = pd.to_numeric(fe.get("n_control"), errors="coerce")
+    keep = ["week_start", "filial", "itt", "n_control"]
+    fe = fe[keep].drop_duplicates(subset=["week_start", "filial"], keep="last")
+
+    if coverage is None or coverage.empty:
+        out = fe.copy()
+        out["stem"] = stem
+        out["slot"] = slot
+        out["model_label"] = model_label
+        out["formula_version"] = formula_version
+        out["n_incidents"] = np.nan
+        out["n_model"] = np.nan
+        out["coverage"] = np.nan
+        return out
+
+    base = coverage.copy()
+    if "itt" not in base.columns:
+        base["itt"] = np.nan
+    if "n_control" not in base.columns:
+        base["n_control"] = np.nan
+    merged = base.merge(fe, on=["week_start", "filial"], how="left", suffixes=("", "_fe"))
+    for col in ("itt", "n_control"):
+        fcol = f"{col}_fe"
+        if fcol in merged.columns:
+            # приоритет у стратифицированного расчёта
+            merged[col] = merged[fcol].combine_first(merged[col])
+            merged = merged.drop(columns=[fcol])
+    return merged
 
 
 def _coverage_by_filial_weekly(

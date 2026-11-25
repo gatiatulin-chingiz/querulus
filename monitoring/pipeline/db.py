@@ -37,7 +37,10 @@ _LIST_NUM_RE = re.compile(
 )
 
 # Маршрутизация Querulus в spr_uu_json_log (system_from / system_to).
+# Запрос ОИСУУ→модель (старый путь, input-фичи) — оставлен для отладки.
 OISUU_SYSTEM = "ОИСУУ"
+# Ответ модели → СПР: JSON с main_response / second_response → df.output
+QUERULUS_MODEL_SYSTEM = "MODEL::UU_QUERULUS"
 QUERULUS_SYSTEM_TO = "SPR_UU::QUERULUS"
 
 
@@ -225,13 +228,30 @@ def query_querulus_request_logs(
     min_time_stamp=None,
     limit: int | None = None,
 ) -> pd.DataFrame:
-    """Запросы ОИСУУ → SPR_UU::QUERULUS (входные фичи для DataDrift).
-
-    Это не ошибки и не ответы модели — payload запроса с фичами в JSON_FILE.
-    """
+    """Запросы ОИСУУ → SPR_UU::QUERULUS (входные фичи; legacy)."""
     return query_spr_uu_json_log(
         conn,
         system_from=OISUU_SYSTEM,
+        system_to=QUERULUS_SYSTEM_TO,
+        min_time_stamp=min_time_stamp,
+        limit=limit,
+    )
+
+
+def query_querulus_model_logs(
+    conn,
+    *,
+    min_time_stamp=None,
+    limit: int | None = None,
+) -> pd.DataFrame:
+    """Ответы модели → СПР: MODEL::UU_QUERULUS → SPR_UU::QUERULUS.
+
+    В JSON_FILE: main_response / second_response с df.input и df.output.
+    Для DataDrift берём df.output (см. ``expand_querulus_model_output``).
+    """
+    return query_spr_uu_json_log(
+        conn,
+        system_from=QUERULUS_MODEL_SYSTEM,
         system_to=QUERULUS_SYSTEM_TO,
         min_time_stamp=min_time_stamp,
         limit=limit,
@@ -304,3 +324,113 @@ def expand_json_column(df: pd.DataFrame, col: str) -> pd.DataFrame:
     # applymap: на каждой ячейке снять singleton-list числа
     expanded = expanded.applymap(_coerce_singleton_list_number)
     return pd.concat([df.drop(columns=[col]), expanded], axis=1)
+
+
+def _first_dict_row(value: Any) -> dict[str, Any] | None:
+    """df.input/output: list[dict] | dict → первый dict."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    if isinstance(value, list):
+        if not value:
+            return None
+        first = value[0]
+        return first if isinstance(first, dict) else None
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+def _parse_model_json_cell(x: Any) -> dict[str, Any] | None:
+    """Ячейка JSON_FILE ответа модели → dict."""
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return None
+    if isinstance(x, dict):
+        return x
+    s = str(x).strip()
+    if not s or s.lower() in {"nan", "none", "null"}:
+        return None
+    try:
+        obj = json.loads(s)
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+# Старый сервис: df.output; новый integration: df.output_outboxml
+_MODEL_OUTPUT_KEYS: tuple[str, ...] = ("output", "output_outboxml")
+
+
+def extract_model_output_row(
+    payload: dict[str, Any] | None,
+    *,
+    slot: str,
+    stem: str = "",
+) -> dict[str, Any] | None:
+    """Достать одну строку фич из ``*.df.output[|_outboxml]`` для slot.
+
+    main: ``main_response.df.*``; если задан stem — только при
+    ``usage_model == stem`` (или usage_model пустой).
+    second: ``second_response.df.*``; пустой second_response → None.
+
+    Ключи output (по приоритету): ``output`` (legacy), ``output_outboxml``
+    (новый ``integration/main.py``).
+    """
+    if not payload:
+        return None
+    slot_l = (slot or "main").strip().lower()
+    if slot_l == "second":
+        block = payload.get("second_response")
+    else:
+        block = payload.get("main_response")
+    if not isinstance(block, dict) or not block:
+        return None
+    if slot_l != "second" and stem:
+        usage = str(block.get("usage_model") or "").strip()
+        if usage and usage != stem:
+            return None
+    df_block = block.get("df")
+    if not isinstance(df_block, dict):
+        return None
+    for key in _MODEL_OUTPUT_KEYS:
+        row = _first_dict_row(df_block.get(key))
+        if row is not None:
+            return row
+    return None
+
+
+def expand_querulus_model_output(
+    df: pd.DataFrame,
+    *,
+    slot: str,
+    stem: str = "",
+    json_col: str | None = None,
+) -> pd.DataFrame:
+    """Разворот ответов модели: wide-фичи из ``df.output`` / ``df.output_outboxml``.
+
+    Строки без output для выбранного slot отбрасываются.
+    """
+    col = json_col
+    if col is None:
+        if "json_file" in df.columns:
+            col = "json_file"
+        elif "JSON_FILE" in df.columns:
+            col = "JSON_FILE"
+        else:
+            raise KeyError(
+                f"JSON_FILE not in frame: {list(df.columns)[:20]}"
+            )
+    if col not in df.columns:
+        raise KeyError(f"column {col!r} not in frame: {list(df.columns)}")
+
+    parsed = df[col].map(_parse_model_json_cell)
+    outputs = [
+        extract_model_output_row(p, slot=slot, stem=stem) for p in parsed
+    ]
+    mask = [o is not None for o in outputs]
+    if not any(mask):
+        return pd.DataFrame()
+
+    base = df.loc[mask].drop(columns=[col]).reset_index(drop=True)
+    expanded = pd.json_normalize([o for o in outputs if o is not None])
+    expanded = expanded.applymap(_coerce_singleton_list_number)
+    return pd.concat([base, expanded], axis=1)
