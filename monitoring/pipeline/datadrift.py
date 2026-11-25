@@ -437,7 +437,8 @@ def _ensure_mldataworker_alias() -> None:
         import outboxml.core.pydantic_models
     except ImportError as exc:
         raise ImportError(
-            "outboxml нужен для prepare_dataset / unpickle model_config"
+            "для prepare_dataset нужны outboxml + pydantic (+ optbinning). "
+            "outboxml ставится --no-deps — см. pipeline/requirements.txt"
         ) from exc
     sys.modules.setdefault("mldataworker", outboxml)
     sys.modules.setdefault("mldataworker.core", outboxml.core)
