@@ -430,7 +430,11 @@ def _filter_train_window(df: pd.DataFrame, settings: Settings) -> pd.DataFrame:
 
 
 def _ensure_mldataworker_alias() -> None:
-    """Prod pickle часто сериализован как mldataworker.*; пакет — outboxml."""
+    """Prod pickle часто сериализован как mldataworker.*; пакет — outboxml.
+
+    ``outboxml.models`` намеренно не импортируем (patsy/catboost/…) —
+    для drift нужен только ``model_config``, см. ``_DriftConfigUnpickler``.
+    """
     try:
         import outboxml
         import outboxml.core
@@ -451,12 +455,51 @@ def _ensure_mldataworker_alias() -> None:
         sys.modules.setdefault("mldataworker.core.utils", _utils)
     except ImportError:
         pass
-    try:
-        import outboxml.models as _models
 
-        sys.modules.setdefault("mldataworker.models", _models)
-    except ImportError:
-        pass
+
+class _DriftConfigUnpickler(pickle.Unpickler):
+    """Unpickle ``[clf, rg]`` без catboost/xgboost/outboxml.models.
+
+    Веса модели не нужны — только ``model_config`` для prepare_dataset.
+    """
+
+    _STUB_PREFIXES = (
+        "catboost",
+        "xgboost",
+        "lightgbm",
+        "outboxml.models",
+        "mldataworker.models",
+        "outboxml.data_subsets",
+        "mldataworker.data_subsets",
+        "outboxml.datasets_manager",
+        "mldataworker.datasets_manager",
+        "sklearn",
+        "statsmodels",
+        "patsy",
+    )
+
+    @staticmethod
+    def _stub(name: str) -> type:
+        def _setstate(self, state):  # noqa: ANN001
+            if isinstance(state, dict):
+                self.__dict__.update(state)
+            else:
+                self._state = state
+
+        return type(
+            name,
+            (),
+            {
+                "__init__": lambda self, *a, **k: None,
+                "__setstate__": _setstate,
+                "__slots__": (),
+            },
+        )
+
+    def find_class(self, module: str, name: str):  # noqa: ANN201
+        if any(module == p or module.startswith(p + ".") for p in self._STUB_PREFIXES):
+            return self._stub(name)
+        return super().find_class(module, name)
 
 
 def models_dir() -> Path:
@@ -501,7 +544,7 @@ def _combine_prepared_matrices(clf_t: pd.DataFrame, reg_t: pd.DataFrame) -> pd.D
 
 
 def load_model_pair(stem: str, *, pickle_override: str = "") -> tuple[Any, Any]:
-    """Загрузить ``[clf, rg]`` из pickle сервиса."""
+    """Загрузить ``[clf, rg]`` из pickle сервиса (только config, без ML-весов)."""
     _ensure_mldataworker_alias()
     path = resolve_pickle_path(stem, pickle_override=pickle_override)
     if not path.is_file():
@@ -511,12 +554,14 @@ def load_model_pair(stem: str, *, pickle_override: str = "") -> tuple[Any, Any]:
             "(см. pipeline/models/README.md) или задайте DRIFT_MODELS_DIR."
         )
     with open(path, "rb") as f:
-        group = pickle.load(f)
+        group = _DriftConfigUnpickler(f).load()
     if not isinstance(group, (list, tuple)) or len(group) < 2:
         raise ValueError(
             f"{path.name}: ожидается [clf, rg], получено {type(group).__name__}"
         )
-    logger.info("pickle loaded || stem=%s || path=%s", stem, path)
+    logger.info(
+        "pickle loaded (config-only) || stem=%s || path=%s", stem, path
+    )
     return group[0], group[1]
 
 

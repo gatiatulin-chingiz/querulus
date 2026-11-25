@@ -17,6 +17,9 @@ monitoring/pipeline/models/
 Формат как у сервиса: один файл `{stem}.pickle` = `[clf, rg]`
 (тот же артефакт, что в querulus-registry / `integration/results/`).
 
+Datadrift читает pickle **config-only** (без catboost/patsy): нужен
+`model_config` для `prepare_dataset`, веса модели не используются.
+
 ## Контур (Airflow → GitLab clone)
 
 Pod клонирует `querulus_monitoring.git` в `/tmp`. Положите pickle **в этот
