@@ -1,14 +1,14 @@
 """DataDrift: Hive reference (main+second) + Oracle SPR → Querulus_DataDrift.
 
-Источники (prod):
-  * train — Hive на модель из ``DEFAULT_DRIFT_MODELS``, затем
-    ``prepare_dataset`` по ``model_config`` из ``{stem}.pickle``
-    (каталог ``pipeline/models/`` или ``DRIFT_MODELS_DIR``);
-  * prod — Oracle ``spr_uu_json_log``:
-    ``MODEL::UU_QUERULUS → SPR_UU::QUERULUS``, фичи из
-    ``main/second_response.df.output`` (legacy) или ``output_outboxml``;
-  * фичи — ``config.features ∩ train_prepared ∩ prod``;
-    отсутствующие фичи → warning в лог.
+Источники:
+  * train — Hive raw (без ``prepare_dataset`` / кодирования);
+  * prod — Oracle ``spr_uu_json_log`` (encoded output), категориальные
+    раскодируются по ``feature.replace`` из ``{stem}.pickle``;
+  * PSI и ``dif_*`` — на одной человекочитаемой плоскости;
+  * фичи — ``config.features ∩ train ∩ prod``; missing → warning.
+
+Pickle: только ``model_config`` для обратного ``replace``
+(``pipeline/models/`` или ``DRIFT_MODELS_DIR``).
 
 Kerberos: ``kinit`` в DAG до ``make automl``.
 Synthetic — ``local/synthetic/run_datadrift.py``.
@@ -72,10 +72,123 @@ ARCHIVE_COLS = [
 ]
 
 
+def _is_categorical_replace(replace: dict | None) -> bool:
+    """Категориальная фича: в replace нет ``_TYPE_: _NUM_``."""
+    if not replace:
+        return False
+    try:
+        from outboxml.core.enums import FeatureEngineering
+
+        return replace.get(FeatureEngineering.feature_type) != FeatureEngineering.numerical
+    except ImportError:
+        return replace.get("_TYPE_") != "_NUM_"
+
+
+def _prefer_category_label(current: Any, candidate: Any) -> Any:
+    """При коллизии code→label предпочитаем человекочитаемую строку, не цифру."""
+    cur_s, cand_s = str(current), str(candidate)
+    cur_digit = cur_s.isdigit()
+    cand_digit = cand_s.isdigit()
+    if cur_digit and not cand_digit:
+        return candidate
+    return current
+
+
+def _invert_categorical_replace(replace: dict) -> dict[Any, Any]:
+    """``{label: code}`` → ``{code: label}`` (+ int/float-ключи для lookup)."""
+    inv: dict[Any, Any] = {}
+    for label, code in replace.items():
+        if isinstance(label, str) and label.startswith("_"):
+            continue
+        if code is None or (isinstance(code, float) and np.isnan(code)):
+            continue
+        keys = [code]
+        if isinstance(code, bool):
+            pass
+        elif isinstance(code, (int, np.integer)):
+            keys.append(int(code))
+            keys.append(float(code))
+        elif isinstance(code, (float, np.floating)) and float(code).is_integer():
+            keys.append(int(code))
+            keys.append(float(code))
+        for key in keys:
+            if key in inv:
+                inv[key] = _prefer_category_label(inv[key], label)
+            else:
+                inv[key] = label
+    return inv
+
+
+def build_category_label_maps(clf_cfg: Any, rg_cfg: Any) -> dict[str, dict[Any, Any]]:
+    """col → (code → label) из clf+rg ``model_config.replace``; shared rg → ``*__rg``."""
+    maps: dict[str, dict[Any, Any]] = {}
+    clf_names: set[str] = set()
+    for feat in getattr(clf_cfg, "features", None) or []:
+        name = getattr(feat, "name", None)
+        replace = getattr(feat, "replace", None) or {}
+        if not name or not _is_categorical_replace(replace):
+            continue
+        inv = _invert_categorical_replace(replace)
+        if inv:
+            maps[name] = inv
+            clf_names.add(name)
+    for feat in getattr(rg_cfg, "features", None) or []:
+        name = getattr(feat, "name", None)
+        replace = getattr(feat, "replace", None) or {}
+        if not name or not _is_categorical_replace(replace):
+            continue
+        inv = _invert_categorical_replace(replace)
+        if not inv:
+            continue
+        key = f"{name}__rg" if name in clf_names else name
+        maps[key] = inv
+    return maps
+
+
+def _decode_category_value(value: Any, inv: dict[Any, Any] | None) -> Any:
+    """Код → label по inverse replace; без map / неизвестный код — как есть."""
+    if inv is None or value is None:
+        return value
+    try:
+        if pd.isna(value):
+            return value
+    except (TypeError, ValueError):
+        pass
+    raw = value.item() if hasattr(value, "item") else value
+    if raw in inv:
+        return inv[raw]
+    if isinstance(raw, (float, np.floating)) and float(raw).is_integer():
+        as_int = int(raw)
+        if as_int in inv:
+            return inv[as_int]
+    if isinstance(raw, (int, np.integer)):
+        as_float = float(raw)
+        if as_float in inv:
+            return inv[as_float]
+    return raw
+
+
+def decode_category_columns(
+    df: pd.DataFrame,
+    label_maps: dict[str, dict[Any, Any]],
+) -> pd.DataFrame:
+    """Раскодировать категориальные колонки (code→label) → string для PSI/dif."""
+    if df.empty or not label_maps:
+        return df
+    out = df.copy()
+    for col, inv in label_maps.items():
+        if col not in out.columns or not inv:
+            continue
+        out[col] = out[col].map(lambda v, m=inv: _decode_category_value(v, m))
+        out[col] = out[col].astype("string")
+    return out
+
+
 class QuerulusDataDrift:
     """PSI/KL/JS без зависимости от outboxml.datadrift (на контуре outboxml тянет polars/CUDA).
 
-    Категории: общий словарь train∪test → коды (иначе падает на новых значениях prod).
+    Категории на входе уже человекочитаемые (prod раскодирован);
+    для PSI — общий словарь train∪test → коды.
     """
 
     def __init__(
@@ -281,7 +394,7 @@ def compute_datadrift(
     run_date: date | None = None,
     columns_to_exclude: list | None = None,
 ) -> pd.DataFrame:
-    """PSI/KL/JS через outboxml; колонки как archive MonitoringReport."""
+    """PSI/KL/JS + ``dif_*`` на уже выровненной (raw / decoded) плоскости."""
     run_date = run_date or datetime.now().date()
     feat_list = [c for c in features if c not in META_COLS]
     x_train = _feature_frame(train, feat_list)
@@ -572,7 +685,7 @@ def prepare_train_like_service(
     clf: Any,
     rg: Any,
 ) -> pd.DataFrame:
-    """Hive-train → prepare_dataset(clf)+prepare_dataset(rg) → плоскость output_outboxml."""
+    """Legacy: Hive → prepare_dataset(clf+rg). Сейчас drift идёт через decode prod."""
     from outboxml.core.data_prepare import prepare_dataset
 
     clf_cfg = _model_config_from_result(clf)
@@ -795,8 +908,19 @@ def main() -> int:
         train_raw = load_reference_dataset(settings, hive_table=hive)
         pickle_override = str(model.get("pickle") or "")
         clf, rg = load_model_pair(stem, pickle_override=pickle_override)
-        train = prepare_train_like_service(
-            train_raw, stem=stem, clf=clf, rg=rg
+        label_maps = build_category_label_maps(
+            _model_config_from_result(clf),
+            _model_config_from_result(rg),
+        )
+        # train — Hive raw; prod — раскодировать cats; оба → string labels
+        train = decode_category_columns(train_raw, label_maps)
+        prod = decode_category_columns(prod, label_maps)
+        logger.info(
+            "datadrift plane || stem=%s || decoded_cats=%s || train_rows=%s || prod_rows=%s",
+            stem,
+            sorted(c for c in label_maps if c in train.columns or c in prod.columns),
+            len(train),
+            len(prod),
         )
         features = resolve_drift_features(configured, train, prod, stem=stem)
         part = compute_datadrift(
