@@ -6,7 +6,8 @@
     (дата + филиалы; только datadrift, не fin_effect);
   * prod — Oracle ``spr_uu_json_log`` (encoded output), категориальные
     раскодируются по ``feature.replace`` из ``{stem}.pickle``;
-  * PSI и ``dif_*`` — на одной человекочитаемой плоскости;
+  * PSI и ``dif_*`` — на одной человекочитаемой плоскости
+    (категории: ``strip`` + ``casefold``, иначе Hive≠Oracle по регистру);
   * фичи — из pickle ``model_config`` (или override ``config.features``),
     затем ∩ train ∩ prod; пропуски → ALERT в логе.
 
@@ -205,7 +206,7 @@ class QuerulusDataDrift:
     """PSI/KL/JS без зависимости от outboxml.datadrift (на контуре outboxml тянет polars/CUDA).
 
     Категории на входе уже человекочитаемые (prod раскодирован);
-    для PSI — общий словарь train∪test → коды.
+    для PSI/dif — strip+casefold, затем общий словарь train∪test → коды.
     """
 
     def __init__(
@@ -282,6 +283,9 @@ class QuerulusDataDrift:
         self, base: pd.Series, control: pd.Series, label: str, type: str = "CATEGORICAL"
     ) -> dict:
         """Расширенная статистика по одной колонке (для full_calc)."""
+        if type == "CATEGORICAL":
+            base = _norm_cat_series(base)
+            control = _norm_cat_series(control)
         base_unique = set(base.unique())
         control_unique = set(control.unique())
 
@@ -362,10 +366,15 @@ class QuerulusDataDrift:
         return result.transpose()
 
 
+def _norm_cat_series(s: pd.Series) -> pd.Series:
+    """Единый регистр категорий: strip + casefold (Hive vs Oracle replace)."""
+    return s.astype("string").str.strip().str.casefold()
+
+
 def _codes_aligned(train: pd.Series, test: pd.Series) -> tuple[pd.Series, pd.Series]:
     """Общий словарь категорий train∪test → float-коды для PSI."""
-    tr = train.astype("string")
-    te = test.astype("string")
+    tr = _norm_cat_series(train)
+    te = _norm_cat_series(test)
     cats = sorted(set(tr.dropna().unique()) | set(te.dropna().unique()))
     mapping = {c: i for i, c in enumerate(cats)}
     return tr.map(mapping).astype(float), te.map(mapping).astype(float)
