@@ -16,6 +16,7 @@ TABLE_FIN_EFFECT = "Querulus_FinEffect"
 #
 # DataDrift:
 #   hive, train_filter, pickle/{stem}.pickle (фичи + decode),
+#   rg: column_target > 0 в datadrift (TARGET_SEV),
 #   DEFAULT_DRIFT_LOOKBACK_DAYS, DEFAULT_PSI_THRESHOLD
 # FinEffect:
 #   hive у slot=main (без train_filter); витрина/PILOT_FILIALS — не здесь

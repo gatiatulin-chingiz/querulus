@@ -1,6 +1,8 @@
 # Pickle моделей для DataDrift
 
 Train: Hive raw → `train_filter` → `prepare_dataset` (clf+rg), как у сервиса.
+Для **rg** дополнительно `column_target > 0` (обычно `TARGET_SEV`, как
+`data_filter_condition` при обучении). Clf и rg для PSI считаются раздельно.
 Prod: уже закодированный `df.output` / `output_outboxml` из Oracle.
 
 - **PSI/KL/JS** — на закодированной плоскости (train≈prod).

@@ -2,7 +2,8 @@
 
 Источники:
   * train — Hive raw → ``train_filter`` → ``prepare_dataset`` (clf+rg),
-    как у сервиса; общая плоскость с ``df.output`` / ``output_outboxml``;
+    как у сервиса; для rg дополнительно ``column_target > 0``
+    (как ``data_filter_condition`` при обучении);
   * prod — Oracle ``spr_uu_json_log``, уже закодированный output модели
     (без повторного prepare);
   * PSI/KL/JS — на закодированных значениях;
@@ -875,12 +876,57 @@ def _model_config_from_result(item: Any):
 
 
 def _combine_prepared_matrices(clf_t: pd.DataFrame, reg_t: pd.DataFrame) -> pd.DataFrame:
-    """Как integration.main._combine_output_matrices (общий столбец → ``__rg``)."""
+    """Как integration.main._combine_output_matrices (общий столбец → ``__rg``).
+
+    Только при одинаковой длине (scoring). Для drift clf/rg готовятся
+    раздельно — см. ``prepare_train_like_service``.
+    """
     shared = [c for c in reg_t.columns if c in clf_t.columns]
     if not shared:
         return pd.concat([clf_t, reg_t], axis=1)
     reg_part = reg_t.rename(columns={c: f"{c}__rg" for c in shared})
     return pd.concat([clf_t, reg_part], axis=1)
+
+
+def _rename_rg_shared_columns(
+    clf_columns: Iterable[str], rg: pd.DataFrame
+) -> pd.DataFrame:
+    """Shared clf∩rg имена в rg → ``*__rg`` (как output сервиса)."""
+    clf_set = set(clf_columns)
+    shared = [c for c in rg.columns if c in clf_set]
+    if not shared:
+        return rg
+    return rg.rename(columns={c: f"{c}__rg" for c in shared})
+
+
+def _filter_positive_target(
+    df: pd.DataFrame,
+    *,
+    target_col: str,
+    stem: str = "",
+) -> pd.DataFrame:
+    """Срез train для regression: ``target_col > 0`` (как при fit severity)."""
+    col = str(target_col or "").strip()
+    if not col:
+        return df
+    if col not in df.columns:
+        logger.warning(
+            "rg target>0 skipped || stem=%s || missing col=%s",
+            stem,
+            col,
+        )
+        return df
+    y = pd.to_numeric(df[col], errors="coerce")
+    n0 = len(df)
+    out = df.loc[y > 0].copy()
+    logger.info(
+        "train_filter rg %s > 0 || stem=%s || rows %s → %s",
+        col,
+        stem,
+        n0,
+        len(out),
+    )
+    return out
 
 
 def load_model_pair(stem: str, *, pickle_override: str = "") -> tuple[Any, Any]:
@@ -911,8 +957,13 @@ def prepare_train_like_service(
     stem: str,
     clf: Any,
     rg: Any,
-) -> pd.DataFrame:
-    """Hive → ``prepare_dataset`` (clf+rg) → combine, как ``output_outboxml`` сервиса."""
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Hive → ``prepare_dataset`` clf + rg.
+
+    Возвращает ``(clf_prep, rg_prep)`` раздельно: у rg выборка короче
+    (``column_target > 0``), row-align как у scoring не нужен для PSI.
+    Имена shared в rg уже с суффиксом ``__rg``.
+    """
     from outboxml.core.data_prepare import prepare_dataset
 
     clf_cfg = _model_config_from_result(clf)
@@ -936,9 +987,17 @@ def prepare_train_like_service(
         log=True,
         raise_on_encoding_error=False,
     ).data
+    target_col = str(getattr(rg_cfg, "column_target", None) or "TARGET_SEV")
+    rg_base = _filter_positive_target(base, target_col=target_col, stem=stem)
+    if rg_base.empty:
+        logger.warning(
+            "rg train empty after %s > 0 || stem=%s",
+            target_col,
+            stem,
+        )
     rg_prep = prepare_dataset(
         group_name=stem,
-        data=base,
+        data=rg_base,
         train_ind=None,
         test_ind=None,
         model_config=rg_cfg,
@@ -948,13 +1007,17 @@ def prepare_train_like_service(
         log=True,
         raise_on_encoding_error=False,
     ).data
-    out = _combine_prepared_matrices(clf_prep, rg_prep)
+    rg_prep = _rename_rg_shared_columns(clf_prep.columns, rg_prep)
     logger.info(
-        "prepare_dataset train done || stem=%s || cols_out=%s",
+        "prepare_dataset train done || stem=%s || clf_cols=%s || rg_cols=%s || "
+        "clf_rows=%s || rg_rows=%s",
         stem,
-        len(out.columns),
+        len(clf_prep.columns),
+        len(rg_prep.columns),
+        len(clf_prep),
+        len(rg_prep),
     )
-    return out
+    return clf_prep, rg_prep
 
 
 def load_reference_dataset(settings: Settings, *, hive_table: str) -> pd.DataFrame:
@@ -1046,6 +1109,7 @@ def resolve_drift_features(
     *,
     stem: str,
     source: str = "config",
+    train_extra: pd.DataFrame | None = None,
 ) -> tuple[list[str], list[str]]:
     """Вернуть ``(usable, missing)``; missing → строки с пустым PSI в таблице."""
     wanted = [c for c in configured if c and c not in META_COLS]
@@ -1056,6 +1120,8 @@ def resolve_drift_features(
         )
 
     train_cols = set(train.columns)
+    if train_extra is not None:
+        train_cols |= set(train_extra.columns)
     prod_cols = set(prod.columns)
     missing_train = [c for c in wanted if c not in train_cols]
     missing_prod = [c for c in wanted if c not in prod_cols]
@@ -1162,19 +1228,27 @@ def main() -> int:
         clf_cfg = _model_config_from_result(clf)
         rg_cfg = _model_config_from_result(rg)
         label_maps = build_category_label_maps(clf_cfg, rg_cfg)
-        # train → prepare_dataset (как сервис); prod уже encoded из Oracle
-        train = prepare_train_like_service(
+        # clf — полный train; rg — TARGET_SEV>0; prod уже encoded
+        train_clf, train_rg = prepare_train_like_service(
             train_raw, stem=stem, clf=clf, rg=rg
         )
-        train_labels = decode_category_columns(train, label_maps)
+        train_clf_labels = decode_category_columns(train_clf, label_maps)
+        train_rg_labels = decode_category_columns(train_rg, label_maps)
         prod_labels = decode_category_columns(prod, label_maps)
         logger.info(
-            "datadrift datasets || stem=%s || train.shape=%s || prod.shape=%s || "
-            "cat_cols=%s",
+            "datadrift datasets || stem=%s || clf.shape=%s || rg.shape=%s || "
+            "prod.shape=%s || cat_cols=%s",
             stem,
-            tuple(train.shape),
+            tuple(train_clf.shape),
+            tuple(train_rg.shape),
             tuple(prod.shape),
-            sorted(c for c in label_maps if c in train.columns or c in prod.columns),
+            sorted(
+                c
+                for c in label_maps
+                if c in train_clf.columns
+                or c in train_rg.columns
+                or c in prod.columns
+            ),
         )
         explicit = model.get("features")
         if explicit:
@@ -1190,29 +1264,83 @@ def main() -> int:
                 wanted,
             )
         features, missing = resolve_drift_features(
-            wanted, train, prod, stem=stem, source=feat_source
-        )
-        part = compute_datadrift(
-            train,
+            wanted,
+            train_clf,
             prod,
-            features,
             stem=stem,
-            track=DRIFT_TRACK,
-            model_name=stem,
-            model_version=stem,
-            model_label=label,
-            missing_features=missing,
-            train_labels=train_labels,
-            prod_labels=prod_labels,
-            categorical_columns=label_maps.keys(),
+            source=feat_source,
+            train_extra=train_rg,
         )
-        if not part.empty:
-            parts.append(part)
+        clf_feats = [c for c in features if c in train_clf.columns]
+        rg_feats = [c for c in features if c in train_rg.columns]
+        model_parts: list[pd.DataFrame] = []
+        if clf_feats:
+            model_parts.append(
+                compute_datadrift(
+                    train_clf,
+                    prod,
+                    clf_feats,
+                    stem=stem,
+                    track=DRIFT_TRACK,
+                    model_name=stem,
+                    model_version=stem,
+                    model_label=label,
+                    train_labels=train_clf_labels,
+                    prod_labels=prod_labels,
+                    categorical_columns=label_maps.keys(),
+                )
+            )
+        if rg_feats:
+            model_parts.append(
+                compute_datadrift(
+                    train_rg,
+                    prod,
+                    rg_feats,
+                    stem=stem,
+                    track=DRIFT_TRACK,
+                    model_name=stem,
+                    model_version=stem,
+                    model_label=label,
+                    missing_features=missing,
+                    train_labels=train_rg_labels,
+                    prod_labels=prod_labels,
+                    categorical_columns=label_maps.keys(),
+                )
+            )
+        elif missing:
+            model_parts.append(
+                compute_datadrift(
+                    train_clf,
+                    prod,
+                    (),
+                    stem=stem,
+                    track=DRIFT_TRACK,
+                    model_name=stem,
+                    model_version=stem,
+                    model_label=label,
+                    missing_features=missing,
+                )
+            )
+        if not model_parts:
+            logger.warning(
+                "datadrift model empty || stem=%s || no clf/rg features",
+                stem,
+            )
+            continue
+        part = pd.concat(model_parts, ignore_index=True)
+        if "PSI" in part.columns:
+            part = part.sort_values(
+                "PSI", ascending=False, na_position="last"
+            ).reset_index(drop=True)
+        parts.append(part)
         logger.info(
-            "datadrift model done || stem=%s || features=%s || missing=%s || rows=%s",
+            "datadrift model done || stem=%s || features=%s || missing=%s || "
+            "clf_feats=%s || rg_feats=%s || rows=%s",
             stem,
             len(features),
             len(missing),
+            len(clf_feats),
+            len(rg_feats),
             len(part),
         )
 
