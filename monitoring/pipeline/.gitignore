@@ -1,0 +1,13 @@
+# Jupyter / IDE autosave (не в GitLab-контур)
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Локальные дампы ошибок Airflow
+error*.json
+error (*).json
