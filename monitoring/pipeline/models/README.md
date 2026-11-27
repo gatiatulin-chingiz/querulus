@@ -1,9 +1,11 @@
 # Pickle моделей для DataDrift
 
-Train из Hive — **сырой** (без `prepare_dataset`). Prod из `df.output` /
-`output_outboxml` — закодированный. Datadrift раскодирует категориальные
-колонки prod по `feature.replace` из pickle; PSI и `dif_*` считаются на
-человекочитаемой плоскости.
+Train: Hive raw → `train_filter` → `prepare_dataset` (clf+rg), как у сервиса.
+Prod: уже закодированный `df.output` / `output_outboxml` из Oracle.
+
+- **PSI/KL/JS** — на закодированной плоскости (train≈prod).
+- **`dif_*` / `mode_*`** — человекочитаемые лейблы: code→label по
+  `feature.replace` из pickle (`strip` + `casefold`).
 
 ## Куда класть
 
@@ -19,7 +21,7 @@ monitoring/pipeline/models/
 (тот же артефакт, что в querulus-registry / `integration/results/`).
 
 Datadrift читает pickle **config-only** (без catboost/patsy): нужен
-только `model_config.replace` для обратного маппинга категорий.
+`model_config` для `prepare_dataset` и обратного `replace`.
 
 ## Контур (Airflow → GitLab clone)
 

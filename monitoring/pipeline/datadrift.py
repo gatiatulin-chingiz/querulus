@@ -1,17 +1,18 @@
 """DataDrift: Hive reference (main+second) + Oracle SPR → Querulus_DataDrift.
 
 Источники:
-  * train — Hive raw (без ``prepare_dataset`` / кодирования), затем
-    опциональный ``train_filter`` из ``DEFAULT_DRIFT_MODELS``
-    (дата + филиалы; только datadrift, не fin_effect);
-  * prod — Oracle ``spr_uu_json_log`` (encoded output), категориальные
-    раскодируются по ``feature.replace`` из ``{stem}.pickle``;
-  * PSI и ``dif_*`` — на одной человекочитаемой плоскости
-    (категории: ``strip`` + ``casefold``, иначе Hive≠Oracle по регистру);
+  * train — Hive raw → ``train_filter`` → ``prepare_dataset`` (clf+rg),
+    как у сервиса; общая плоскость с ``df.output`` / ``output_outboxml``;
+  * prod — Oracle ``spr_uu_json_log``, уже закодированный output модели
+    (без повторного prepare);
+  * PSI/KL/JS — на закодированных значениях;
+  * ``dif_*`` / ``mode_*`` — после decode code→label по ``replace``
+    из pickle (человекочитаемо; cats: strip+casefold);
   * фичи — из pickle ``model_config`` (или override ``config.features``),
-    затем ∩ train ∩ prod; пропуски → ALERT в логе.
+    shared clf∩rg → ``*__rg`` как в integration; ∩ train ∩ prod;
+    пропуски → ALERT в логе.
 
-Pickle: только ``model_config`` для обратного ``replace``
+Pickle: ``model_config`` для prepare + обратного ``replace``
 (``pipeline/models/`` или ``DRIFT_MODELS_DIR``).
 
 Kerberos: ``kinit`` в DAG до ``make automl``.
@@ -150,16 +151,28 @@ def build_category_label_maps(clf_cfg: Any, rg_cfg: Any) -> dict[str, dict[Any, 
 
 
 def features_from_model_configs(clf_cfg: Any, rg_cfg: Any) -> list[str]:
-    """Имена фич обучения: union clf→rg ``model_config.features`` (порядок как в fit)."""
+    """Имена фич после combine clf+rg: shared → ``*__rg`` (как output сервиса)."""
     names: list[str] = []
     seen: set[str] = set()
-    for cfg in (clf_cfg, rg_cfg):
-        for feat in getattr(cfg, "features", None) or []:
-            name = getattr(feat, "name", None)
-            if not name or name in META_COLS or name in seen:
-                continue
-            seen.add(name)
-            names.append(str(name))
+    clf_names: set[str] = set()
+    for feat in getattr(clf_cfg, "features", None) or []:
+        name = getattr(feat, "name", None)
+        if not name or name in META_COLS or name in seen:
+            continue
+        name = str(name)
+        seen.add(name)
+        clf_names.add(name)
+        names.append(name)
+    for feat in getattr(rg_cfg, "features", None) or []:
+        name = getattr(feat, "name", None)
+        if not name or name in META_COLS:
+            continue
+        name = str(name)
+        key = f"{name}__rg" if name in clf_names else name
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(key)
     return names
 
 
@@ -190,7 +203,7 @@ def decode_category_columns(
     df: pd.DataFrame,
     label_maps: dict[str, dict[Any, Any]],
 ) -> pd.DataFrame:
-    """Раскодировать категориальные колонки (code→label) → string для PSI/dif."""
+    """Раскодировать категориальные колонки (code→label) → string для dif/mode."""
     if df.empty or not label_maps:
         return df
     out = df.copy()
@@ -205,8 +218,9 @@ def decode_category_columns(
 class QuerulusDataDrift:
     """PSI/KL/JS без зависимости от outboxml.datadrift (на контуре outboxml тянет polars/CUDA).
 
-    Категории на входе уже человекочитаемые (prod раскодирован);
-    для PSI/dif — strip+casefold, затем общий словарь train∪test → коды.
+    PSI — на закодированной плоскости (prepare_dataset / df.output).
+    ``dif_*``/mode — из ``base_data``/``control_data`` (обычно decode→labels);
+    колонки из ``categorical_columns`` (replace) — всегда CATEGORICAL, даже если int-коды.
     """
 
     def __init__(
@@ -215,11 +229,13 @@ class QuerulusDataDrift:
         columns_to_exclude: list | None = None,
         n_bins: int = 100,
         dif_len_string: int = 100,
+        categorical_columns: Iterable[str] | None = None,
     ):
         self.full_calc = full_calc
         self.columns_to_exclude = columns_to_exclude or []
         self.n_bins = n_bins
         self.dif_len_string = dif_len_string
+        self.categorical_columns = {str(c) for c in (categorical_columns or [])}
         self.types_dict: dict = {}
 
     def _calculate_psi(self, train_sample, test_sample, n_bins):
@@ -331,9 +347,10 @@ class QuerulusDataDrift:
 
             x_train = train_data[column].copy()
             x_test = test_data[column].copy()
-            # object/string/category → категориальный тип для PSI-бинов
+            # object/string/category → cat; int-коды из replace — тоже CATEGORICAL
             is_cat = (
-                x_train.dtype == "category"
+                column in self.categorical_columns
+                or x_train.dtype == "category"
                 or x_train.dtype == object
                 or str(x_train.dtype) == "string"
                 or x_test.dtype == "category"
@@ -366,9 +383,41 @@ class QuerulusDataDrift:
         return result.transpose()
 
 
+def _norm_cat_token(value: Any) -> Any:
+    """Канон категории: int-like ``3``/``3.0`` → ``'3'``; иначе strip+casefold."""
+    if value is None:
+        return value
+    try:
+        if pd.isna(value):
+            return value
+    except (TypeError, ValueError):
+        pass
+    raw = value.item() if hasattr(value, "item") else value
+    if isinstance(raw, (bool, np.bool_)):
+        return str(raw).casefold()
+    if isinstance(raw, (int, np.integer)):
+        return str(int(raw))
+    if isinstance(raw, (float, np.floating)):
+        if np.isnan(raw):
+            return raw
+        if float(raw).is_integer():
+            return str(int(raw))
+        return str(raw)
+    text = str(raw).strip()
+    if not text or text.casefold() in {"nan", "none", "<na>"}:
+        return pd.NA
+    try:
+        num = float(text)
+        if num.is_integer():
+            return str(int(num))
+    except ValueError:
+        pass
+    return text.casefold()
+
+
 def _norm_cat_series(s: pd.Series) -> pd.Series:
-    """Единый регистр категорий: strip + casefold (Hive vs Oracle replace)."""
-    return s.astype("string").str.strip().str.casefold()
+    """Нормализация категорий для PSI-кодов и dif/mode (лейблы)."""
+    return s.map(_norm_cat_token).astype("string")
 
 
 def _codes_aligned(train: pd.Series, test: pd.Series) -> tuple[pd.Series, pd.Series]:
@@ -484,22 +533,32 @@ def compute_datadrift(
     run_date: date | None = None,
     columns_to_exclude: list | None = None,
     missing_features: Iterable[str] | None = None,
+    train_labels: pd.DataFrame | None = None,
+    prod_labels: pd.DataFrame | None = None,
+    categorical_columns: Iterable[str] | None = None,
 ) -> pd.DataFrame:
-    """PSI/KL/JS + ``dif_*``; missing_features → строки с пустым PSI."""
+    """PSI/KL/JS на encoded; ``dif_*`` из labels (если переданы); missing → пустой PSI."""
     run_date = run_date or datetime.now().date()
     feat_list = [c for c in features if c not in META_COLS]
     parts: list[pd.DataFrame] = []
 
     x_train = _feature_frame(train, feat_list)
     x_prod = _feature_frame(prod, feat_list)
+    x_base = _feature_frame(
+        train_labels if train_labels is not None else train, feat_list
+    )
+    x_control = _feature_frame(
+        prod_labels if prod_labels is not None else prod, feat_list
+    )
     if feat_list and not x_train.empty and not x_prod.empty:
         drift = QuerulusDataDrift(
             full_calc=True,
             columns_to_exclude=columns_to_exclude or [],
             n_bins=100,
             dif_len_string=100,
+            categorical_columns=categorical_columns,
         )
-        raw = drift.report(x_train, x_prod, x_train, x_prod)
+        raw = drift.report(x_train, x_prod, x_base, x_control)
         if not raw.empty:
             out = _normalize_report(raw)
             out["date"] = run_date
@@ -853,7 +912,7 @@ def prepare_train_like_service(
     clf: Any,
     rg: Any,
 ) -> pd.DataFrame:
-    """Legacy: Hive → prepare_dataset(clf+rg). Сейчас drift идёт через decode prod."""
+    """Hive → ``prepare_dataset`` (clf+rg) → combine, как ``output_outboxml`` сервиса."""
     from outboxml.core.data_prepare import prepare_dataset
 
     clf_cfg = _model_config_from_result(clf)
@@ -1103,12 +1162,15 @@ def main() -> int:
         clf_cfg = _model_config_from_result(clf)
         rg_cfg = _model_config_from_result(rg)
         label_maps = build_category_label_maps(clf_cfg, rg_cfg)
-        # train — Hive raw (+ filter); prod — раскодировать cats
-        train = decode_category_columns(train_raw, label_maps)
-        prod = decode_category_columns(prod, label_maps)
+        # train → prepare_dataset (как сервис); prod уже encoded из Oracle
+        train = prepare_train_like_service(
+            train_raw, stem=stem, clf=clf, rg=rg
+        )
+        train_labels = decode_category_columns(train, label_maps)
+        prod_labels = decode_category_columns(prod, label_maps)
         logger.info(
             "datadrift datasets || stem=%s || train.shape=%s || prod.shape=%s || "
-            "decoded_cats=%s",
+            "cat_cols=%s",
             stem,
             tuple(train.shape),
             tuple(prod.shape),
@@ -1140,6 +1202,9 @@ def main() -> int:
             model_version=stem,
             model_label=label,
             missing_features=missing,
+            train_labels=train_labels,
+            prod_labels=prod_labels,
+            categorical_columns=label_maps.keys(),
         )
         if not part.empty:
             parts.append(part)
