@@ -16,8 +16,6 @@ from pipeline.config import (
     DEFAULT_ERRORS_LOOKBACK_DAYS,
     DEFAULT_ERRORS_MODEL_KINDS,
     DEFAULT_PSI_THRESHOLD,
-    DEFAULT_REFERENCE_TRAIN_END,
-    DEFAULT_REFERENCE_TRAIN_START,
     SCHEMA,
     TABLE_DRIFT,
     TABLE_ERRORS,
@@ -49,10 +47,8 @@ class Settings:
     oracle_password: str
     oracle_service_name: str
 
-    # DataDrift: список моделей (slot/stem/hive/features) — только Hive
+    # DataDrift: список моделей (slot/stem/hive/train_filter) — Hive
     drift_models: tuple[dict, ...]
-    reference_train_start: str  # ISO date или ""
-    reference_train_end: str
     drift_lookback_days: int
     errors_lookback_days: int
     errors_model_kinds: tuple[str, ...]
@@ -166,9 +162,6 @@ def load_settings() -> Settings:
         oracle_password=_env("PASSWORD_PROD8"),
         oracle_service_name=_env("SERVICE_NAME_PROD8"),
         drift_models=tuple(models),
-        reference_train_start=_env("REFERENCE_TRAIN_START")
-        or DEFAULT_REFERENCE_TRAIN_START,
-        reference_train_end=_env("REFERENCE_TRAIN_END") or DEFAULT_REFERENCE_TRAIN_END,
         drift_lookback_days=_env_int(
             "DRIFT_LOOKBACK_DAYS", default=DEFAULT_DRIFT_LOOKBACK_DAYS
         ),

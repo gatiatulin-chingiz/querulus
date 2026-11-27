@@ -1,11 +1,14 @@
 """DataDrift: Hive reference (main+second) + Oracle SPR → Querulus_DataDrift.
 
 Источники:
-  * train — Hive raw (без ``prepare_dataset`` / кодирования);
+  * train — Hive raw (без ``prepare_dataset`` / кодирования), затем
+    опциональный ``train_filter`` из ``DEFAULT_DRIFT_MODELS``
+    (дата + филиалы; только datadrift, не fin_effect);
   * prod — Oracle ``spr_uu_json_log`` (encoded output), категориальные
     раскодируются по ``feature.replace`` из ``{stem}.pickle``;
   * PSI и ``dif_*`` — на одной человекочитаемой плоскости;
-  * фичи — ``config.features ∩ train ∩ prod``; missing → warning.
+  * фичи — из pickle ``model_config`` (или override ``config.features``),
+    затем ∩ train ∩ prod; пропуски → ALERT в логе.
 
 Pickle: только ``model_config`` для обратного ``replace``
 (``pipeline/models/`` или ``DRIFT_MODELS_DIR``).
@@ -143,6 +146,20 @@ def build_category_label_maps(clf_cfg: Any, rg_cfg: Any) -> dict[str, dict[Any, 
         key = f"{name}__rg" if name in clf_names else name
         maps[key] = inv
     return maps
+
+
+def features_from_model_configs(clf_cfg: Any, rg_cfg: Any) -> list[str]:
+    """Имена фич обучения: union clf→rg ``model_config.features`` (порядок как в fit)."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for cfg in (clf_cfg, rg_cfg):
+        for feat in getattr(cfg, "features", None) or []:
+            name = getattr(feat, "name", None)
+            if not name or name in META_COLS or name in seen:
+                continue
+            seen.add(name)
+            names.append(str(name))
+    return names
 
 
 def _decode_category_value(value: Any, inv: dict[Any, Any] | None) -> Any:
@@ -381,6 +398,70 @@ def _normalize_report(raw: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _missing_feature_reason(
+    col: str,
+    train: pd.DataFrame,
+    prod: pd.DataFrame,
+) -> str:
+    in_train = col in train.columns
+    in_prod = col in prod.columns
+    if not in_train and not in_prod:
+        return "absent_train+prod"
+    if not in_train:
+        return "absent_train"
+    if not in_prod:
+        return "absent_prod"
+    return "absent"
+
+
+def placeholder_drift_rows(
+    missing: Iterable[str],
+    *,
+    train: pd.DataFrame,
+    prod: pd.DataFrame,
+    stem: str,
+    track: str,
+    model_name: str,
+    model_version: str,
+    model_label: str,
+    run_date: date,
+) -> pd.DataFrame:
+    """Строки в Querulus_DataDrift для фич обучения без PSI (нет в train/prod)."""
+    rows: list[dict[str, Any]] = []
+    for col in missing:
+        if not col or col in META_COLS:
+            continue
+        reason = _missing_feature_reason(col, train, prod)
+        rows.append(
+            {
+                "model_name": model_name or stem,
+                "model_version": model_version or stem,
+                "date": run_date,
+                "col": col,
+                "TYPE": "MISSING",
+                "PSI": np.nan,
+                "KL": np.nan,
+                "JS": np.nan,
+                "NaN_train": np.nan,
+                "NaN_test": np.nan,
+                "uniq_train": np.nan,
+                "uniq_test": np.nan,
+                "mode_train": None,
+                "mode_test": None,
+                "mean_train": np.nan,
+                "mean_test": np.nan,
+                "dif_train": reason,
+                "dif_test": reason,
+                "stem": stem,
+                "track": track,
+                "model_label": model_label or stem,
+            }
+        )
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows)
+
+
 def compute_datadrift(
     train: pd.DataFrame,
     prod: pd.DataFrame,
@@ -393,50 +474,81 @@ def compute_datadrift(
     model_label: str = "",
     run_date: date | None = None,
     columns_to_exclude: list | None = None,
+    missing_features: Iterable[str] | None = None,
 ) -> pd.DataFrame:
-    """PSI/KL/JS + ``dif_*`` на уже выровненной (raw / decoded) плоскости."""
+    """PSI/KL/JS + ``dif_*``; missing_features → строки с пустым PSI."""
     run_date = run_date or datetime.now().date()
     feat_list = [c for c in features if c not in META_COLS]
+    parts: list[pd.DataFrame] = []
+
     x_train = _feature_frame(train, feat_list)
     x_prod = _feature_frame(prod, feat_list)
-    if x_train.empty or x_prod.empty:
-        return pd.DataFrame()
+    if feat_list and not x_train.empty and not x_prod.empty:
+        drift = QuerulusDataDrift(
+            full_calc=True,
+            columns_to_exclude=columns_to_exclude or [],
+            n_bins=100,
+            dif_len_string=100,
+        )
+        raw = drift.report(x_train, x_prod, x_train, x_prod)
+        if not raw.empty:
+            out = _normalize_report(raw)
+            out["date"] = run_date
+            out["model_name"] = model_name or stem
+            out["model_version"] = model_version or stem
+            out["stem"] = stem
+            out["track"] = track
+            out["model_label"] = model_label or stem
+            if "TYPE" not in out.columns:
+                out["TYPE"] = "NUMERICAL"
 
-    drift = QuerulusDataDrift(
-        full_calc=True,
-        columns_to_exclude=columns_to_exclude or [],
-        n_bins=100,
-        dif_len_string=100,
+            for c in (
+                "PSI",
+                "KL",
+                "JS",
+                "NaN_train",
+                "NaN_test",
+                "mean_train",
+                "mean_test",
+            ):
+                if c in out.columns:
+                    out[c] = pd.to_numeric(out[c], errors="coerce")
+            for c in ("uniq_train", "uniq_test"):
+                if c in out.columns:
+                    out[c] = pd.to_numeric(out[c], errors="coerce")
+
+            def _to_python(v):
+                return v.item() if isinstance(v, np.generic) else v
+
+            out = out.apply(lambda s: s.map(_to_python))
+            parts.append(out)
+
+    placeholders = placeholder_drift_rows(
+        missing_features or (),
+        train=train,
+        prod=prod,
+        stem=stem,
+        track=track,
+        model_name=model_name or stem,
+        model_version=model_version or stem,
+        model_label=model_label or stem,
+        run_date=run_date,
     )
-    raw = drift.report(x_train, x_prod, x_train, x_prod)
-    if raw.empty:
+    if not placeholders.empty:
+        parts.append(placeholders)
+
+    if not parts:
         return pd.DataFrame()
-
-    out = _normalize_report(raw)
-    out["date"] = run_date
-    out["model_name"] = model_name or stem
-    out["model_version"] = model_version or stem
-    out["stem"] = stem
-    out["track"] = track
-    out["model_label"] = model_label or stem
-    if "TYPE" not in out.columns:
-        out["TYPE"] = "NUMERICAL"
-
-    for c in ("PSI", "KL", "JS", "NaN_train", "NaN_test", "mean_train", "mean_test"):
-        if c in out.columns:
-            out[c] = pd.to_numeric(out[c], errors="coerce")
-    for c in ("uniq_train", "uniq_test"):
-        if c in out.columns:
-            out[c] = pd.to_numeric(out[c], errors="coerce")
-
-    def _to_python(v):
-        return v.item() if isinstance(v, np.generic) else v
-
-    out = out.apply(lambda s: s.map(_to_python))
 
     preferred = ARCHIVE_COLS + ["stem", "track", "model_label"]
+    out = pd.concat(parts, ignore_index=True)
     cols = [c for c in preferred if c in out.columns]
-    return out[cols].sort_values("PSI", ascending=False).reset_index(drop=True)
+    out = out[cols]
+    if "PSI" in out.columns:
+        return out.sort_values(
+            "PSI", ascending=False, na_position="last"
+        ).reset_index(drop=True)
+    return out.reset_index(drop=True)
 
 
 def compute_datadrift_by_meta(
@@ -513,32 +625,79 @@ def compute_datadrift_by_meta(
 # --- extract (prod) ------------------------------------------------------------
 
 
-def _filter_train_window(df: pd.DataFrame, settings: Settings) -> pd.DataFrame:
-    """Срез reference по PAYMENT_ORDER_DATE_TIME, если заданы START/END (как BUU)."""
-    date_col = "PAYMENT_ORDER_DATE_TIME"
-    start = settings.reference_train_start
-    end = settings.reference_train_end
-    if not start and not end:
+def apply_train_filter(
+    df: pd.DataFrame,
+    train_filter: dict | None,
+    *,
+    stem: str = "",
+) -> pd.DataFrame:
+    """Срез Hive-train для datadrift по ``model['train_filter']``.
+
+    * дата: ``date_col`` (дефолт PAYMENT_ORDER_DATE_TIME), start/end inclusive;
+    * филиалы: ``filial_col`` isin, сравнение через ``casefold``.
+    Пустой/отсутствующий filter → df без изменений. Не используется в fin_effect.
+    """
+    if not train_filter:
         return df
-    if date_col not in df.columns:
-        logger.warning(
-            "reference train window ignored: column %s missing", date_col
-        )
+    if df.empty:
         return df
-    d = pd.to_datetime(df[date_col], errors="coerce")
-    mask = pd.Series(True, index=df.index)
-    if start:
-        mask &= d >= start
-    if end:
-        mask &= d < end
-    out = df.loc[mask].copy()
-    logger.info(
-        "reference train window || start=%s end=%s || rows %s → %s",
-        start or "-",
-        end or "-",
-        len(df),
-        len(out),
-    )
+
+    out = df
+    n0 = len(out)
+    date_col = str(train_filter.get("date_col") or "PAYMENT_ORDER_DATE_TIME")
+    date_start = str(train_filter.get("date_start") or "").strip()
+    date_end = str(train_filter.get("date_end") or "").strip()
+    if date_start or date_end:
+        if date_col not in out.columns:
+            logger.warning(
+                "train_filter date ignored || stem=%s || missing col=%s",
+                stem,
+                date_col,
+            )
+        else:
+            d = pd.to_datetime(out[date_col], errors="coerce")
+            mask = pd.Series(True, index=out.index)
+            if date_start:
+                mask &= d >= pd.Timestamp(date_start)
+            if date_end:
+                # inclusive end (как pandas Series.between)
+                mask &= d <= pd.Timestamp(date_end)
+            out = out.loc[mask].copy()
+            logger.info(
+                "train_filter date || stem=%s || col=%s || [%s .. %s] || rows %s → %s",
+                stem,
+                date_col,
+                date_start or "-",
+                date_end or "-",
+                n0,
+                len(out),
+            )
+            n0 = len(out)
+
+    filial_col = str(train_filter.get("filial_col") or "FILIAL")
+    filials = tuple(train_filter.get("filials") or ())
+    if filials:
+        if filial_col not in out.columns:
+            logger.warning(
+                "train_filter filial ignored || stem=%s || missing col=%s",
+                stem,
+                filial_col,
+            )
+        else:
+            wanted = {str(f).strip().casefold() for f in filials if str(f).strip()}
+            series = out[filial_col].astype("string").fillna("").map(
+                lambda v: str(v).strip().casefold()
+            )
+            out = out.loc[series.isin(wanted)].copy()
+            logger.info(
+                "train_filter filial || stem=%s || col=%s || n_filials=%s || rows %s → %s",
+                stem,
+                filial_col,
+                len(wanted),
+                n0,
+                len(out),
+            )
+
     return out
 
 
@@ -755,7 +914,7 @@ def load_reference_dataset(settings: Settings, *, hive_table: str) -> pd.DataFra
         len(df),
         len(df.columns),
     )
-    return _filter_train_window(df, settings)
+    return df
 
 
 def _load_prod_oracle_raw(settings: Settings) -> pd.DataFrame:
@@ -820,13 +979,14 @@ def resolve_drift_features(
     prod: pd.DataFrame,
     *,
     stem: str,
-) -> list[str]:
-    """config.features ∩ train ∩ prod; warning, если чего-то нет."""
+    source: str = "config",
+) -> tuple[list[str], list[str]]:
+    """Вернуть ``(usable, missing)``; missing → строки с пустым PSI в таблице."""
     wanted = [c for c in configured if c and c not in META_COLS]
     if not wanted:
         raise ValueError(
-            f"Empty features list in DEFAULT_DRIFT_MODELS for stem={stem!r}. "
-            "Edit pipeline/config.py."
+            f"Empty features for stem={stem!r} (source={source}). "
+            "Проверьте pickle model_config.features или config.features."
         )
 
     train_cols = set(train.columns)
@@ -835,40 +995,44 @@ def resolve_drift_features(
     missing_prod = [c for c in wanted if c not in prod_cols]
     if missing_train:
         logger.warning(
-            "ALERT datadrift missing in TRAIN || stem=%s || n=%s || cols=%s",
+            "ALERT datadrift feature NOT IN TRAIN || stem=%s || source=%s || "
+            "n=%s || cols=%s",
             stem,
+            source,
             len(missing_train),
             missing_train,
         )
     if missing_prod:
         logger.warning(
-            "ALERT datadrift missing in PROD || stem=%s || n=%s || cols=%s",
+            "ALERT datadrift feature NOT IN PROD || stem=%s || source=%s || "
+            "n=%s || cols=%s",
             stem,
+            source,
             len(missing_prod),
             missing_prod,
         )
 
     features = [c for c in wanted if c in train_cols and c in prod_cols]
-    if not features:
-        raise ValueError(
-            f"No usable features after ∩ train ∩ prod for stem={stem!r}. "
-            f"configured={wanted} missing_train={missing_train} "
-            f"missing_prod={missing_prod}"
-        )
-    if missing_train or missing_prod:
+    missing = [c for c in wanted if c not in features]
+    if missing:
         logger.warning(
-            "ALERT datadrift features reduced || stem=%s || "
-            "configured=%s || used=%s || dropped=%s",
+            "ALERT datadrift features MISSING → row with empty PSI || "
+            "stem=%s || source=%s || wanted=%s || used=%s || missing=%s || cols=%s",
             stem,
+            source,
             len(wanted),
             len(features),
-            len(wanted) - len(features),
+            len(missing),
+            missing,
         )
     else:
         logger.info(
-            "datadrift features ok || stem=%s || n=%s", stem, len(features)
+            "datadrift features ok || stem=%s || source=%s || n=%s",
+            stem,
+            source,
+            len(features),
         )
-    return features
+    return features, missing
 
 
 def main() -> int:
@@ -895,7 +1059,6 @@ def main() -> int:
         stem = str(model.get("stem", ""))
         hive = str(model.get("hive", ""))
         label = str(model.get("label") or stem)
-        configured = model.get("features") or ()
         logger.info("datadrift model || slot=%s stem=%s hive=%s", slot, stem, hive)
         prod = _prod_features_for_model(raw_prod, slot=slot, stem=stem)
         if prod.empty:
@@ -906,13 +1069,24 @@ def main() -> int:
             )
             continue
         train_raw = load_reference_dataset(settings, hive_table=hive)
+        train_raw = apply_train_filter(
+            train_raw,
+            model.get("train_filter"),
+            stem=stem,
+        )
+        if train_raw.empty:
+            logger.warning(
+                "skip model || slot=%s stem=%s — train empty after train_filter",
+                slot,
+                stem,
+            )
+            continue
         pickle_override = str(model.get("pickle") or "")
         clf, rg = load_model_pair(stem, pickle_override=pickle_override)
-        label_maps = build_category_label_maps(
-            _model_config_from_result(clf),
-            _model_config_from_result(rg),
-        )
-        # train — Hive raw; prod — раскодировать cats; оба → string labels
+        clf_cfg = _model_config_from_result(clf)
+        rg_cfg = _model_config_from_result(rg)
+        label_maps = build_category_label_maps(clf_cfg, rg_cfg)
+        # train — Hive raw (+ filter); prod — раскодировать cats
         train = decode_category_columns(train_raw, label_maps)
         prod = decode_category_columns(prod, label_maps)
         logger.info(
@@ -922,7 +1096,22 @@ def main() -> int:
             len(train),
             len(prod),
         )
-        features = resolve_drift_features(configured, train, prod, stem=stem)
+        explicit = model.get("features")
+        if explicit:
+            wanted = list(explicit)
+            feat_source = "config"
+        else:
+            wanted = features_from_model_configs(clf_cfg, rg_cfg)
+            feat_source = "pickle.model_config"
+            logger.info(
+                "datadrift features ← pickle || stem=%s || n=%s || cols=%s",
+                stem,
+                len(wanted),
+                wanted,
+            )
+        features, missing = resolve_drift_features(
+            wanted, train, prod, stem=stem, source=feat_source
+        )
         part = compute_datadrift(
             train,
             prod,
@@ -932,13 +1121,15 @@ def main() -> int:
             model_name=stem,
             model_version=stem,
             model_label=label,
+            missing_features=missing,
         )
         if not part.empty:
             parts.append(part)
         logger.info(
-            "datadrift model done || stem=%s || features=%s || rows=%s",
+            "datadrift model done || stem=%s || features=%s || missing=%s || rows=%s",
             stem,
             len(features),
+            len(missing),
             len(part),
         )
 

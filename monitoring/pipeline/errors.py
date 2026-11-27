@@ -24,13 +24,31 @@ if str(_PIPELINE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PIPELINE_ROOT))
 import _bootstrap_path  # noqa: F401 — monorepo + standalone GitLab clone
 
-from pipeline.config import errors_kind_meta
+from pipeline.config import DEFAULT_DRIFT_MODELS
 from pipeline.settings import Settings, load_settings
 from pipeline.db import connect_oisuu
 from pipeline.write_sql import get_engine, write_append_guarded
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("errors")
+
+
+def errors_kind_meta(model_kind: str) -> dict[str, str]:
+    """ВидМодели → stem/slot/label. Логи MatemModelsLogs только для main."""
+    kind = (model_kind or "").strip()
+    main = next(
+        (m for m in DEFAULT_DRIFT_MODELS if str(m.get("slot", "")) == "main"),
+        None,
+    )
+    if kind.lower() == "сутяжность" and main is not None:
+        stem = str(main.get("stem", ""))
+        return {
+            "slot": "main",
+            "stem": stem,
+            "model_label": str(main.get("label") or stem),
+        }
+    return {"slot": "", "stem": kind or "unknown", "model_label": kind or "unknown"}
+
 
 # --- нормализация текста ошибки для fingerprint (пути/адреса не должны плодить ключи) ---
 _RE_FILE_LINE = re.compile(r'File "[^"]+", line \d+', re.IGNORECASE)
