@@ -909,10 +909,9 @@ def load_reference_dataset(settings: Settings, *, hive_table: str) -> pd.DataFra
         app_name="querulus_datadrift",
     ).extract_dataset()
     logger.info(
-        "Hive reference loaded || table=%s || rows=%s || cols=%s",
+        "Hive reference loaded || table=%s || shape=%s",
         table,
-        len(df),
-        len(df.columns),
+        tuple(df.shape),
     )
     return df
 
@@ -931,8 +930,8 @@ def _load_prod_oracle_raw(settings: Settings) -> pd.DataFrame:
         logger.warning("Oracle model→SPR logs empty || since=%s", cutoff)
     else:
         logger.info(
-            "Oracle model→SPR raw || rows=%s || since=%s",
-            len(raw),
+            "Oracle model→SPR raw || shape=%s || since=%s",
+            tuple(raw.shape),
             cutoff,
         )
     return raw
@@ -964,11 +963,10 @@ def _prod_features_for_model(
         gibdd = prod["EVENT_CREATED_BY_GIBDD_FLAG"]
         prod = prod.loc[gibdd.astype(str) != "Да"].copy()
     logger.info(
-        "prod output || slot=%s stem=%s || rows=%s || cols=%s",
+        "prod output || slot=%s stem=%s || shape=%s",
         slot,
         stem,
-        len(prod),
-        len(prod.columns),
+        tuple(prod.shape),
     )
     return prod
 
@@ -1069,10 +1067,20 @@ def main() -> int:
             )
             continue
         train_raw = load_reference_dataset(settings, hive_table=hive)
+        logger.info(
+            "datadrift train Hive || stem=%s || shape=%s",
+            stem,
+            tuple(train_raw.shape),
+        )
         train_raw = apply_train_filter(
             train_raw,
             model.get("train_filter"),
             stem=stem,
+        )
+        logger.info(
+            "datadrift train after filter || stem=%s || shape=%s",
+            stem,
+            tuple(train_raw.shape),
         )
         if train_raw.empty:
             logger.warning(
@@ -1090,11 +1098,12 @@ def main() -> int:
         train = decode_category_columns(train_raw, label_maps)
         prod = decode_category_columns(prod, label_maps)
         logger.info(
-            "datadrift plane || stem=%s || decoded_cats=%s || train_rows=%s || prod_rows=%s",
+            "datadrift datasets || stem=%s || train.shape=%s || prod.shape=%s || "
+            "decoded_cats=%s",
             stem,
+            tuple(train.shape),
+            tuple(prod.shape),
             sorted(c for c in label_maps if c in train.columns or c in prod.columns),
-            len(train),
-            len(prod),
         )
         explicit = model.get("features")
         if explicit:
